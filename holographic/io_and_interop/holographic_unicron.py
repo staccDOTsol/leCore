@@ -68,6 +68,40 @@ def _decode_bf16(raw_u16):
     return u32.view(np.float32)
 
 
+def _decode_f8_e8m0(raw_u8):
+    """UE8M0 power-of-two scale -> float32. Byte is unbiased exponent with bias 127."""
+    e = np.frombuffer(raw_u8, dtype=np.uint8).astype(np.int32)
+    return np.ldexp(np.ones(e.shape, dtype=np.float32), e - 127)
+
+
+def _decode_f8_e4m3(raw_u8):
+    """OCP float8 E4M3 (fn) -> float32. Prefer ml_dtypes/torch when present."""
+    u = np.frombuffer(raw_u8, dtype=np.uint8)
+    try:
+        from ml_dtypes import float8_e4m3fn
+        return u.view(float8_e4m3fn).astype(np.float32)
+    except Exception:
+        pass
+    try:
+        import torch
+        t = torch.frombuffer(bytearray(u), dtype=torch.uint8).view(torch.float8_e4m3fn)
+        return t.to(torch.float32).numpy()
+    except Exception:
+        pass
+    # Minimal fallback: sign/exp/mant decode (bias 7); exp=15 -> nan
+    sign = np.where(u & 0x80, -1.0, 1.0).astype(np.float32)
+    exp = ((u >> 3) & 0x0F).astype(np.int32)
+    mant = (u & 0x07).astype(np.float32)
+    out = np.empty(u.shape, dtype=np.float32)
+    sub = exp == 0
+    out[sub] = sign[sub] * (mant[sub] / 8.0) * np.float32(2.0 ** (1 - 7))
+    normal = (exp > 0) & (exp < 15)
+    out[normal] = sign[normal] * (1.0 + mant[normal] / 8.0) * np.ldexp(
+        np.ones(np.count_nonzero(normal), dtype=np.float32), exp[normal] - 7)
+    out[exp == 15] = np.nan
+    return out
+
+
 def load_safetensors(path, return_dtypes=False):
     """Parse a .safetensors file into {name: ndarray} with stdlib + NumPy only.
     return_dtypes=True additionally returns {name: on-disk dtype string}, so a
@@ -108,6 +142,10 @@ def load_safetensors(path, return_dtypes=False):
         dt = meta["dtype"]
         if dt == "BF16":
             arr = _decode_bf16(np.frombuffer(raw, dtype=np.uint16))
+        elif dt in ("F8_E8M0", "F8_E8M0FNU"):
+            arr = _decode_f8_e8m0(raw)
+        elif dt in ("F8_E4M3", "F8_E4M3FN"):
+            arr = _decode_f8_e4m3(raw)
         else:
             if dt not in _ST_DTYPES:
                 raise ValueError("unsupported safetensors dtype: %s" % dt)

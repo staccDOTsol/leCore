@@ -16,9 +16,11 @@ Quality numbers so the card is not empty of ordinary benches. They may be flat v
 | GSM8K | 1319 | full | openai/gsm8k main/test via HuggingFace datasets-server (full test) | 1280/1319 | 97.0% | 0.573 | 0 |
 | MATH-500 | 500 | full | HuggingFaceH4/MATH-500 test via HuggingFace datasets-server (full, n=500) | 448/500 | 89.6% | 1.326 | 0 |
 | HumanEval | 164 | full | openai/openai_humaneval test via HuggingFace datasets-server (full, n=164) | 150/164 | 91.5% | 0.678 | 0 |
-| IFEval | 541 | — | google/IFEval train (full) | NOT RUN | NOT RUN | NOT RUN | — |
+| IFEval | 541 | full | google/IFEval train via HuggingFace datasets-server (full, n=541; same order as google-... | 467/541 | 86.3% | 3.481 | 0 |
 
 MATH-500: 2/500 items still `finish_reason=length` after 4096 retry (counted as misses).
+
+IFEval instruction-level strict-lite: **757/834**. Grader: in-repo IFEval checkers in evals/flash_hrr_api_eval.py (strict-ish; json allows a single markdown fence; Kannada via Unicode block U+0C80–U+0CFF; other languages via langdetect if installed else fail-closed; sentence count is regex not nltk; not the official google-research package)
 
 LiveCodeBench: version `v5_v6`, private decoded 284, private skipped 58. local stdin/functional Python exec of public tests plus decoded private tests; not the official lcb_runner package. pass@1, temp 0, n=1 sample.
 
@@ -65,20 +67,21 @@ Recall failed, as expected on raw vLLM. **Do not treat this as a regression of t
 - **GSM8K** (n=1319, coverage=full): openai/gsm8k main/test via HuggingFace datasets-server (full test)
 - **MATH-500** (n=500, coverage=full): HuggingFaceH4/MATH-500 test via HuggingFace datasets-server (full, n=500)
 - **HumanEval** (n=164, coverage=full): openai/openai_humaneval test via HuggingFace datasets-server (full, n=164)
+- **IFEval** (n=541, coverage=full): google/IFEval train via HuggingFace datasets-server (full, n=541; same order as google-research instruction_following_eval/data/input_data.jsonl)
 
 ### Run metadata
 
 | field | value |
 |---|---|
 | started_utc | 2026-08-13T03:36:55.198043+00:00 |
-| finished_utc | 2026-08-13T04:02:53.901436+00:00 |
+| finished_utc | 2026-08-13T04:30:32.227758+00:00 |
 | base_url | `http://198.145.108.57:30739/v1` |
 | model | `/workspace/models/DeepSeek-V4-Flash-0731-serve` |
 | temperature | 0.0 |
 | timeout_s | 180 |
 | concurrency | parallel suites, conc=1 each, ~8 in-flight cap |
 | scale | full |
-| overall latency p50 (s) | 1.326 |
+| overall latency p50 (s) | 1.978 |
 | client errors | 0 |
 | reachable | True |
 

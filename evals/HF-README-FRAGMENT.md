@@ -20,7 +20,9 @@ Host `http://198.145.108.57:30739/v1`, model `/workspace/models/DeepSeek-V4-Flas
 | GSM8K | 1319 | full | openai/gsm8k main/test via HuggingFace datasets-server (full test) | 1280/1319 | 97.0% | 0.573 | 0 |
 | MATH-500 | 500 | full | HuggingFaceH4/MATH-500 test via HuggingFace datasets-server (full, n=500) | 448/500 | 89.6% | 1.326 | 0 |
 | HumanEval | 164 | full | openai/openai_humaneval test via HuggingFace datasets-server (full, n=164) | 150/164 | 91.5% | 0.678 | 0 |
-| IFEval | 541 | — | google/IFEval train (full) | NOT RUN | NOT RUN | NOT RUN | — |
+| IFEval | 541 | full | google/IFEval train via HuggingFace datasets-server (full, n=541; same order as google-... | 467/541 | 86.3% | 3.481 | 0 |
+
+IFEval is an in-repo checker (not official google-research); instruction-level strict-lite **757/834**.
 
 LiveCodeBench is `code_generation_lite` `v5_v6` (n=342), local Python exec of public tests plus decoded private tests when the blob is small enough — not the official `lcb_runner` package. pass@1, one sample.
 

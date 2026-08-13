@@ -15,7 +15,7 @@ Host `http://198.145.108.57:30739/v1`, model `/workspace/models/DeepSeek-V4-Flas
 | MMLU-Pro | 12032 | — | TIGER-Lab/MMLU-Pro test (full) | NOT RUN | NOT RUN | NOT RUN | — |
 | GPQA-Diamond | 198 | — | Idavidrein/gpqa Diamond via OpenAI simple-evals CSV | NOT RUN | NOT RUN | NOT RUN | — |
 | AIME 2024 | 30 | full | HuggingFaceH4/aime_2024 train via HuggingFace datasets-server (n=30; AIME 2024 I) | 18/30 | 60.0% | 4.642 | 0 |
-| AIME 2025 | 30 | — | math-ai/aime25 test | NOT RUN | NOT RUN | NOT RUN | — |
+| AIME 2025 | 30 | full | math-ai/aime25 test via HuggingFace datasets-server (n=30) | 15/30 | 50.0% | 9.143 | 1 |
 | LiveCodeBench | — | — | livecodebench/code_generation_lite v5_v6 | NOT RUN | NOT RUN | NOT RUN | — |
 | GSM8K | 1319 | — | openai/gsm8k test (full) | NOT RUN | NOT RUN | NOT RUN | — |
 | MATH-500 | 500 | — | HuggingFaceH4/MATH-500 test (full) | NOT RUN | NOT RUN | NOT RUN | — |

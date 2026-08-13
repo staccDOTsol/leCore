@@ -11,7 +11,7 @@ Quality numbers so the card is not empty of ordinary benches. They may be flat v
 | MMLU-Pro | 12032 | — | TIGER-Lab/MMLU-Pro test (full) | NOT RUN | NOT RUN | NOT RUN | — |
 | GPQA-Diamond | 198 | — | Idavidrein/gpqa Diamond via OpenAI simple-evals CSV | NOT RUN | NOT RUN | NOT RUN | — |
 | AIME 2024 | 30 | full | HuggingFaceH4/aime_2024 train via HuggingFace datasets-server (n=30; AIME 2024 I) | 18/30 | 60.0% | 4.642 | 0 |
-| AIME 2025 | 30 | — | math-ai/aime25 test | NOT RUN | NOT RUN | NOT RUN | — |
+| AIME 2025 | 30 | full | math-ai/aime25 test via HuggingFace datasets-server (n=30) | 15/30 | 50.0% | 9.143 | 1 |
 | LiveCodeBench | — | — | livecodebench/code_generation_lite v5_v6 | NOT RUN | NOT RUN | NOT RUN | — |
 | GSM8K | 1319 | — | openai/gsm8k test (full) | NOT RUN | NOT RUN | NOT RUN | — |
 | MATH-500 | 500 | — | HuggingFaceH4/MATH-500 test (full) | NOT RUN | NOT RUN | NOT RUN | — |
@@ -53,6 +53,7 @@ Recall failed, as expected on raw vLLM. **Do not treat this as a regression of t
 ### Exact prompt sources for rows that ran
 
 - **AIME 2024** (n=30, coverage=full): HuggingFaceH4/aime_2024 train via HuggingFace datasets-server (n=30; AIME 2024 I)
+- **AIME 2025** (n=30, coverage=full): math-ai/aime25 test via HuggingFace datasets-server (n=30)
 - **HumanEval** (n=164, coverage=full): openai/openai_humaneval test via HuggingFace datasets-server (full, n=164)
 
 ### Run metadata
@@ -60,7 +61,7 @@ Recall failed, as expected on raw vLLM. **Do not treat this as a regression of t
 | field | value |
 |---|---|
 | started_utc | 2026-08-13T03:36:55.198043+00:00 |
-| finished_utc | 2026-08-13T03:46:18.780610+00:00 |
+| finished_utc | 2026-08-13T03:50:23.404369+00:00 |
 | base_url | `http://198.145.108.57:30739/v1` |
 | model | `/workspace/models/DeepSeek-V4-Flash-0731-serve` |
 | temperature | 0.0 |

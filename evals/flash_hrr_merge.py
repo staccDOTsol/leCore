@@ -30,6 +30,7 @@ SUITE_FILES = [
     ("suite_ifeval.json", "IFEval"),
     ("suite_gsm8k.json", "GSM8K"),
     ("suite_mmlupro.json", "MMLU-Pro"),
+    ("suite_mmlupro_partial.json", "MMLU-Pro"),  # first-n snapshot while full run continues
 ]
 
 
@@ -65,18 +66,21 @@ def main():
         "probe": snap.get("probe") or {"ok": True},
         "suites_merged": [],
     }
+    have = set()
     for fname, name in SUITE_FILES:
+        if name in have and fname.endswith("_partial.json"):
+            continue
         blob = load(RESULTS / fname)
         if not blob:
             continue
         cap = (blob.get("capability") or {}).get(name)
         if not cap:
-            # maybe the file is the packed row itself
             if blob.get("name") == name:
                 cap = blob
         if cap and cap.get("score") not in (None, "NOT RUN"):
             report["capability"][name] = cap
             report["suites_merged"].append(name)
+            have.add(name)
             if blob.get("memory_raw_vllm") and not report["memory_raw_vllm"]:
                 report["memory_raw_vllm"] = blob["memory_raw_vllm"]
     lats = []

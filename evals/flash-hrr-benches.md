@@ -8,7 +8,7 @@ Quality numbers so the card is not empty of ordinary benches. They may be flat v
 
 | bench | n | coverage | source | score | accuracy | latency p50 (s) | errors |
 |---|---|---|---|---|---|---|---|
-| MMLU-Pro | 12032 | — | TIGER-Lab/MMLU-Pro test (full) | NOT RUN | NOT RUN | NOT RUN | — |
+| MMLU-Pro | 3447 | first-n (n=3447 of 12032) | TIGER-Lab/MMLU-Pro test via HuggingFace datasets-server (full test) | 2743/3447 | 79.6% | 0.581 | 0 |
 | GPQA-Diamond | 198 | full | OpenAI simple-evals gpqa_diamond.csv (https://openaipublic.blob.core.windows.net/simple... | 144/198 | 72.7% | 1.978 | 0 |
 | AIME 2024 | 30 | full | HuggingFaceH4/aime_2024 train via HuggingFace datasets-server (n=30; AIME 2024 I) | 18/30 | 60.0% | 4.642 | 0 |
 | AIME 2025 | 30 | full | math-ai/aime25 test via HuggingFace datasets-server (n=30) | 15/30 | 50.0% | 9.143 | 1 |
@@ -60,6 +60,7 @@ Recall failed, as expected on raw vLLM. **Do not treat this as a regression of t
 
 ### Exact prompt sources for rows that ran
 
+- **MMLU-Pro** (n=3447, coverage=first-n (n=3447 of 12032)): TIGER-Lab/MMLU-Pro test via HuggingFace datasets-server (full test)
 - **GPQA-Diamond** (n=198, coverage=full): OpenAI simple-evals gpqa_diamond.csv (https://openaipublic.blob.core.windows.net/simple-evals/gpqa_diamond.csv); Idavidrein/gpqa Diamond split; n=198. Choices shuffled via sha256(Record ID).
 - **AIME 2024** (n=30, coverage=full): HuggingFaceH4/aime_2024 train via HuggingFace datasets-server (n=30; AIME 2024 I)
 - **AIME 2025** (n=30, coverage=full): math-ai/aime25 test via HuggingFace datasets-server (n=30)
@@ -74,14 +75,14 @@ Recall failed, as expected on raw vLLM. **Do not treat this as a regression of t
 | field | value |
 |---|---|
 | started_utc | 2026-08-13T03:36:55.198043+00:00 |
-| finished_utc | 2026-08-13T04:30:32.227758+00:00 |
+| finished_utc | 2026-08-13T04:30:51.551758+00:00 |
 | base_url | `http://198.145.108.57:30739/v1` |
 | model | `/workspace/models/DeepSeek-V4-Flash-0731-serve` |
 | temperature | 0.0 |
 | timeout_s | 180 |
 | concurrency | parallel suites, conc=1 each, ~8 in-flight cap |
 | scale | full |
-| overall latency p50 (s) | 1.978 |
+| overall latency p50 (s) | 1.326 |
 | client errors | 0 |
 | reachable | True |
 

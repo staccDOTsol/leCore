@@ -1031,6 +1031,15 @@ PROVEN, on our own trained model: unbind and bind agree with the FFT to 1e-10; a
                        n_registers=n_registers, seed=seed, out_dir=out_dir,
                        hrr_dim=hrr_dim, model_dir=model_dir)
 
+    def unicron_flash_hrr(self, out_dir):
+        """FLASH-AS-HRR consume: load install OUT_DIR, recall, attach before
+        generate. Returns a FlashHRR session. Does not take a GDNRuntime,
+        does not load 48 shards, does not claim in-weight Galvatron.
+        Serve hook: session.before_generate(openai_body) -> body for vLLM.
+        See holographic_deepseek_v4.FlashHRR."""
+        from holographic.io_and_interop.holographic_deepseek_v4 import FlashHRR
+        return FlashHRR.open(out_dir)
+
     def unicron_write_policy(self, runtime, text, tokenize, n_slots=16,
                              min_nats=None):
         """WHAT DESERVES ONE OF THE PERMANENT REGISTERS -- the last gap, closed.
@@ -3214,8 +3223,15 @@ def _selftest():
     assert "registers" in rep["installed"]
     assert "router" not in rep["installed"]
     assert os.path.isfile(os.path.join(td, "lecore.json"))
+    assert callable(m.unicron_flash_hrr)
+    sess = m.unicron_flash_hrr(td)
+    attached, info = sess.attach({
+        "model": "deepseek-v4-flash",
+        "messages": [{"role": "user", "content": "capital of France?"}],
+    })
+    assert info["attached"] and "paris" in attached["messages"][0]["content"].lower()
     print("holographic_unified_p16_unicron selftest OK -- %d members reached "
-          "UnifiedMind, DeepSeek-V4 HRR-attach faculty wired" % n)
+          "UnifiedMind, DeepSeek-V4 HRR-attach + flash-as-hrr consume wired" % n)
 
 
 if __name__ == "__main__":

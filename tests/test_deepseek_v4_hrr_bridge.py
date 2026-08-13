@@ -60,7 +60,8 @@ def test_flash_module_and_cli_never_import_gdnruntime():
     """The unlock: this path must not pull in the Qwen forward."""
     root = os.path.join(os.path.dirname(__file__), "..")
     for rel in ("holographic/io_and_interop/holographic_deepseek_v4.py",
-                "assimilation/install_deepseek_v4.py"):
+                "assimilation/install_deepseek_v4.py",
+                "assimilation/flash_hrr.py"):
         src = open(os.path.join(root, rel), encoding="utf-8").read()
         tree = ast.parse(src)
         imported = []
@@ -164,6 +165,10 @@ def test_unified_mind_faculty_does_not_take_a_gdn_runtime(tmp_path):
         n_registers=4, seed=0, out_dir=str(tmp_path / "m"), hrr_dim=64)
     assert "registers" in rep["installed"]
     assert "router" not in rep["installed"]
+    sess = mind.unicron_flash_hrr(str(tmp_path / "m"))
+    attached, info = sess.attach({
+        "messages": [{"role": "user", "content": "capital of France?"}]})
+    assert info["attached"] and "paris" in attached["messages"][0]["content"].lower()
 
 
 def test_qwen_config_is_refused_by_deepseek_install():
@@ -250,4 +255,174 @@ def test_official_fp4_lut_and_one_shard_smoke(tmp_path):
     smoke = D.smoke_one_shard(str(shard))
     assert smoke["dequant"]["finite"]
     assert "F8_E4M3" in smoke["dtypes"] and "I8" in smoke["dtypes"]
+
+
+def _tiny_sidecar(tmp_path, passages=None, n_registers=8, hrr_dim=64):
+    cfg = D.fake_deepseek_v4_config(hidden=32, vocab=48, n_layers=2)
+    w = D.fake_deepseek_v4_weights(hidden=32, vocab=48, n_layers=2)
+    texts = list(passages or [
+        "the capital of France is Paris",
+        "water freezes at zero degrees celsius",
+        "DeepSeek-V4 Flash is not Gated DeltaNet",
+    ])
+    model = tmp_path / "flash"
+    model.mkdir()
+    (model / "config.json").write_text(json.dumps(cfg))
+    out = tmp_path / "out"
+    D.install(w, cfg, passages=texts, n_registers=n_registers, seed=0,
+              out_dir=str(out), hrr_dim=hrr_dim, model_dir=str(model))
+    return out
+
+
+def test_flash_hrr_loads_tiny_sidecar_and_recalls(tmp_path):
+    out = _tiny_sidecar(tmp_path)
+    sess = D.FlashHRR.open(str(out))
+    hits = sess.recall("capital of France", k=1)
+    assert hits and "paris" in hits[0][2].lower()
+    keys = sess.register_keys()
+    assert keys is not None and keys.shape[0] == 8
+    st = sess.status()
+    assert st["in_weight"] is False
+    assert st["inject_max"] == 1024
+    assert st["passages"] == 3
+
+
+def test_gateway_system_inject_is_capped_at_1024():
+    huge = D.build_system_inject(
+        [(0, 0.9, "alpha " * 400), (1, 0.8, "beta " * 400)],
+        max_chars=D.GATEWAY_INJECT_MAX)
+    assert huge.startswith(D.GATEWAY_INJECT_HEADER)
+    assert len(huge) <= 1024
+    assert D.build_system_inject([]) == ""
+
+
+def test_attach_puts_recalled_memory_into_a_real_generation_request(tmp_path):
+    """Flash-as-HRR: the body a vLLM OpenAI server would generate from
+    contains sidecar memory. HRR ran before tokens. in_weight is False."""
+    out = _tiny_sidecar(tmp_path)
+    sess = D.open_session(str(out))
+    req = {
+        "model": "deepseek-ai/DeepSeek-V4-Flash",
+        "messages": [
+            {"role": "system", "content": "You are a helpful assistant."},
+            {"role": "user", "content": "What is the capital of France?"},
+        ],
+        "max_tokens": 32,
+        "temperature": 0,
+        "stream": False,
+    }
+    attached, info = sess.attach(req)
+    assert info["attached"] is True
+    assert info["in_weight"] is False
+    assert info["inject_chars"] <= 1024
+    assert attached is not req
+    assert req["messages"][0]["content"] == "You are a helpful assistant."
+    sys_msg = attached["messages"][0]
+    assert sys_msg["role"] == "system"
+    assert sys_msg["content"].startswith(D.GATEWAY_INJECT_HEADER)
+    assert "paris" in sys_msg["content"].lower()
+    assert len(sys_msg["content"]) <= 1024
+    assert attached["messages"][-1]["content"] == "What is the capital of France?"
+    assert attached["messages"][1]["content"] == "You are a helpful assistant."
+    assert attached["model"] == req["model"]
+    assert attached["max_tokens"] == 32
+    assert attached["temperature"] == 0
+    # serve hook is the same mutation
+    hooked = sess.before_generate(req)
+    assert hooked["messages"][0]["content"] == sys_msg["content"]
+    # idempotent -- do not stack injects
+    again, _ = sess.attach(attached)
+    n_hrr = sum(1 for m in again["messages"]
+                if D._is_hrr_inject_message(m))
+    assert n_hrr == 1
+
+
+def test_attach_completions_prompt_gets_the_same_inject(tmp_path):
+    out = _tiny_sidecar(tmp_path)
+    sess = D.FlashHRR.open(str(out))
+    req = {"model": "deepseek-v4-flash",
+           "prompt": "What is the capital of France?",
+           "max_tokens": 16}
+    attached, info = sess.attach(req)
+    assert info["attached"]
+    assert attached["prompt"].startswith(D.GATEWAY_INJECT_HEADER)
+    assert "paris" in attached["prompt"].lower()
+    assert "What is the capital of France?" in attached["prompt"]
+
+
+def test_forward_posts_attached_body_to_openai_upstream(tmp_path):
+    """A fake vLLM records the body it received -- memory must already be in it."""
+    import threading
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+
+    out = _tiny_sidecar(tmp_path)
+    sess = D.FlashHRR.open(str(out))
+    captured = {}
+
+    class FakeVLLM(BaseHTTPRequestHandler):
+        def log_message(self, *_a, **_k):
+            return
+
+        def do_POST(self):
+            n = int(self.headers.get("Content-Length") or 0)
+            captured["path"] = self.path
+            captured["body"] = json.loads(self.rfile.read(n).decode("utf-8"))
+            payload = json.dumps({
+                "id": "fake", "object": "chat.completion",
+                "choices": [{"index": 0, "message": {
+                    "role": "assistant", "content": "Paris."},
+                             "finish_reason": "stop"}],
+            }).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+
+    httpd = HTTPServer(("127.0.0.1", 0), FakeVLLM)
+    port = httpd.server_address[1]
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    try:
+        resp, info, attached = sess.forward(
+            {"model": "deepseek-v4-flash",
+             "messages": [{"role": "user",
+                           "content": "What is the capital of France?"}],
+             "max_tokens": 8},
+            "http://127.0.0.1:%d" % port)
+    finally:
+        httpd.shutdown()
+    assert captured["path"] == "/v1/chat/completions"
+    got = captured["body"]
+    assert got["messages"][0]["role"] == "system"
+    assert "paris" in got["messages"][0]["content"].lower()
+    assert len(got["messages"][0]["content"]) <= 1024
+    assert got == attached
+    assert info["attached"]
+    assert resp["choices"][0]["message"]["content"] == "Paris."
+
+
+def test_cli_recall_and_attach_on_tiny_sidecar(tmp_path, capsys):
+    out = _tiny_sidecar(tmp_path)
+    assert D._cli(["recall", str(out), "capital of France", "-k", "1"]) == 0
+    printed = capsys.readouterr().out.lower()
+    assert "paris" in printed
+    assert D._cli(["attach", str(out), "what is the capital of France?"]) == 0
+    blob = capsys.readouterr().out
+    payload = json.loads(blob)
+    assert payload["info"]["attached"]
+    assert "paris" in payload["body"]["messages"][0]["content"].lower()
+    assert len(payload["body"]["messages"][0]["content"]) <= 1024
+
+
+def test_flash_hrr_cli_script_attach(tmp_path):
+    out = _tiny_sidecar(tmp_path)
+    import importlib.util
+    cli = os.path.join(os.path.dirname(__file__), "..",
+                       "assimilation/flash_hrr.py")
+    spec = importlib.util.spec_from_file_location("flash_hrr", cli)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    # main prints JSON; capture via returning 0 and reading sidecar attach
+    rc = mod.main(["attach", str(out), "capital of France", "-k", "1"])
+    assert rc == 0
 

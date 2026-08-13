@@ -1,4 +1,4 @@
-"""DEEPSEEK-V4 FLASH -- HRR-attach bridge that does NOT go through GDNRuntime.
+"""DEEPSEEK-V4 FLASH -- HRR-attach + consume. Does NOT go through GDNRuntime.
 
 Qwen3-Next / Qwen3.5 is a Gated-DeltaNet hybrid. DeepSeek-V4 Flash is not.
 `GDNRuntime` + `assimilation/install.py` assume Qwen tensor names, Qwen
@@ -14,21 +14,24 @@ WHAT THIS SLICE DOES
                  registers        seed-derived orthonormal keys (real)
                  memory_index     searchable HRR passage index (real)
                  router           skipped -- needs a Flash forward, not GDN
+    consume    load OUT_DIR, recall, Gateway-shaped system inject (<=1024)
+               into a real OpenAI chat/completions body BEFORE generate
     load       one-shard peek: F8_E8M0 / F8_E4M3 / I8 packed FP4 (official LUT)
     not this   MoE runtime, 48-shard eager install, assimilate compression,
-               in-weight Galvatron (follow-up)
+               in-weight Galvatron (follow-up). GDNRuntime is not a Flash
+               forward. vLLM (or anything that speaks /v1/chat/completions)
+               is the lab generate backend; HRR runs on the request.
 
-IN-WEIGHT vs SIDECAR, stated so nobody reads a skip as a success:
-    Qwen registers live in the GDN recurrent state and regenerate from a
-    seed -- the weights are not rewritten for that step. Flash has no GDN
-    state, so the same reservation lands in the sidecar. That is a real
-    attach of the keys, and an honest skip of in-weight enforcement
-    (orthogonalise on the model's own keys) until a Flash runtime exists.
-    The passage index is the same shape of answer: searchable in the
-    sidecar via HRR bundle+nearest, not written into unused vocab rows
-    (that write needs GDN hidden states and would mutate the 156G file).
+FLASH-AS-HRR (the consume path, not a README):
+    client body  ->  FlashHRR.attach()  ->  vLLM /v1/chat/completions
+    Integration point: mutate the OpenAI body (system inject) BEFORE tokens.
+    The Flash weights are not rewritten. in_weight stays False.
 
-CLI:  python assimilation/install_deepseek_v4.py MODEL_DIR OUT_DIR [--smoke-shard]
+CLI:
+    python assimilation/install_deepseek_v4.py MODEL_DIR OUT_DIR [--smoke-shard]
+    python assimilation/flash_hrr.py attach OUT_DIR "what is the capital of France"
+    python -m holographic.io_and_interop.holographic_deepseek_v4 attach OUT_DIR QUERY
+    (no args: _selftest, required by the module walker)
 """
 
 from __future__ import annotations
@@ -42,6 +45,12 @@ import numpy as np
 
 FORMAT = "leCore/deepseek_v4_hrr/1"
 HRR_DIM = 256
+# Gateway attach contract: the HRR payload lives in a system message and is
+# capped at 1024 characters. External Gateway (:8765 / dogfood :7090) and this
+# Flash sidecar emit the same shape so they compose. The cap is the inject
+# block, not the caller's existing system prompt.
+GATEWAY_INJECT_MAX = 1024
+GATEWAY_INJECT_HEADER = "[leCore HRR]"
 
 # Official DeepSeek-V4 Flash FP4 E2M1 codebook, lifted from
 # inference/convert.py::FP4_TABLE (deepseek-ai/DeepSeek-V4-Flash).
@@ -425,6 +434,255 @@ def load_sidecar(path):
     return out
 
 
+def _text_of(content):
+    """Flatten OpenAI message content (string or multipart) to plain text."""
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for p in content:
+            if isinstance(p, dict):
+                parts.append(str(p.get("text") or p.get("content") or ""))
+            else:
+                parts.append(str(p))
+        return " ".join(x for x in parts if x)
+    return str(content)
+
+
+def cue_from_openai_body(body):
+    """Last user utterance (chat) or the prompt (completions) -- the recall cue."""
+    if not isinstance(body, dict):
+        return ""
+    msgs = body.get("messages")
+    if isinstance(msgs, list) and msgs:
+        for msg in reversed(msgs):
+            if not isinstance(msg, dict):
+                continue
+            if str(msg.get("role") or "").lower() == "user":
+                return _text_of(msg.get("content")).strip()
+        return _text_of(msgs[-1].get("content") if isinstance(msgs[-1], dict)
+                        else "").strip()
+    prompt = body.get("prompt")
+    if isinstance(prompt, str):
+        return prompt.strip()
+    return ""
+
+
+def build_system_inject(hits, max_chars=GATEWAY_INJECT_MAX):
+    """Gateway-shaped system inject: header + ranked passages, hard-capped.
+
+    Compatible with external Gateway attach: the payload is a system message
+    whose body is at most `max_chars` (default 1024). Empty hits -> empty
+    string (do not inject a hollow header).
+    """
+    cap = int(max_chars)
+    if cap <= 0 or not hits:
+        return ""
+    header = GATEWAY_INJECT_HEADER
+    if len(header) > cap:
+        return header[:cap]
+    lines = [header]
+    used = len(header)
+    for i, item in enumerate(hits, 1):
+        text = item[2] if len(item) > 2 else item[-1]
+        line = "%d. %s" % (i, " ".join(str(text).split()))
+        extra = 1 + len(line)
+        if used + extra <= cap:
+            lines.append(line)
+            used += extra
+            continue
+        room = cap - used - 1
+        if room >= 4:
+            cut = line[:room]
+            if len(line) > room:
+                cut = cut.rstrip()
+                if not cut.endswith("..."):
+                    cut = (cut[:-3] + "...") if len(cut) >= 3 else cut
+            lines.append(cut)
+        break
+    out = "\n".join(lines)
+    return out[:cap]
+
+
+def _is_hrr_inject_message(msg):
+    if not isinstance(msg, dict):
+        return False
+    if str(msg.get("role") or "").lower() != "system":
+        return False
+    return _text_of(msg.get("content")).lstrip().startswith(GATEWAY_INJECT_HEADER)
+
+
+def attach_messages(messages, inject):
+    """Insert the HRR inject as a dedicated leading system message.
+
+    Idempotent: a previous [leCore HRR] system message is replaced. Existing
+    caller system prompts are preserved after the inject. The inject itself
+    is already capped at GATEWAY_INJECT_MAX.
+    """
+    msgs = [dict(m) for m in (messages or []) if isinstance(m, dict)]
+    if not inject:
+        return [m for m in msgs if not _is_hrr_inject_message(m)]
+    rest = [m for m in msgs if not _is_hrr_inject_message(m)]
+    return [{"role": "system", "content": inject}] + rest
+
+
+class FlashHRR:
+    """Flash-native consume of an install OUT_DIR. No GDNRuntime. No 48 shards.
+
+    This is flash-as-hrr at the request layer: recall from the sidecar, then
+    attach memory into the generation request BEFORE tokens. Downstream
+    generate (vLLM OpenAI server in the lab) sees a normal chat body with a
+    Gateway-shaped system inject. in_weight remains False -- this is not a
+    Galvatron inside Flash tensors.
+    """
+
+    def __init__(self, index, card=None, out_dir=None):
+        self.index = index
+        self.card = dict(card or {})
+        self.out_dir = os.path.abspath(out_dir) if out_dir else None
+
+    @classmethod
+    def open(cls, out_dir):
+        """Load lecore.json + lecore_hrr.npz. Accepts OUT_DIR or the npz path."""
+        path = os.path.abspath(out_dir)
+        if path.endswith(".npz"):
+            npz, root = path, os.path.dirname(path)
+        else:
+            npz, root = os.path.join(path, "lecore_hrr.npz"), path
+        if not os.path.isfile(npz):
+            raise FileNotFoundError(
+                "no lecore_hrr.npz in %r -- run "
+                "python assimilation/install_deepseek_v4.py MODEL_DIR OUT_DIR "
+                "first" % root)
+        index = load_sidecar(npz)
+        card = {}
+        card_path = os.path.join(root, "lecore.json")
+        if os.path.isfile(card_path):
+            with open(card_path) as f:
+                card = json.load(f)
+        return cls(index, card=card, out_dir=root)
+
+    def recall(self, query, k=3):
+        """Ranked passages: [(index, cosine, text), ...]."""
+        return search_index(self.index, query, k=k)
+
+    def register_keys(self):
+        """Sidecar orthonormal keys (n, dim) float array, or None."""
+        keys = self.index.get("registers")
+        return None if keys is None else np.asarray(keys)
+
+    def status(self):
+        keys = self.register_keys()
+        passages = list(self.index.get("passages") or ())
+        return {
+            "format": self.index.get("format") or self.card.get("format"),
+            "family": self.card.get("family") or "deepseek_v4",
+            "out_dir": self.out_dir,
+            "hrr_dim": int(self.index.get("dim") or self.card.get("hrr_dim")
+                           or 0),
+            "seed": int(self.index.get("seed") or 0),
+            "passages": len(passages),
+            "registers": 0 if keys is None else int(keys.shape[0]),
+            "in_weight": False,
+            "runtime": "sidecar -- generate is external (vLLM / OpenAI); "
+                       "HRR runs before tokens",
+            "inject_max": GATEWAY_INJECT_MAX,
+            "gateway_header": GATEWAY_INJECT_HEADER,
+        }
+
+    def system_inject(self, query, k=3, max_chars=GATEWAY_INJECT_MAX):
+        """Gateway-compatible system inject for `query`."""
+        hits = self.recall(query, k=k)
+        return build_system_inject(hits, max_chars=max_chars), hits
+
+    def attach(self, body, k=3, query=None, max_chars=GATEWAY_INJECT_MAX):
+        """Attach sidecar memory into an OpenAI-style generation request.
+
+        THIS is the inject-before-generate point. Copy `body`, inject HRR,
+        leave model/temperature/max_tokens/stream alone. Does not call a
+        Flash forward. Returns (attached_body, info).
+        """
+        if not isinstance(body, dict):
+            raise TypeError("attach() wants an OpenAI request dict, got %r"
+                            % type(body).__name__)
+        cue = (query if query is not None else cue_from_openai_body(body)).strip()
+        inject, hits = ("", [])
+        if cue:
+            inject, hits = self.system_inject(cue, k=k, max_chars=max_chars)
+        attached = dict(body)
+        info = {
+            "attached": bool(inject),
+            "query": cue,
+            "k": int(k),
+            "hits": [{"index": int(i), "score": float(s), "passage": t}
+                     for i, s, t in hits],
+            "inject": inject,
+            "inject_chars": len(inject),
+            "inject_max": int(max_chars),
+            "in_weight": False,
+            "where": "system" if body.get("messages") is not None else "prompt",
+        }
+        if not inject:
+            return attached, info
+        if "messages" in body or body.get("messages") is not None:
+            attached["messages"] = attach_messages(body.get("messages") or [],
+                                                   inject)
+        else:
+            prompt = body.get("prompt")
+            if isinstance(prompt, str):
+                attached["prompt"] = inject + "\n\n" + prompt
+            elif prompt is None:
+                attached["messages"] = attach_messages([], inject)
+            # token-id prompts: cannot prefix text; leave unchanged
+        return attached, info
+
+    def before_generate(self, body, k=3, query=None):
+        """Serve-layer hook: return the body vLLM should see. HRR already ran."""
+        attached, _info = self.attach(body, k=k, query=query)
+        return attached
+
+    def forward(self, body, upstream, k=3, query=None, timeout=60):
+        """Attach, then POST to an OpenAI-compatible generate backend.
+
+        `upstream` is the vLLM (or Gateway) base, e.g. http://127.0.0.1:8000.
+        Chat bodies go to /v1/chat/completions; prompt bodies to /v1/completions.
+        Returns (response_json, info, attached_body).
+        """
+        import urllib.error
+        import urllib.request
+
+        attached, info = self.attach(body, k=k, query=query)
+        if "messages" in attached:
+            path = "/v1/chat/completions"
+        else:
+            path = "/v1/completions"
+        url = str(upstream).rstrip("/") + path
+        req = urllib.request.Request(
+            url,
+            data=json.dumps(attached).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST")
+        try:
+            with urllib.request.urlopen(req, timeout=int(timeout)) as resp:
+                raw = resp.read()
+        except urllib.error.HTTPError as exc:
+            err = exc.read().decode("utf-8", "replace")
+            raise RuntimeError("upstream %s -> HTTP %s: %s"
+                               % (url, exc.code, err[:400])) from exc
+        try:
+            parsed = json.loads(raw.decode("utf-8"))
+        except ValueError:
+            parsed = {"raw": raw.decode("utf-8", "replace")}
+        return parsed, info, attached
+
+
+def open_session(out_dir):
+    """Load a Flash HRR sidecar session from an install OUT_DIR."""
+    return FlashHRR.open(out_dir)
+
+
 def _jsonable(obj):
     if isinstance(obj, dict):
         return {str(k): _jsonable(v) for k, v in obj.items()}
@@ -654,6 +912,32 @@ def _selftest():
     idx = load_sidecar(os.path.join(td, "lecore_hrr.npz"))
     assert search_index(idx, "capital of France", k=1)
 
+    sess = FlashHRR.open(td)
+    hits = sess.recall("capital of France", k=1)
+    assert hits and "paris" in hits[0][2].lower()
+    keys = sess.register_keys()
+    assert keys is not None and keys.shape[0] == 8
+    body = {"model": "deepseek-v4-flash",
+            "messages": [{"role": "user",
+                          "content": "what is the capital of France?"}],
+            "max_tokens": 32, "temperature": 0}
+    attached, info = sess.attach(body)
+    assert info["attached"] and info["in_weight"] is False
+    assert attached["messages"][0]["role"] == "system"
+    assert attached["messages"][0]["content"].startswith(GATEWAY_INJECT_HEADER)
+    assert "paris" in attached["messages"][0]["content"].lower()
+    assert len(attached["messages"][0]["content"]) <= GATEWAY_INJECT_MAX
+    assert attached["messages"][-1]["content"] == body["messages"][0]["content"]
+    assert attached["model"] == "deepseek-v4-flash"
+    assert attached["max_tokens"] == 32
+    again, _ = sess.attach(attached)
+    n_sys = sum(1 for m in again["messages"] if m["role"] == "system"
+                and str(m.get("content", "")).startswith(GATEWAY_INJECT_HEADER))
+    assert n_sys == 1
+    huge = build_system_inject(
+        [(0, 1.0, "x" * 4000), (1, 0.9, "y" * 4000)], max_chars=1024)
+    assert len(huge) <= 1024 and huge.startswith(GATEWAY_INJECT_HEADER)
+
     packed = np.full((2, 16), 0x21, dtype=np.int8)   # nibbles 1,2 -> 0.5, 1.0
     scale = np.ones((2, 1), np.float32)              # E8M0 2^0
     got = dequant_fp4(packed, scale)
@@ -664,9 +948,83 @@ def _selftest():
     smoke = smoke_one_shard(shard)
     assert smoke["dequant"]["finite"]
     print("deepseek_v4 selftest OK -- detect, refuse GDN, sidecar registers "
-          "+ searchable passages, router skipped, one-shard FP4 dequant")
+          "+ searchable passages, router skipped, one-shard FP4 dequant, "
+          "FlashHRR attach injects recall into an OpenAI body (<=1024)")
+
+
+def _cli(argv=None):
+    """No args -> _selftest (module walker). Else recall / attach / registers."""
+    import argparse
+    import sys as _sys
+
+    argv = list(_sys.argv[1:] if argv is None else argv)
+    if not argv or argv[0] in ("selftest",):
+        _selftest()
+        return 0
+    ap = argparse.ArgumentParser(
+        prog="holographic_deepseek_v4",
+        description="Flash-as-HRR: consume a sidecar, inject before generate")
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    p_rec = sub.add_parser("recall", help="ranked passages from OUT_DIR")
+    p_rec.add_argument("out_dir")
+    p_rec.add_argument("query")
+    p_rec.add_argument("-k", type=int, default=3)
+    p_rec.add_argument("--json", action="store_true")
+    p_att = sub.add_parser("attach", help="inject HRR into an OpenAI body")
+    p_att.add_argument("out_dir")
+    p_att.add_argument("query", nargs="?", default="")
+    p_att.add_argument("--messages", default="",
+                       help="JSON list of OpenAI messages (default: one user)")
+    p_att.add_argument("--body", default="",
+                       help="JSON OpenAI request (chat or completions)")
+    p_att.add_argument("-k", type=int, default=3)
+    p_reg = sub.add_parser("registers", help="sidecar register key summary")
+    p_reg.add_argument("out_dir")
+    p_st = sub.add_parser("status", help="sidecar card")
+    p_st.add_argument("out_dir")
+    a = ap.parse_args(argv)
+    sess = FlashHRR.open(a.out_dir)
+    if a.cmd == "status":
+        print(json.dumps(sess.status(), indent=2))
+        return 0
+    if a.cmd == "registers":
+        keys = sess.register_keys()
+        st = sess.status()
+        print(json.dumps({
+            "count": st["registers"], "dim": st["hrr_dim"], "seed": st["seed"],
+            "in_weight": False,
+            "shape": None if keys is None else list(keys.shape),
+        }, indent=2))
+        return 0
+    if a.cmd == "recall":
+        hits = sess.recall(a.query, k=int(a.k))
+        if a.json:
+            print(json.dumps([{"index": i, "score": s, "passage": t}
+                              for i, s, t in hits], indent=2))
+        else:
+            for rank, (i, s, t) in enumerate(hits, 1):
+                print("%d  %.3f  %s" % (rank, s, t))
+        return 0
+    body = None
+    if a.body:
+        body = json.loads(a.body)
+    elif a.messages:
+        body = {"model": "deepseek-v4-flash",
+                "messages": json.loads(a.messages),
+                "max_tokens": 32}
+    else:
+        q = a.query or ""
+        if not q:
+            raise SystemExit("attach needs QUERY or --messages or --body")
+        body = {"model": "deepseek-v4-flash",
+                "messages": [{"role": "user", "content": q}],
+                "max_tokens": 32}
+    attached, info = sess.attach(body, k=int(a.k),
+                                 query=(a.query or None))
+    print(json.dumps({"body": attached, "info": info}, indent=2))
+    return 0
 
 
 if __name__ == "__main__":
-    _selftest()
+    raise SystemExit(_cli())
 

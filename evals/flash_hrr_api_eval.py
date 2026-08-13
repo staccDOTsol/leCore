@@ -147,7 +147,16 @@ class ChatClient:
             except Exception as exc:
                 elapsed = time.time() - t0
                 last_err = "%s: %s" % (type(exc).__name__, exc)
-                if "503" in str(exc) and attempt < 15:
+                transient = (
+                    isinstance(exc, (TimeoutError, ConnectionResetError, ConnectionError))
+                    or "503" in str(exc)
+                    or "Connection reset" in str(exc)
+                    or "RemoteDisconnected" in type(exc).__name__
+                    or "URLError" in type(exc).__name__
+                    or "IncompleteRead" in type(exc).__name__
+                    or "timed out" in str(exc).lower()
+                )
+                if transient and attempt < 15:
                     wait = min(60, 5 * (attempt + 1))
                     print("gateway 503/err, retry in %ss (%s)" % (wait, last_err), file=sys.stderr)
                     time.sleep(wait)

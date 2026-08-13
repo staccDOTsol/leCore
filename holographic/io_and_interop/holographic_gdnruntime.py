@@ -1379,6 +1379,7 @@ def load_runtime(model_dir, lazy=False, max_cached=8):
         raise ValueError("no .safetensors files in %s" % model_dir)
     weights = {}
     for f in files:
+        print("[load] shard %s" % f, flush=True)  # FLASH_LOAD_PROGRESS
         weights.update(U.load_safetensors(os.path.join(model_dir, f)))
     if os.path.exists(cfg_path):
         cfg = config_from_json(cfg_path, weights=weights)

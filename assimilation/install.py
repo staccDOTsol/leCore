@@ -122,14 +122,28 @@ def main():
         a.out_dir = os.path.join(os.path.dirname(os.path.abspath(a.model_dir)),
                                  "galvatron")
 
-    print("[load] %s" % a.model_dir)
-    # DeepSeek-V4 Flash is not Qwen GDN. Refuse here, before load_runtime
-    # opens shards, and point at the HRR-attach CLI. Qwen continues below.
+    from holographic.io_and_interop.holographic_flash_hrr import (
+        is_flash_model, plan_flash_hrr)
     from holographic.io_and_interop.holographic_deepseek_v4 import (
         detect_from_dir, refuse_message)
+    # DeepSeek-V4 Flash is not Qwen GDN. Refuse here, before load_runtime
+    # opens shards. Point at BOTH the merged HRR-attach CLI (#1) and the
+    # F8/dequant consumer path (#2). Qwen continues below.
     _ds = detect_from_dir(a.model_dir)
-    if _ds is not None:
+    if is_flash_model(a.model_dir) or _ds is not None:
+        if is_flash_model(a.model_dir):
+            plan = plan_flash_hrr(a.model_dir)
+            print("[flash-hrr] DeepSeek-V4-Flash detected -- GDN load_runtime is BLOCKED")
+            print("            variant=%s layers=%s hidden=%s experts=%s" % (
+                plan["cfg"].get("variant"), plan["cfg"].get("n_layers"),
+                plan["cfg"].get("hidden"), plan["cfg"].get("n_routed_experts")))
+            print("            complementary consumer (F8/dequant + vLLM inject):")
+            print("            python assimilation/install_flash_hrr.py \\")
+            print("              %s %s" % (a.model_dir, a.out_dir))
+            print("            python assimilation/flash_hrr_vllm_inject.py OUT_DIR")
         raise SystemExit(refuse_message(a.model_dir, _ds))
+
+    print("[load] %s" % a.model_dir)
     rt, cfg = load_runtime(a.model_dir)
     w = load_weights_dir(a.model_dir)
     hk = next(k for k in w if k.endswith("embed_tokens.weight"))

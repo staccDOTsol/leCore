@@ -249,7 +249,7 @@ def assemble_humaneval(prompt, completion):
     return prompt + body
 
 
-def run_humaneval(prompt, completion, test, entry_point, timeout=12):
+def exec_humaneval_item(prompt, completion, test, entry_point, timeout=12):
     code = assemble_humaneval(prompt, completion)
     script = code + "\n\n" + test + "\n\ncheck(%s)\n" % entry_point
     with tempfile.NamedTemporaryFile("w", suffix=".py", delete=False, encoding="utf-8") as fh:
@@ -528,7 +528,7 @@ def run_humaneval(client, n=10):
         r = client.chat([{"role": "user", "content": prompt}], max_tokens=768)
         passed, err = (False, "request failed")
         if r.get("ok"):
-            passed, err = run_humaneval(
+            passed, err = exec_humaneval_item(
                 it["prompt"], r.get("text") or "", it["test"], it["entry_point"]
             )
         rows.append({
@@ -890,9 +890,18 @@ def main(argv=None):
         print(json.dumps(report, indent=2))
         return 0
 
+    def checkpoint():
+        report["latency_p50_s"] = p50(client.latencies)
+        report["client_errors"] = client.errors
+        md = render_markdown(report)
+        Path(args.out_md).write_text(md, encoding="utf-8")
+        Path(args.out_json).write_text(json.dumps(report, indent=2), encoding="utf-8")
+        return md
+
     if "memory" in suites:
         print("suite memory ...", file=sys.stderr)
         report["memory_raw_vllm"] = run_memory_sig(client)
+        checkpoint()
 
     cap_map = {
         "gsm8k": ("GSM8K", run_gsm8k),
@@ -905,13 +914,10 @@ def main(argv=None):
             continue
         print("suite", name, "...", file=sys.stderr)
         report["capability"][name] = fn(client)
+        checkpoint()
 
     report["finished_utc"] = datetime.now(timezone.utc).isoformat()
-    report["latency_p50_s"] = p50(client.latencies)
-    report["client_errors"] = client.errors
-    md = render_markdown(report)
-    Path(args.out_md).write_text(md, encoding="utf-8")
-    Path(args.out_json).write_text(json.dumps(report, indent=2), encoding="utf-8")
+    md = checkpoint()
     print(md)
     print("wrote", args.out_md, args.out_json, file=sys.stderr)
     return 0

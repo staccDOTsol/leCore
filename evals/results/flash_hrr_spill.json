@@ -1,6 +1,6 @@
 {
   "started_utc": "",
-  "finished_utc": "2026-08-13T07:02:11.255877+00:00",
+  "finished_utc": "2026-08-13T07:22:36.707216+00:00",
   "base_url": "http://198.145.108.57:30739/v1",
   "model": "deepseek-v4-flash",
   "temperature": 0.0,
@@ -262,18 +262,18 @@
     },
     "MMLU-Pro": {
       "name": "MMLU-Pro",
-      "n": 1140,
+      "n": 2645,
       "split_n": 12032,
-      "correct": 915,
-      "accuracy": 0.8026315789473685,
-      "score": "915/1140",
+      "correct": 1544,
+      "accuracy": 0.583742911153119,
+      "score": "1544/2645",
       "source": "TIGER-Lab/MMLU-Pro test via HuggingFace datasets-server (full test)",
       "canonical": "https://huggingface.co/datasets/TIGER-Lab/MMLU-Pro",
       "split": "test",
       "offset": 0,
       "coverage": "first-n",
-      "latency_p50_s": 2.3048535585403442,
-      "n_errors": 2,
+      "latency_p50_s": 0.9347991943359375,
+      "n_errors": 675,
       "errors": [
         {
           "index": 359,
@@ -282,12 +282,204 @@
         {
           "index": 534,
           "error": "TimeoutError: timed out"
+        },
+        {
+          "index": 1581,
+          "error": "ConnectionResetError: [Errno 104] Connection reset by peer"
+        },
+        {
+          "index": 1582,
+          "error": "ConnectionResetError: [Errno 104] Connection reset by peer"
+        },
+        {
+          "index": 1583,
+          "error": "ConnectionResetError: [Errno 104] Connection reset by peer"
+        },
+        {
+          "index": 1584,
+          "error": "ConnectionResetError: [Errno 104] Connection reset by peer"
+        },
+        {
+          "index": 1585,
+          "error": "ConnectionResetError: [Errno 104] Connection reset by peer"
+        },
+        {
+          "index": 1586,
+          "error": "ConnectionResetError: [Errno 104] Connection reset by peer"
+        },
+        {
+          "index": 1587,
+          "error": "ConnectionResetError: [Errno 104] Connection reset by peer"
+        },
+        {
+          "index": 1588,
+          "error": "ConnectionResetError: [Errno 104] Connection reset by peer"
+        },
+        {
+          "index": 1589,
+          "error": "ConnectionResetError: [Errno 104] Connection reset by peer"
+        },
+        {
+          "index": 1590,
+          "error": "ConnectionResetError: [Errno 104] Connection reset by peer"
+        },
+        {
+          "index": 1591,
+          "error": "ConnectionResetError: [Errno 104] Connection reset by peer"
+        },
+        {
+          "index": 1592,
+          "error": "ConnectionResetError: [Errno 104] Connection reset by peer"
+        },
+        {
+          "index": 1593,
+          "error": "ConnectionResetError: [Errno 104] Connection reset by peer"
+        },
+        {
+          "index": 1594,
+          "error": "ConnectionResetError: [Errno 104] Connection reset by peer"
+        },
+        {
+          "index": 1595,
+          "error": "ConnectionResetError: [Errno 104] Connection reset by peer"
+        },
+        {
+          "index": 1596,
+          "error": "ConnectionResetError: [Errno 104] Connection reset by peer"
+        },
+        {
+          "index": 1597,
+          "error": "ConnectionResetError: [Errno 104] Connection reset by peer"
+        },
+        {
+          "index": 1598,
+          "error": "ConnectionResetError: [Errno 104] Connection reset by peer"
+        },
+        {
+          "index": 1599,
+          "error": "ConnectionResetError: [Errno 104] Connection reset by peer"
+        },
+        {
+          "index": 1600,
+          "error": "ConnectionResetError: [Errno 104] Connection reset by peer"
+        },
+        {
+          "index": 1601,
+          "error": "ConnectionResetError: [Errno 104] Connection reset by peer"
+        },
+        {
+          "index": 1602,
+          "error": "ConnectionResetError: [Errno 104] Connection reset by peer"
+        },
+        {
+          "index": 1603,
+          "error": "ConnectionResetError: [Errno 104] Connection reset by peer"
+        },
+        {
+          "index": 1604,
+          "error": "ConnectionResetError: [Errno 104] Connection reset by peer"
+        },
+        {
+          "index": 1605,
+          "error": "ConnectionResetError: [Errno 104] Connection reset by peer"
+        },
+        {
+          "index": 1606,
+          "error": "ConnectionResetError: [Errno 104] Connection reset by peer"
+        },
+        {
+          "index": 1607,
+          "error": "ConnectionResetError: [Errno 104] Connection reset by peer"
+        },
+        {
+          "index": 1608,
+          "error": "ConnectionResetError: [Errno 104] Connection reset by peer"
+        },
+        {
+          "index": 1609,
+          "error": "ConnectionResetError: [Errno 104] Connection reset by peer"
+        },
+        {
+          "index": 1610,
+          "error": "ConnectionResetError: [Errno 104] Connection reset by peer"
+        },
+        {
+          "index": 1611,
+          "error": "ConnectionResetError: [Errno 104] Connection reset by peer"
+        },
+        {
+          "index": 1612,
+          "error": "ConnectionResetError: [Errno 104] Connection reset by peer"
+        },
+        {
+          "index": 1613,
+          "error": "ConnectionResetError: [Errno 104] Connection reset by peer"
+        },
+        {
+          "index": 1614,
+          "error": "ConnectionResetError: [Errno 104] Connection reset by peer"
+        },
+        {
+          "index": 1615,
+          "error": "ConnectionResetError: [Errno 104] Connection reset by peer"
+        },
+        {
+          "index": 1616,
+          "error": "ConnectionResetError: [Errno 104] Connection reset by peer"
+        },
+        {
+          "index": 1617,
+          "error": "ConnectionResetError: [Errno 104] Connection reset by peer"
+        },
+        {
+          "index": 1618,
+          "error": "ConnectionResetError: [Errno 104] Connection reset by peer"
+        },
+        {
+          "index": 1619,
+          "error": "ConnectionResetError: [Errno 104] Connection reset by peer"
+        },
+        {
+          "index": 1620,
+          "error": "ConnectionResetError: [Errno 104] Connection reset by peer"
+        },
+        {
+          "index": 1621,
+          "error": "ConnectionResetError: [Errno 104] Connection reset by peer"
+        },
+        {
+          "index": 1622,
+          "error": "ConnectionResetError: [Errno 104] Connection reset by peer"
+        },
+        {
+          "index": 1623,
+          "error": "ConnectionResetError: [Errno 104] Connection reset by peer"
+        },
+        {
+          "index": 1624,
+          "error": "ConnectionResetError: [Errno 104] Connection reset by peer"
+        },
+        {
+          "index": 1625,
+          "error": "ConnectionResetError: [Errno 104] Connection reset by peer"
+        },
+        {
+          "index": 1626,
+          "error": "ConnectionResetError: [Errno 104] Connection reset by peer"
+        },
+        {
+          "index": 1627,
+          "error": "ConnectionResetError: [Errno 104] Connection reset by peer"
+        },
+        {
+          "index": 1628,
+          "error": "ConnectionResetError: [Errno 104] Connection reset by peer"
         }
       ],
       "note": "first-n snapshot from resume while the full 12032 run is still going. Not the full test. Grader: letter extract A-J vs dataset answer; n_repeats=1.",
       "grader": "letter extract A-J vs dataset answer; n_repeats=1",
       "snapshot": true,
-      "items_omitted": 1140
+      "items_omitted": 2645
     }
   },
   "memory_raw_vllm": null,

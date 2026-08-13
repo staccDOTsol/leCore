@@ -10,13 +10,15 @@ Quality numbers so the card is not empty of ordinary benches. They may be flat v
 |---|---|---|---|---|---|---|---|
 | MMLU-Pro | 12032 | — | TIGER-Lab/MMLU-Pro test (full) | NOT RUN | NOT RUN | NOT RUN | — |
 | GPQA-Diamond | 198 | — | Idavidrein/gpqa Diamond via OpenAI simple-evals CSV | NOT RUN | NOT RUN | NOT RUN | — |
-| AIME 2024 | 30 | — | HuggingFaceH4/aime_2024 (AIME I 2024, 30 not 60) | NOT RUN | NOT RUN | NOT RUN | — |
+| AIME 2024 | 30 | full | HuggingFaceH4/aime_2024 train via HuggingFace datasets-server (n=30; AIME 2024 I) | 18/30 | 60.0% | 4.642 | 0 |
 | AIME 2025 | 30 | — | math-ai/aime25 test | NOT RUN | NOT RUN | NOT RUN | — |
 | LiveCodeBench | — | — | livecodebench/code_generation_lite v5_v6 | NOT RUN | NOT RUN | NOT RUN | — |
 | GSM8K | 1319 | — | openai/gsm8k test (full) | NOT RUN | NOT RUN | NOT RUN | — |
 | MATH-500 | 500 | — | HuggingFaceH4/MATH-500 test (full) | NOT RUN | NOT RUN | NOT RUN | — |
 | HumanEval | 164 | — | openai/openai_humaneval test (full) | NOT RUN | NOT RUN | NOT RUN | — |
 | IFEval | 541 | — | google/IFEval train (full) | NOT RUN | NOT RUN | NOT RUN | — |
+
+AIME 2024: This HF file is 30 problems (AIME I 2024), not both AIME I+II (60).
 
 ## MEMORY SIG DIFF
 
@@ -34,24 +36,40 @@ SWE-bench / Terminal-Bench / DeepSWE / OSWorld: harness gap — not attempted, n
 
 ## Raw vLLM memory probe (this run)
 
-NOT RUN. Raw vLLM has no Gateway auto-sticky; SIG DIFF is Gateway+overlay. Lab 0/5 vs 5/5 numbers above are the measured headline.
+Host: `http://198.145.108.57:30739/v1`. Model: `/workspace/models/DeepSeek-V4-Flash-0731-serve`. n=5 nonce remember/recall, **fresh request** (no client history, no Gateway). Score: **0/5**.
+
+raw vLLM has no Gateway auto-sticky; SIG DIFF is Gateway+overlay. This probe used a fresh request (no client-side history, no extra headers).
+
+Recall failed, as expected on raw vLLM. **Do not treat this as a regression of the Gateway SIG DIFF (0/5 vs 5/5).**
+
+| trial | nonce | cited on recall | recall head |
+|---|---|---|---|
+| 0 | `HRR-SIG-062d78ac3a87-0` | no | 7f3a9c2b8e4d1a6f |
+| 1 | `HRR-SIG-91cf843904c6-1` | no | I don’t have any record of a nonce you asked me to remember in this thread. |
+| 2 | `HRR-SIG-4956a72444b4-2` | no | 0 |
+| 3 | `HRR-SIG-7162d1084600-3` | no | I don’t have any record of a nonce you asked me to remember in this thread. |
+| 4 | `HRR-SIG-9af7b89c344f-4` | no | 0 |
+
+### Exact prompt sources for rows that ran
+
+- **AIME 2024** (n=30, coverage=full): HuggingFaceH4/aime_2024 train via HuggingFace datasets-server (n=30; AIME 2024 I)
 
 ### Run metadata
 
 | field | value |
 |---|---|
-| started_utc | 2026-08-13T03:30:43.882559+00:00 |
-| finished_utc |  |
+| started_utc | 2026-08-13T03:36:55.198043+00:00 |
+| finished_utc | 2026-08-13T03:39:28.971065+00:00 |
 | base_url | `http://198.145.108.57:30739/v1` |
 | model | `/workspace/models/DeepSeek-V4-Flash-0731-serve` |
 | temperature | 0.0 |
 | timeout_s | 180 |
-| concurrency | 2 |
+| concurrency | parallel suites, conc=1 each, ~8 in-flight cap |
 | scale | full |
-| overall latency p50 (s) | — |
+| overall latency p50 (s) | 4.642 |
 | client errors | 0 |
 | reachable | True |
 
-Harness upgraded for full/high-bar splits. Live numbers pending this run.
+Suites run as separate processes (resume JSONL). OG OpenRouter NOT RUN. SWE/Terminal-Bench/DeepSWE not attempted.
 
 Do not claim OpenRouter live. Do not claim Galvatron-in-Flash GDN (Flash has no GDN; 64 embed-row passages is not GDN).

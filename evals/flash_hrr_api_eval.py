@@ -495,7 +495,7 @@ def run_math(client, n=20):
             "Solve the following competition math problem. Put the final answer "
             "in \\boxed{}.\n\n" + it["problem"]
         )
-        r = client.chat([{"role": "user", "content": prompt}], max_tokens=1024)
+        r = client.chat([{"role": "user", "content": prompt}], max_tokens=2048)
         correct, cand = math_match(r.get("text") or "", it["answer"])
         ok = bool(r.get("ok")) and correct
         rows.append({
@@ -511,7 +511,9 @@ def run_math(client, n=20):
             "finish_reason": r.get("finish_reason"),
             "text_head": (r.get("text") or "")[:240],
         })
-    return _pack(sl, rows, "MATH-500")
+    packed = _pack(sl, rows, "MATH-500")
+    packed["max_tokens"] = 2048
+    return packed
 
 
 def run_humaneval(client, n=10):
@@ -686,7 +688,8 @@ def render_markdown(report):
     lines.append("")
     lines.append(
         "GSM8K / MATH-500 / HumanEval / IFEval are quality numbers so a Hugging Face "
-        "README is not empty. They may be flat vs published Flash. GPQA skipped "
+        "README is not empty. They may be flat vs published Flash. These are **first-n "
+        "lite slices**, not full-set published scores. GPQA skipped "
         "(too long for this lite pass). SWE-bench / Terminal-Bench not attempted."
     )
     lines.append("")
@@ -742,11 +745,31 @@ def render_markdown(report):
             )
         )
     lines.append("")
+    math_row = cap.get("MATH-500") or {}
+    math_items = math_row.get("items") or []
+    n_len = sum(1 for it in math_items if it.get("finish_reason") == "length")
+    if n_len:
+        lines.append(
+            "MATH-500: %s/%s items ended with `finish_reason=length` "
+            "(counted as misses). Remaining misses are wrong answers, not HTTP errors."
+            % (n_len, math_row.get("n"))
+        )
+        lines.append("")
     if cap.get("IFEval", {}).get("instruction_level_strict_lite"):
         lines.append(
             "IFEval instruction-level strict-lite: **%s**. Grader: %s"
             % (cap["IFEval"]["instruction_level_strict_lite"], cap["IFEval"].get("grader") or "lite")
         )
+        lines.append("")
+    src_lines = []
+    for name in ("GSM8K", "MATH-500", "HumanEval", "IFEval"):
+        row = cap.get(name) or {}
+        if row.get("source"):
+            src_lines.append("- **%s** (n=%s): %s" % (name, row.get("n"), row.get("source")))
+    if src_lines:
+        lines.append("Exact prompt sources for rows that ran:")
+        lines.append("")
+        lines.extend(src_lines)
         lines.append("")
     lines.append("### Run metadata")
     lines.append("")

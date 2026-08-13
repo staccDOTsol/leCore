@@ -24,14 +24,22 @@ Measured on the **live in-weight overlay** through **Gateway auto-sticky** (no e
 | sticky ON | 5/5 | 3/3 | 1 ask, no paste |
 | OG commodity OpenRouter | NOT RUN | NOT RUN | NOT RUN |
 
-Raw vLLM does not auto-sticky. A nonce remember/recall against `:30739` with a fresh request (no client history) is expected to miss; that is not a regression of the Gateway table above.
+Raw vLLM does not auto-sticky. A nonce remember/recall against `:30739` with a fresh request (no client history) scored **0/5** from Cursor cloud (2026-08-13). That is not a regression of the Gateway table above.
 
 SWE-bench / Terminal-Bench: harness gap — not attempted, not claimed.
 
 ## Appendix — capability lite (no-regress)
 
-Quality slices so this README is not empty of ordinary numbers. They may be flat vs published Flash. They are **not** the headline.
+Quality slices so this README is not empty of ordinary numbers. They may be flat vs published Flash. They are **not** the headline. First-n lite, temperature 0, sequential, host `http://198.145.108.57:30739/v1`, model `/workspace/models/DeepSeek-V4-Flash-0731-serve`, run 2026-08-13.
 
-<!-- CAPABILITY_TABLE: replaced by evals/flash-hrr-benches.md after a live API run. If you paste before that run, leave rows as NOT RUN. -->
+| bench | n | source | score | accuracy | latency p50 (s) |
+|---|---|---|---|---|---|
+| GSM8K | 20 | openai/gsm8k test offset=0 | 20/20 | 100.0% | 0.342 |
+| MATH-500 | 20 | HuggingFaceH4/MATH-500 test offset=0 | 16/20 | 80.0% | 0.905 |
+| HumanEval | 10 | openai/openai_humaneval test offset=0 | 10/10 | 100.0% | 0.343 |
+| IFEval | 20 | google/IFEval train offset=0 | 19/20 prompt-level strict-lite | 95.0% | 2.394 |
+| GPQA | — | skipped (too long) | skipped | — | — |
 
-See `evals/flash-hrr-benches.md` in the leCore repo for exact n, prompt source, latency p50, and errors.
+MATH-500: 3/20 hit `finish_reason=length` at max_tokens=1024 (counted miss); 1/20 wrong answer. IFEval is a lite checker in-repo (not the official google-research package); instruction-level strict-lite 29/30. HTTP errors: 0. SWE-bench / Terminal-Bench not attempted.
+
+Exact n, prompts, and item traces: `evals/flash-hrr-benches.md` and `evals/results/flash_hrr_lite.json` in leCore.

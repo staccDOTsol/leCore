@@ -275,7 +275,10 @@ def _encode_f8_e4m3(f32):
         frac = ax[nz][nrm] / np.ldexp(np.ones(np.count_nonzero(nrm), np.float32),
                                       exp[nrm]) - 1.0
         mant[nrm] = np.clip(np.rint(frac * 8.0), 0, 7).astype(np.int32)
-        stored_exp[nrm] = np.clip(stored_exp[nrm], 1, 14)
+        stored_exp[nrm] = np.clip(stored_exp[nrm], 1, 15)
+        # E4M3FN: exp=15 mant=7 is NaN; max finite is 448 (exp=15, mant=6)
+        nan_code = (stored_exp == 15) & (mant == 7)
+        mant[nan_code] = 6
         byte = ((stored_exp.astype(np.uint8) << 3) | mant.astype(np.uint8))
         byte = byte | np.where(sign[nz], np.uint8(0x80), np.uint8(0))
         out[nz] = byte

@@ -251,6 +251,7 @@ def install_flash_hrr(
         },
         "installed": ["architecture"],
         "steps": [],
+        "in_weight": 0,
     }
 
     note("registers", False, "Flash has no recurrent state to reserve directions in")
@@ -273,6 +274,8 @@ def install_flash_hrr(
         note("memory_index", True,
              "%d passages in placeholder rows %s.."
              % (len(irep["rows"]), irep["rows"][:3]))
+        rep["in_weight"] = 1
+        rep["memory_index"]["in_weight"] = 1
     else:
         note("memory_index", False,
              "need passages and placeholder rows (have %d rows, %d passages)"
@@ -326,9 +329,9 @@ def install_flash_hrr(
         f.write(
             "Flash HRR bridge artifact.\n"
             "- Patched embed shard only; other shards remain in the source model dir.\n"
-            "- memory_index uses tokenizer placeholder rows in embed-space.\n"
+            "- memory_index is IN-WEIGHT (placeholder embed rows, in_weight=1).\n"
             "- router is embed-space (not layer-hidden); see lecore_router_embed.npz.\n"
-            "- registers/HRNN/prepend not installed (no recurrent state / not GDN).\n"
+            "- HRNN/prepend skipped (no GDN recurrent state).\n"
             "- Full GDN install.py path is BLOCKED for deepseek_v4.\n"
         )
     rep["out_dir"] = out_dir

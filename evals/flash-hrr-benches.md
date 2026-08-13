@@ -10,7 +10,7 @@ Measured through the **public Flash+HRR-spill gateway** (`deepseek-v4-flash` on 
 |---|---|---|---|---|---|---|---|
 | Spill-needle | 2 | full | synthetic HRR spill needle (NEEDLE_KV_SPILL_9f3c) at ~60%% depth in a repeating warehou... | 0/2 | 0.0% | 1.068 | 0 |
 | MMLU-Pro | 12032 | — | TIGER-Lab/MMLU-Pro test (full) | NOT RUN | NOT RUN | NOT RUN | — |
-| GPQA-Diamond | 198 | — | Idavidrein/gpqa Diamond via OpenAI simple-evals CSV | NOT RUN | NOT RUN | NOT RUN | — |
+| GPQA-Diamond | 198 | full | OpenAI simple-evals gpqa_diamond.csv (https://openaipublic.blob.core.windows.net/simple... | 138/198 | 69.7% | 5.295 | 0 |
 | AIME 2024 | 30 | full | HuggingFaceH4/aime_2024 train via HuggingFace datasets-server (n=30; AIME 2024 I) | 22/30 | 73.3% | 9.823 | 0 |
 | AIME 2025 | 30 | full | math-ai/aime25 test via HuggingFace datasets-server (n=30) | 16/30 | 53.3% | 8.626 | 0 |
 | LiveCodeBench | — | — | livecodebench/code_generation_lite v5_v6 | NOT RUN | NOT RUN | NOT RUN | — |
@@ -18,6 +18,8 @@ Measured through the **public Flash+HRR-spill gateway** (`deepseek-v4-flash` on 
 | MATH-500 | 500 | — | HuggingFaceH4/MATH-500 test (full) | NOT RUN | NOT RUN | NOT RUN | — |
 | HumanEval | 164 | full | openai/openai_humaneval test via HuggingFace datasets-server (full, n=164) | 147/164 | 89.6% | 2.242 | 0 |
 | IFEval | 541 | — | google/IFEval train (full) | NOT RUN | NOT RUN | NOT RUN | — |
+
+GPQA-Diamond grader: A-D letter extract; choices shuffled sha256(Record ID); n_repeats=1; item text omitted from traces (GPQA anti-contamination)
 
 AIME 2024: This HF file is 30 problems (AIME I 2024), not both AIME I+II (60).
 
@@ -42,6 +44,7 @@ NOT RUN. Raw vLLM has no Gateway auto-sticky; SIG DIFF is Gateway+overlay. Lab 0
 ### Exact prompt sources for rows that ran
 
 - **Spill-needle** (n=2, coverage=full): synthetic HRR spill needle (NEEDLE_KV_SPILL_9f3c) at ~60%% depth in a repeating warehouse haystack. Targets 250k and 500k tokens (char/4 heuristic). This is the spill prove, not a capability quiz.
+- **GPQA-Diamond** (n=198, coverage=full): OpenAI simple-evals gpqa_diamond.csv (https://openaipublic.blob.core.windows.net/simple-evals/gpqa_diamond.csv); Idavidrein/gpqa Diamond split; n=198. Choices shuffled via sha256(Record ID).
 - **AIME 2024** (n=30, coverage=full): HuggingFaceH4/aime_2024 train via HuggingFace datasets-server (n=30; AIME 2024 I)
 - **AIME 2025** (n=30, coverage=full): math-ai/aime25 test via HuggingFace datasets-server (n=30)
 - **HumanEval** (n=164, coverage=full): openai/openai_humaneval test via HuggingFace datasets-server (full, n=164)
@@ -51,14 +54,14 @@ NOT RUN. Raw vLLM has no Gateway auto-sticky; SIG DIFF is Gateway+overlay. Lab 0
 | field | value |
 |---|---|
 | started_utc |  |
-| finished_utc | 2026-08-13T05:47:28.073942+00:00 |
+| finished_utc | 2026-08-13T05:57:13.288422+00:00 |
 | base_url | `http://198.145.108.57:30739/v1` |
 | model | `deepseek-v4-flash` |
 | temperature | 0.0 |
 | timeout_s | 180 |
 | concurrency | parallel suites, conc=1 each, ~8 in-flight cap |
 | scale | full |
-| overall latency p50 (s) | 8.626 |
+| overall latency p50 (s) | 5.295 |
 | client errors | 0 |
 | reachable | True |
 

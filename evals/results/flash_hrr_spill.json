@@ -1,6 +1,6 @@
 {
   "started_utc": "",
-  "finished_utc": "2026-08-13T07:53:00.147776+00:00",
+  "finished_utc": "2026-08-13T08:23:40.075814+00:00",
   "base_url": "http://198.145.108.57:30739/v1",
   "model": "deepseek-v4-flash",
   "temperature": 0.0,
@@ -262,17 +262,17 @@
     },
     "MMLU-Pro": {
       "name": "MMLU-Pro",
-      "n": 3775,
+      "n": 5408,
       "split_n": 12032,
-      "correct": 2547,
-      "accuracy": 0.6747019867549668,
-      "score": "2547/3775",
+      "correct": 3860,
+      "accuracy": 0.7137573964497042,
+      "score": "3860/5408",
       "source": "TIGER-Lab/MMLU-Pro test via HuggingFace datasets-server (full test)",
       "canonical": "https://huggingface.co/datasets/TIGER-Lab/MMLU-Pro",
       "split": "test",
       "offset": 0,
       "coverage": "first-n",
-      "latency_p50_s": 0.6135950088500977,
+      "latency_p50_s": 0.6014922857284546,
       "n_errors": 676,
       "errors": [
         {
@@ -479,7 +479,7 @@
       "note": "first-n snapshot from resume while the full 12032 run is still going. Not the full test.",
       "grader": "letter extract A-J vs dataset answer; n_repeats=1",
       "snapshot": true,
-      "items_omitted": 3775
+      "items_omitted": 5408
     }
   },
   "memory_raw_vllm": null,

@@ -9,7 +9,7 @@ Measured through the **public Flash+HRR-spill gateway** (`deepseek-v4-flash` on 
 | bench | n | coverage | source | score | accuracy | latency p50 (s) | errors |
 |---|---|---|---|---|---|---|---|
 | Spill-needle | 2 | full | synthetic HRR spill needle (NEEDLE_KV_SPILL_9f3c) at ~60%% depth in a repeating warehou... | 0/2 | 0.0% | 1.068 | 0 |
-| MMLU-Pro | 3775 | first-n (n=3775 of 12032) | TIGER-Lab/MMLU-Pro test via HuggingFace datasets-server (full test) | 2547/3775 | 67.5% | 0.614 | 676 |
+| MMLU-Pro | 5408 | first-n (n=5408 of 12032) | TIGER-Lab/MMLU-Pro test via HuggingFace datasets-server (full test) | 3860/5408 | 71.4% | 0.601 | 676 |
 | GPQA-Diamond | 198 | full | OpenAI simple-evals gpqa_diamond.csv (https://openaipublic.blob.core.windows.net/simple... | 138/198 | 69.7% | 5.295 | 0 |
 | AIME 2024 | 30 | full | HuggingFaceH4/aime_2024 train via HuggingFace datasets-server (n=30; AIME 2024 I) | 22/30 | 73.3% | 9.823 | 0 |
 | AIME 2025 | 30 | full | math-ai/aime25 test via HuggingFace datasets-server (n=30) | 16/30 | 53.3% | 8.626 | 0 |
@@ -48,7 +48,7 @@ NOT RUN. Raw vLLM has no Gateway auto-sticky; SIG DIFF is Gateway+overlay. Lab 0
 ### Exact prompt sources for rows that ran
 
 - **Spill-needle** (n=2, coverage=full): synthetic HRR spill needle (NEEDLE_KV_SPILL_9f3c) at ~60%% depth in a repeating warehouse haystack. Targets 250k and 500k tokens (char/4 heuristic). This is the spill prove, not a capability quiz.
-- **MMLU-Pro** (n=3775, coverage=first-n (n=3775 of 12032)): TIGER-Lab/MMLU-Pro test via HuggingFace datasets-server (full test)
+- **MMLU-Pro** (n=5408, coverage=first-n (n=5408 of 12032)): TIGER-Lab/MMLU-Pro test via HuggingFace datasets-server (full test)
 - **GPQA-Diamond** (n=198, coverage=full): OpenAI simple-evals gpqa_diamond.csv (https://openaipublic.blob.core.windows.net/simple-evals/gpqa_diamond.csv); Idavidrein/gpqa Diamond split; n=198. Choices shuffled via sha256(Record ID).
 - **AIME 2024** (n=30, coverage=full): HuggingFaceH4/aime_2024 train via HuggingFace datasets-server (n=30; AIME 2024 I)
 - **AIME 2025** (n=30, coverage=full): math-ai/aime25 test via HuggingFace datasets-server (n=30)
@@ -63,7 +63,7 @@ NOT RUN. Raw vLLM has no Gateway auto-sticky; SIG DIFF is Gateway+overlay. Lab 0
 | field | value |
 |---|---|
 | started_utc |  |
-| finished_utc | 2026-08-13T07:53:00.147776+00:00 |
+| finished_utc | 2026-08-13T08:23:40.075814+00:00 |
 | base_url | `http://198.145.108.57:30739/v1` |
 | model | `deepseek-v4-flash` |
 | temperature | 0.0 |

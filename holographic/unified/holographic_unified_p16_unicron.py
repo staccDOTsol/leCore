@@ -1019,12 +1019,10 @@ PROVEN, on our own trained model: unbind and bind agree with the FFT to 1e-10; a
                                     n_registers=16, seed=0, out_dir=None,
                                     hrr_dim=256, model_dir=None):
         """HRR-ATTACH leCore onto DeepSeek-V4 Flash WITHOUT GDNRuntime.
-        Qwen3-Next is Gated DeltaNet; Flash is not. unicron_install_lecore
-        takes a GDNRuntime and will not execute this architecture. This
-        faculty writes a sidecar: registers (seed-derived orthonormal keys)
-        and a searchable HRR passage index. The router is skipped with a
-        reason -- it needs a Flash forward, and a stubbed gate is a fake
-        success. Does not assimilate, does not rewrite the base weights.
+
+        Writes faculties into unused/placeholder embed rows (in_weight=1)
+        plus a sidecar for request-time inject. Does not assimilate, does
+        not call GDNRuntime, does not eager-load 48 shards.
         See holographic_deepseek_v4.install."""
         from holographic.io_and_interop.holographic_deepseek_v4 import install
         return install(weights, cfg, passages=passages,

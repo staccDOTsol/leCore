@@ -1,94 +1,75 @@
-# DeepSeek-V4 Flash -- HRR-attach + Flash-as-HRR consume
+# DeepSeek-V4 Flash -- in-weight HRR + sidecar consume
 
-Detect Flash, refuse the Qwen GDN installer, attach registers and
-searchable passages in a sidecar, then **consume** that sidecar on the
-generation request: recall + Gateway-shaped system inject (<=1024)
-BEFORE tokens. Lab generate backend is vLLM's OpenAI server.
+Detect Flash, refuse the Qwen GDN installer, **write faculties into
+unused / placeholder embed rows** (`lecore.json` `in_weight=1`), keep a
+sidecar for request-time inject, then consume: recall + Gateway-shaped
+system inject (<=1024) BEFORE tokens. Lab generate backend is vLLM.
 
-This is **not** assimilate compression, not a MoE runtime, and not
-in-weight Galvatron. One-shard F8/FP4 peek is included; 48-shard eager
-load is not. `GDNRuntime` is not a Flash forward.
+This is **not** assimilate compression, not a MoE runtime, and not a
+claim that `GDNRuntime` runs Flash. One-shard F8/FP4 peek is included;
+48-shard eager load is not.
 
-## Two layers (compose; they are not the same process)
+## Why in-weight (Vast H200)
 
-| layer | what | where |
-|---|---|---|
-| **External HRR / Gateway** | process-level holographic memory in front of any model. Dogfood HTTP `:7090`, gateway `:8765`. | outside the checkpoint |
-| **Flash sidecar (this)** | model-local `lecore.json` + `lecore_hrr.npz`. Registers + searchable passages. | install `OUT_DIR` |
-| **In-weight Galvatron** | keys / index / router inside Flash tensors | inside 156G -- follow-up, not claimed |
+Sidecar inject alone is not the SKU. The H200 job exists to land HRR
+**inside Flash weights**. The Flash-legal bank is tokenizer
+`place_holder` ids plus unused tail vocab rows of `embed.weight`
+(F8/BF16 decode, write, encode). GDN recurrent-state orthogonalisation
+is physically absent -- that skip is named, not faked.
 
-Both Gateway and this sidecar emit the same inject: a **system** message
-starting `[leCore HRR]`, payload **<= 1024 characters**. A serve layer
-can run either or both, then send the attached body to generate.
-
-## Install (write the sidecar)
+## Install
 
 ```bash
-python assimilation/install_deepseek_v4.py MODEL_DIR OUT_DIR
 python assimilation/install_deepseek_v4.py MODEL_DIR OUT_DIR --smoke-shard
-./assimilation/install_deepseek_v4.sh MODEL_DIR OUT_DIR --smoke-shard
+python assimilation/prove_flash_in_weight.py MODEL_DIR OUT_DIR
+# expect: FLASH_IN_WEIGHT_OK  and  lecore.json in_weight=1
 ```
 
 `MODEL_DIR` needs Hugging Face `config.json` (`model_type` `deepseek_v4`
-or `architectures` containing `DeepseekV4ForCausalLM`). Weight shards
-are **not** all loaded. `--smoke-shard` peeks ONE file (F8_E8M0 /
-F8_E4M3 / packed FP4 LUT).
+or `architectures` containing `DeepseekV4ForCausalLM`). **One** embed
+shard is loaded. `--smoke-shard` peeks ONE file (F8_E8M0 / F8_E4M3 /
+packed FP4 LUT).
 
-`OUT_DIR` receives `lecore.json`, `lecore_hrr.npz`, a copy of
-`config.json`, `BASE.txt`. The base checkpoint stays byte-identical.
+`OUT_DIR` receives `lecore.json`, `lecore_hrr.npz`, `lecore_in_weight.safetensors`
+(and a patched embed shard when the source shard is present), `BASE.txt`.
 
 | faculty | result | where |
 |---|---|---|
-| **registers** | real. Seed-derived orthonormal keys. | sidecar |
-| **memory_index / passages** | real. HRR bundle, cosine search. | sidecar |
-| **router** | **skipped** (needs a Flash forward; a stubbed gate is a fake success). | -- |
+| **memory_index** | real. Written into placeholder/tail embed rows. `in_weight=1`. | embed + sidecar |
+| **registers** | real keys. Written into remaining embed rows when they exist; else sidecar. GDN-state orthogonalisation SKIPPED. | embed and/or sidecar |
+| **router** | **skipped** (needs a Flash forward; a stubbed gate is a fake success). Next bridge: Flash-native early-layer hidden states. | -- |
+| **HRNN / prepend** | **skipped**. Flash has no GDN recurrent state / Qwen `layer_types`. | -- |
 
-## Flash-as-HRR: inject before generate
+## Serve in-weight (no 156G copy)
 
-This is the integration point. HRR runs on the **request**. Generate
-(vLLM / anything speaking `/v1/chat/completions`) never sees a bare
-prompt -- the attached body already contains recalled passages.
+```bash
+python assimilation/flash_in_weight_serve_dir.py MODEL_DIR OUT_DIR SERVE_DIR
+python -m vllm.entrypoints.openai.api_server --model SERVE_DIR --port 8000
+python assimilation/flash_hrr.py serve OUT_DIR --upstream http://127.0.0.1:8000 --port 8765
+python assimilation/flash_hrr_vllm_inject.py OUT_DIR --cue "What is the capital of France?"
+```
+
+`flash_in_weight_serve_dir.py` **symlinks** MODEL_DIR and overlays the
+patched embed shard. It does not copy 48 shards.
+
+## Sidecar inject (composes with in-weight)
 
 ```
 client  -->  FlashHRR.attach(openai_body)  -->  vLLM :8000 /v1/chat/completions
-                 ^
-                 system inject <=1024, header [leCore HRR]
 ```
 
 ```bash
 python assimilation/flash_hrr.py recall OUT_DIR "capital of France"
 python assimilation/flash_hrr.py attach OUT_DIR "what is the capital of France"
-python -m holographic.io_and_interop.holographic_deepseek_v4 attach OUT_DIR QUERY
 ```
 
-`attach` prints the OpenAI body to POST. `serve` is the lab proxy:
+## One-shard dequant smoke
 
 ```bash
-# terminal 1 -- vanilla vLLM (Flash weights; no GDNRuntime)
-python -m vllm.entrypoints.openai.api_server --model MODEL_DIR --port 8000
-
-# terminal 2 -- HRR before tokens
-python assimilation/flash_hrr.py serve OUT_DIR --upstream http://127.0.0.1:8000 --port 8765
-
-# client talks to :8765; FlashHRR.attach runs; vLLM generates
+python assimilation/smoke_flash_dequant_oneshard.py \
+    MODEL_DIR/model-00002-of-00048.safetensors
+# expect DEQUANT_SMOKE_OK
 ```
-
-Python (same hook a Gateway can call):
-
-```python
-from holographic.io_and_interop.holographic_deepseek_v4 import FlashHRR
-
-sess = FlashHRR.open("OUT_DIR")
-body = sess.before_generate({
-    "model": "deepseek-ai/DeepSeek-V4-Flash",
-    "messages": [{"role": "user", "content": "What is the capital of France?"}],
-    "max_tokens": 32,
-})
-# POST body to vLLM /v1/chat/completions -- memory is already in messages[0]
-```
-
-`in_weight` is False. Registers are in the sidecar, not orthogonalised
-against a GDN state that Flash does not have on this path.
 
 ## Qwen path (unchanged)
 
@@ -99,9 +80,9 @@ against a GDN state that Flash does not have on this path.
 A DeepSeek card is refused before shards open, with a pointer at
 `install_deepseek_v4.py`.
 
-## Out of scope
+## Out of scope / honest SKIP
 
 - 48-shard / 156G eager load
 - MoE forward / GDNRuntime-as-Flash
 - assimilate / Unicron compression as the SKU
-- in-weight prepend, HRNN ladder, GDN router, head-row index
+- GDN prepend, HRNN ladder, layer-hidden router (next bridge named in `lecore.json` skipped[])

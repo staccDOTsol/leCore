@@ -70,7 +70,8 @@ def _decode_bf16(raw_u16):
 
 def _decode_f8_e8m0(raw_u8):
     """OCP / torch.float8_e8m0fnu: unsigned power-of-two, value = 2**(byte-127).
-    0xFF is the NaN sentinel (DeepSeek scale tensors do not use it)."""
+    0xFF is the NaN sentinel (DeepSeek scale tensors do not use it).
+    Also used for safetensors dtype aliases F8_E8M0 and F8_E8M0FNU."""
     b = np.frombuffer(raw_u8, dtype=np.uint8)
     out = np.ldexp(np.ones(b.shape, np.float32), b.astype(np.int32) - 127)
     out[b == 255] = np.nan
@@ -79,12 +80,25 @@ def _decode_f8_e8m0(raw_u8):
 
 def _decode_f8_e4m3(raw_u8):
     """IEEE-like FP8 E4M3FN (torch.float8_e4m3fn): bias 7, no inf, 0x7F/0xFF NaN.
-    Max finite is 448 (0x7E). Used for DeepSeek-V4 Flash non-expert weights."""
-    x = np.frombuffer(raw_u8, dtype=np.uint8)
-    sign = (x >> 7) & 1
-    exp = (x >> 3) & 0x0F
-    mant = x & 0x07
-    out = np.empty(x.shape, np.float32)
+    Max finite is 448 (0x7E). Used for DeepSeek-V4 Flash non-expert weights.
+    Prefer ml_dtypes / torch when present; else a NumPy decode."""
+    u = np.frombuffer(raw_u8, dtype=np.uint8)
+    try:
+        from ml_dtypes import float8_e4m3fn
+        return np.asarray(u.view(float8_e4m3fn), dtype=np.float32)
+    except Exception:
+        pass
+    try:
+        import torch
+        t = torch.frombuffer(bytearray(u), dtype=torch.uint8).view(
+            torch.float8_e4m3fn)
+        return t.to(torch.float32).numpy()
+    except Exception:
+        pass
+    sign = (u >> 7) & 1
+    exp = (u >> 3) & 0x0F
+    mant = u & 0x07
+    out = np.empty(u.shape, np.float32)
     nan = (exp == 15) & (mant == 7)
     zero = (exp == 0) & (mant == 0)
     sub = (exp == 0) & (mant != 0)
@@ -127,9 +141,9 @@ def _decode_st_payload(dt, raw, shape):
     """One safetensors tensor payload -> ndarray. F8_* decode to float32."""
     if dt == "BF16":
         arr = _decode_bf16(np.frombuffer(raw, dtype=np.uint16))
-    elif dt == "F8_E8M0":
+    elif dt in ("F8_E8M0", "F8_E8M0FNU"):
         arr = _decode_f8_e8m0(raw)
-    elif dt == "F8_E4M3":
+    elif dt in ("F8_E4M3", "F8_E4M3FN"):
         arr = _decode_f8_e4m3(raw)
     elif dt == "F8_E5M2":
         arr = _decode_f8_e5m2(raw)
@@ -170,7 +184,8 @@ def load_safetensors(path, return_dtypes=False):
     next N bytes = JSON mapping tensor name -> {dtype, shape, data_offsets};
     the rest = the concatenated raw tensor bytes the offsets index into.
     bf16 tensors are decoded losslessly to float32 (see _decode_bf16).
-    F8_E4M3 / F8_E8M0 / F8_E5M2 decode to float32 (DeepSeek-V4 Flash)."""
+    F8_E4M3 / F8_E4M3FN / F8_E8M0 / F8_E8M0FNU / F8_E5M2 decode to float32
+    (DeepSeek-V4 Flash)."""
     # MEMORY-MAP THE PAYLOAD, DO NOT READ IT. `blob = f.read()` pulls the whole
     # checkpoint into RAM before a single tensor is touched, which is precisely
     # the anti-pattern safetensors was designed to avoid -- the format exists so
@@ -209,6 +224,67 @@ def _encode_bf16(f32):
     return ((u32 + 0x7FFF + ((u32 >> 16) & 1)) >> 16).astype(np.uint16)
 
 
+def _encode_f8_e8m0(f32):
+    """float32 -> UE8M0 byte. Inverse of _decode_f8_e8m0 for finite values."""
+    x = np.ascontiguousarray(f32, np.float32)
+    b = np.zeros(x.shape, np.uint8)
+    nan = ~np.isfinite(x)
+    b[nan] = 255
+    pos = np.isfinite(x) & (x > 0)
+    if np.any(pos):
+        e = np.rint(np.log2(x[pos])) + 127
+        b[pos] = np.clip(e, 0, 254).astype(np.uint8)
+    return b
+
+
+def _encode_f8_e4m3(f32):
+    """float32 -> E4M3FN byte. Prefer ml_dtypes / torch; else NumPy encode."""
+    x = np.ascontiguousarray(f32, np.float32)
+    try:
+        from ml_dtypes import float8_e4m3fn
+        return np.asarray(x.astype(float8_e4m3fn).view(np.uint8))
+    except Exception:
+        pass
+    try:
+        import torch
+        t = torch.from_numpy(np.ascontiguousarray(x)).to(torch.float8_e4m3fn)
+        return t.view(torch.uint8).cpu().numpy()
+    except Exception:
+        pass
+    out = np.zeros(x.shape, np.uint8)
+    nan = ~np.isfinite(x)
+    out[nan] = 0x7F
+    fin = np.isfinite(x)
+    sign = (x < 0) & fin
+    ax = np.abs(x, dtype=np.float32)
+    # clamp to E4M3FN max finite 448
+    ax = np.minimum(ax, np.float32(448.0))
+    zero = fin & (ax == 0)
+    out[zero] = np.where(sign[zero], np.uint8(0x80), np.uint8(0))
+    nz = fin & (ax > 0)
+    if np.any(nz):
+        exp = np.floor(np.log2(ax[nz])).astype(np.int32)
+        exp = np.clip(exp, -6, 8)
+        # subnormal when unbiased exp would be < -6 (bias 7 => stored 0)
+        stored_exp = exp + 7
+        sub = stored_exp <= 0
+        mant = np.empty(exp.shape, np.int32)
+        mant[sub] = np.clip(np.rint(ax[nz][sub] * 512.0), 0, 7).astype(np.int32)
+        stored_exp[sub] = 0
+        nrm = ~sub
+        frac = ax[nz][nrm] / np.ldexp(np.ones(np.count_nonzero(nrm), np.float32),
+                                      exp[nrm]) - 1.0
+        mant[nrm] = np.clip(np.rint(frac * 8.0), 0, 7).astype(np.int32)
+        stored_exp[nrm] = np.clip(stored_exp[nrm], 1, 15)
+        # E4M3FN: exp=15 mant=7 is NaN; max finite is 448 (exp=15, mant=6)
+        nan_code = (stored_exp == 15) & (mant == 7)
+        mant[nan_code] = 6
+        byte = ((stored_exp.astype(np.uint8) << 3) | mant.astype(np.uint8))
+        byte = byte | np.where(sign[nz], np.uint8(0x80), np.uint8(0))
+        out[nz] = byte
+    return out
+
+
 def save_safetensors(path, tensors, dtypes=None):
     """Write {name: ndarray} as .safetensors. `dtypes` maps name -> safetensors
     dtype string ("BF16", "F16", "F32", ...) to OVERRIDE the array's own dtype on
@@ -225,6 +301,12 @@ def save_safetensors(path, tensors, dtypes=None):
         if want == "BF16":
             raw = _encode_bf16(arr).tobytes()
             dt = "BF16"
+        elif want in ("F8_E8M0", "F8_E8M0FNU"):
+            raw = _encode_f8_e8m0(arr).tobytes()
+            dt = want
+        elif want in ("F8_E4M3", "F8_E4M3FN"):
+            raw = _encode_f8_e4m3(arr).tobytes()
+            dt = want
         elif want is not None and want in _ST_DTYPES:
             arr = arr.astype(_ST_DTYPES[want])
             raw = arr.tobytes()
@@ -1818,6 +1900,34 @@ def _selftest():
     assert float(_decode_f8_e4m3(bytes([0x7E]))[0]) == 448.0
     assert float(_decode_f8_e8m0(bytes([127]))[0]) == 1.0
     assert float(_decode_f8_e8m0(bytes([128]))[0]) == 2.0
+    # F8 save/load round-trip including F8_E8M0FNU / F8_E4M3FN aliases
+    with tempfile.TemporaryDirectory() as _f8td:
+        p8 = os.path.join(_f8td, "e8.safetensors")
+        save_safetensors(p8, {"s": np.array([1.0, 2.0], np.float32)},
+                         dtypes={"s": "F8_E8M0"})
+        b8, d8 = load_safetensors(p8, return_dtypes=True)
+        assert d8["s"] == "F8_E8M0"
+        assert float(b8["s"][0]) == 1.0 and float(b8["s"][1]) == 2.0
+        p8u = os.path.join(_f8td, "e8fnu.safetensors")
+        save_safetensors(p8u, {"s": np.array([1.0], np.float32)},
+                         dtypes={"s": "F8_E8M0FNU"})
+        _, du = load_safetensors(p8u, return_dtypes=True)
+        assert du["s"] == "F8_E8M0FNU"
+        assert float(load_safetensors(p8u)["s"][0]) == 1.0
+        p43 = os.path.join(_f8td, "e43.safetensors")
+        save_safetensors(p43, {"w": np.array([1.0, 448.0], np.float32)},
+                         dtypes={"w": "F8_E4M3"})
+        w43, d43 = load_safetensors(p43, return_dtypes=True)
+        assert d43["w"] == "F8_E4M3"
+        assert float(w43["w"][0]) == 1.0 and float(w43["w"][1]) == 448.0
+        p43a = os.path.join(_f8td, "e43fn.safetensors")
+        save_safetensors(p43a, {"w": np.array([1.0], np.float32)},
+                         dtypes={"w": "F8_E4M3FN"})
+        _, da = load_safetensors(p43a, return_dtypes=True)
+        assert da["w"] == "F8_E4M3FN"
+        assert float(load_safetensors(p43a)["w"][0]) == 1.0
+        # one-tensor load (PR #1 smoke without 156G)
+        assert float(load_safetensors_one(p8, "s")[0]) == 1.0
 
     # 2) RMT readout: pure noise has ~no outliers; a planted rank-5 spike shows
     #    EXACTLY 5, even though the spikes inflate the raw std (the kept negative

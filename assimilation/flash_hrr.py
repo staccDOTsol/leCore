@@ -8,7 +8,9 @@ Loads install OUT_DIR (lecore.json + lecore_hrr.npz). Recalls from the sidecar,
 builds a Gateway-shaped system inject (<=1024 chars), and attaches it to an
 OpenAI chat/completions body BEFORE tokens. Lab generate backend is vLLM's
 OpenAI server (or any /v1/chat/completions). GDNRuntime is not called.
-48 shards are not loaded. This is not in-weight Galvatron.
+48 shards are not loaded. In-weight faculties live in the patched embed
+shard from install (`lecore.json` in_weight=1); this CLI attaches sidecar
+recall onto the request. GDNRuntime is not called.
 
 Inject-before-generate point:
     client  ->  this process (FlashHRR.attach)  ->  vLLM :8000
@@ -85,7 +87,7 @@ def _cmd_registers(a):
     st = sess.status()
     print(json.dumps({
         "count": st["registers"], "dim": st["hrr_dim"], "seed": st["seed"],
-        "in_weight": False,
+        "in_weight": int(st.get("in_weight") or 0),
         "shape": None if keys is None else list(keys.shape),
     }, indent=2))
     return 0

@@ -87,14 +87,14 @@ def test_install_on_tiny_fake_weights_writes_lecore_json(tmp_path):
         "registers are reserved orthonormal key directions",
     ]
     out = tmp_path / "galvatron_dsv4"
+    orig = np.array(w["model.embed_tokens.weight"], copy=True)
     w2, cfg2, rep = D.install(
         w, cfg, passages=passages, n_registers=8, seed=0,
         out_dir=str(out), hrr_dim=64, model_dir=str(tmp_path))
-    # base weights are not rewritten
-    assert w2 is w
-    assert np.array_equal(
-        w["model.embed_tokens.weight"],
-        D.fake_deepseek_v4_weights(hidden=32, vocab=48)["model.embed_tokens.weight"])
+    # in-weight rewrite of unused/tail embed rows; original dict not mutated
+    assert w2 is not w
+    assert np.array_equal(w["model.embed_tokens.weight"], orig)
+    assert not np.array_equal(w2["model.embed_tokens.weight"], orig)
     assert "registers" in rep["installed"]
     assert "memory_index" in rep["installed"]
     assert "passages" in rep["installed"]
@@ -102,15 +102,16 @@ def test_install_on_tiny_fake_weights_writes_lecore_json(tmp_path):
     assert rep["router"]["ok"] is False
     assert "GDNRuntime" in rep["router"]["reason"]
     assert rep["registers"]["ok"] is True
-    assert rep["registers"]["in_weight"] is False
-    assert rep["memory_index"]["ok"] is True
-    assert rep["memory_index"]["in_weight"] is False
+    assert int(rep["in_weight"]) == 1
+    assert int(rep["memory_index"]["in_weight"]) == 1
     assert (out / "lecore.json").is_file()
     card = json.loads((out / "lecore.json").read_text())
     assert card["format"] == D.FORMAT
     assert card["family"] == "deepseek_v4"
+    assert int(card["in_weight"]) == 1
     assert "router" in [s["step"] for s in card["skipped"]]
     assert (out / "lecore_hrr.npz").is_file()
+    assert (out / "lecore_in_weight.safetensors").is_file()
 
 
 def test_registers_regenerate_from_seed_and_are_orthonormal():
@@ -282,7 +283,7 @@ def test_flash_hrr_loads_tiny_sidecar_and_recalls(tmp_path):
     keys = sess.register_keys()
     assert keys is not None and keys.shape[0] == 8
     st = sess.status()
-    assert st["in_weight"] is False
+    assert int(st["in_weight"]) == 1
     assert st["inject_max"] == 1024
     assert st["passages"] == 3
 
@@ -298,7 +299,8 @@ def test_gateway_system_inject_is_capped_at_1024():
 
 def test_attach_puts_recalled_memory_into_a_real_generation_request(tmp_path):
     """Flash-as-HRR: the body a vLLM OpenAI server would generate from
-    contains sidecar memory. HRR ran before tokens. in_weight is False."""
+    contains sidecar memory. HRR ran before tokens. lecore.json in_weight=1
+    because install wrote placeholder/tail embed rows."""
     out = _tiny_sidecar(tmp_path)
     sess = D.open_session(str(out))
     req = {
@@ -313,7 +315,7 @@ def test_attach_puts_recalled_memory_into_a_real_generation_request(tmp_path):
     }
     attached, info = sess.attach(req)
     assert info["attached"] is True
-    assert info["in_weight"] is False
+    assert int(info["in_weight"]) == 1
     assert info["inject_chars"] <= 1024
     assert attached is not req
     assert req["messages"][0]["content"] == "You are a helpful assistant."
@@ -425,4 +427,46 @@ def test_flash_hrr_cli_script_attach(tmp_path):
     # main prints JSON; capture via returning 0 and reading sidecar attach
     rc = mod.main(["attach", str(out), "capital of France", "-k", "1"])
     assert rc == 0
+
+
+def test_in_weight_is_one_and_embed_rows_change(tmp_path):
+    cfg = D.fake_deepseek_v4_config(hidden=32, vocab=48)
+    w = D.fake_deepseek_v4_weights(hidden=32, vocab=48)
+    orig = np.array(w["model.embed_tokens.weight"], copy=True)
+    out = tmp_path / "iw"
+    w2, _c, rep = D.install(
+        w, cfg,
+        passages=["the capital of France is Paris", "water freezes at zero"],
+        n_registers=4, seed=0, out_dir=str(out), hrr_dim=64)
+    assert int(rep["in_weight"]) == 1
+    assert int(rep["memory_index"]["in_weight"]) == 1
+    assert int(rep["registers"]["in_weight"]) == 1
+    assert len(rep["memory_index"]["rows"]) >= 2
+    assert not np.array_equal(w2["model.embed_tokens.weight"], orig)
+    card = json.loads((out / "lecore.json").read_text())
+    assert int(card["in_weight"]) == 1
+    assert (out / "lecore_in_weight.safetensors").is_file()
+    skipped = {s["step"]: s["reason"] for s in card["skipped"]}
+    assert "router" in skipped
+    assert "hrnn_ladder" in skipped
+    assert "prepend" in skipped
+    assert "GDNRuntime" in skipped["router"] or "Flash" in skipped["router"]
+
+
+def test_f8_e8m0fnu_alias_round_trips():
+    from holographic.io_and_interop.holographic_unicron import (
+        save_safetensors, load_safetensors, _decode_st_payload)
+    import tempfile
+    raw = bytes([127, 128])
+    arr = _decode_st_payload("F8_E8M0FNU", raw, (2,))
+    assert float(arr[0]) == 1.0 and float(arr[1]) == 2.0
+    td = tempfile.mkdtemp()
+    p = os.path.join(td, "fnu.safetensors")
+    save_safetensors(p, {"s": np.array([1.0, 2.0], np.float32)},
+                     dtypes={"s": "F8_E8M0FNU"})
+    back, dts = load_safetensors(p, return_dtypes=True)
+    assert dts["s"] == "F8_E8M0FNU"
+    assert float(back["s"][0]) == 1.0
+
+
 

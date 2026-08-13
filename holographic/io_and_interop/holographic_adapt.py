@@ -95,15 +95,25 @@ def infer(weights, tokenizer_dir=None):
                    "mixer.", "ssm")
     n_lin = sum(1 for k in shapes if any(t in k for t in lin_markers))
     n_attn = sum(1 for k in shapes if "self_attn" in k or "attn.q" in k
-                 or "attention" in k)
+                 or "attention" in k or ".attn.wq" in k or ".attn.wkv" in k
+                 or "attn_sink" in k)
+    # DeepSeek-V4-Flash: MoE + sparse attention, no GDN recurrent state.
+    n_moe = sum(1 for k in shapes if "ffn.experts" in k or "mlp.experts" in k)
     if n_lin and n_attn:
         family = "hybrid"
     elif n_lin:
         family = "recurrent"
     else:
         family = "attention"
-    ev["attention"] = ("%d linear-state tensors, %d attention tensors -> %s"
-                       % (n_lin, n_attn, family))
+    variant = None
+    if n_moe and family == "attention" and (
+            any("attn.wq_a" in k or "attn.wq_b" in k for k in shapes)
+            or any(k == "embed.weight" for k in shapes)):
+        variant = "deepseek_v4"
+    ev["attention"] = ("%d linear-state tensors, %d attention tensors, "
+                       "%d moe tensors -> %s%s"
+                       % (n_lin, n_attn, n_moe, family,
+                          ("/%s" % variant) if variant else ""))
 
     tied = not any("lm_head" in k for k in shapes)
     ev["tied"] = ("no lm_head tensor -> the embedding IS the head" if tied
@@ -129,8 +139,9 @@ def infer(weights, tokenizer_dir=None):
     score += 0.2 if head_key else 0.0
     score += 0.2 if free_from is not None else 0.0
     return {"n_layers": len(layers), "hidden": hidden, "head": head_key,
-            "family": family, "has_recurrent_state": family != "attention",
-            "n_linear_tensors": int(n_lin),
+            "family": family, "variant": variant,
+            "has_recurrent_state": family != "attention",
+            "n_linear_tensors": int(n_lin), "n_moe_tensors": int(n_moe),
             "vocab": vocab, "tied": tied, "free_from": free_from,
             "layer_prefix": _prefix(shapes), "confidence": round(score, 2),
             "evidence": ev}

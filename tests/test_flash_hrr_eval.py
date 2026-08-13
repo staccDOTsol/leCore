@@ -97,7 +97,7 @@ def test_card_render_has_high_bar_table_not_lite_n20():
     md = render_markdown({"capability": {}, "reachable": True})
     hf = render_hf_fragment({"capability": {}, "reachable": True})
     assert "## Capability evals" in md
-    assert "## Evals (raw vLLM, temperature 0)" in hf
+    assert "## Evals (Flash+HRR-spill gateway, temperature 0)" in hf
     assert "GPQA-Diamond" in md and "MMLU-Pro" in md and "AIME 2024" in md
     assert "LiveCodeBench" in hf
     assert "MEMORY SIG DIFF" in md and "MEMORY SIG DIFF" in hf

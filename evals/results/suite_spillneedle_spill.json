@@ -1,0 +1,96 @@
+{
+  "started_utc": "2026-08-13T05:38:03.315785+00:00",
+  "base_url": "http://198.145.108.57:30739/v1",
+  "model": "deepseek-v4-flash",
+  "temperature": 0.0,
+  "timeout_s": 1800,
+  "concurrency": 1,
+  "scale": "full",
+  "n_cap": null,
+  "suites": [
+    "spillneedle"
+  ],
+  "probe": {
+    "ok": true,
+    "models": [
+      "deepseek-v4-flash"
+    ],
+    "elapsed": 0.08046388626098633
+  },
+  "reachable": true,
+  "stack": "Flash+HRR-spill gateway",
+  "lab_sig_diff": {
+    "host": "lab box Gateway http://127.0.0.1:8765/v1",
+    "overlay": "DeepSeek-V4-Flash-0731-serve",
+    "model_id": "deepseek-v4-flash",
+    "public_vllm": "http://198.145.108.57:30739/v1",
+    "arms": {
+      "t2_nonce_cite": {
+        "off": "0/5",
+        "on": "5/5"
+      },
+      "multi_turn_3cite": {
+        "off": "0/3",
+        "on": "3/3"
+      },
+      "reprompts": {
+        "off": "must re-paste the citations",
+        "on": "1 ask, no paste"
+      }
+    },
+    "openrouter": "NOT RUN",
+    "note": "Gateway auto-sticky on the lab box. Public API is Flash+HRR-spill gateway."
+  },
+  "capability": {
+    "Spill-needle": {
+      "name": "Spill-needle",
+      "n": 2,
+      "split_n": 2,
+      "correct": 0,
+      "accuracy": 0.0,
+      "score": "0/2",
+      "source": "synthetic HRR spill needle (NEEDLE_KV_SPILL_9f3c) at ~60%% depth in a repeating warehouse haystack. Targets 250k and 500k tokens (char/4 heuristic). This is the spill prove, not a capability quiz.",
+      "canonical": "in-repo evals/flash_hrr_api_eval.py run_spill_needle",
+      "split": "spill-needle",
+      "offset": 0,
+      "coverage": "full-file",
+      "latency_p50_s": 1.0680174827575684,
+      "n_errors": 0,
+      "errors": [],
+      "items": [
+        {
+          "index": 0,
+          "target_tokens": 250000,
+          "prompt_chars": 1044355,
+          "gold": "NEEDLE_KV_SPILL_9f3c",
+          "pred": "SECRET_NEEDLE=",
+          "correct": false,
+          "elapsed": 0.7952649593353271,
+          "error": null,
+          "finish_reason": "stop",
+          "text_head": "SECRET_NEEDLE="
+        },
+        {
+          "index": 1,
+          "target_tokens": 500000,
+          "prompt_chars": 2088481,
+          "gold": "NEEDLE_KV_SPILL_9f3c",
+          "pred": "Based on the document provided, there is no mention of a \"SECRET_NEEDLE\" value. The text only repeats the phrase about warehouse ledger and inventory counts. Therefore, the exact SECRET_NEEDLE value i",
+          "correct": false,
+          "elapsed": 1.3407700061798096,
+          "error": null,
+          "finish_reason": "stop",
+          "text_head": "Based on the document provided, there is no mention of a \"SECRET_NEEDLE\" value. The text only repeats the phrase about warehouse ledger and inventory counts. Therefore, the exact SECRET_NEEDLE value is not present in the given content."
+        }
+      ],
+      "note": "Honest miss 0/2. Wall time ~1s per item with 1\u20132MB prompts, so the gateway almost certainly did not prefill 250k/500k tokens (likely truncated or haystack dropped before the 60% needle). Not a fake pass. Needle string NEEDLE_KV_SPILL_9f3c.",
+      "grader": "substring match for NEEDLE_KV_SPILL_9f3c in the completion",
+      "stack": "Flash+HRR-spill gateway"
+    }
+  },
+  "memory_raw_vllm": null,
+  "client_errors": [],
+  "note": "",
+  "latency_p50_s": 1.0680174827575684,
+  "finished_utc": "2026-08-13T05:38:05.648820+00:00"
+}

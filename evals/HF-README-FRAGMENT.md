@@ -6,31 +6,24 @@
 
 This is not a new pretrained LLM. It is Flash with an in-weight HRR overlay. Do **not** read the numbers below as an OpenRouter live listing — OpenRouter was not run. Do **not** read 64 embed-row passages as Galvatron-in-Flash GDN. Flash has no GDN.
 
-## Evals (raw vLLM, temperature 0)
+## Evals (Flash+HRR-spill gateway, temperature 0)
 
-Host `http://198.145.108.57:30739/v1`, model `/workspace/models/DeepSeek-V4-Flash-0731-serve`. Sequential or conc≤2. Coverage column says **full** vs **first-n** — do not read a first-n score as a full-set published number. SWE-bench / Terminal-Bench / DeepSWE / OSWorld not attempted (harness gap).
+Host `http://198.145.108.57:30739/v1`, model `deepseek-v4-flash`, Bearer `sk-lecore-…`. This is the **HRR spill gateway**, not vanilla 32k vLLM. Coverage column says **full** vs **first-n**. SWE-bench / Terminal-Bench / DeepSWE / OSWorld not attempted (harness gap).
 
 | bench | n | coverage | source | score | accuracy | latency p50 (s) | errors |
 |---|---|---|---|---|---|---|---|
-| MMLU-Pro | 5930 | first-n (n=5930 of 12032) | TIGER-Lab/MMLU-Pro test via HuggingFace datasets-server (full test) | 4750/5930 | 80.1% | 0.535 | 1 |
-| GPQA-Diamond | 198 | full | OpenAI simple-evals gpqa_diamond.csv (https://openaipublic.blob.core.windows.net/simple... | 144/198 | 72.7% | 1.978 | 0 |
-| AIME 2024 | 30 | full | HuggingFaceH4/aime_2024 train via HuggingFace datasets-server (n=30; AIME 2024 I) | 18/30 | 60.0% | 4.642 | 0 |
-| AIME 2025 | 30 | full | math-ai/aime25 test via HuggingFace datasets-server (n=30) | 15/30 | 50.0% | 9.143 | 1 |
-| LiveCodeBench | 342 | full | livecodebench/code_generation_lite v5_v6 files v5:167, v6:175 (HuggingFace resolve/main... | 97/342 | 28.4% | 1.173 | 0 |
-| GSM8K | 1319 | full | openai/gsm8k main/test via HuggingFace datasets-server (full test) | 1280/1319 | 97.0% | 0.573 | 0 |
-| MATH-500 | 500 | full | HuggingFaceH4/MATH-500 test via HuggingFace datasets-server (full, n=500) | 448/500 | 89.6% | 1.326 | 0 |
-| HumanEval | 164 | full | openai/openai_humaneval test via HuggingFace datasets-server (full, n=164) | 150/164 | 91.5% | 0.678 | 0 |
-| IFEval | 541 | full | google/IFEval train via HuggingFace datasets-server (full, n=541; same order as google-... | 467/541 | 86.3% | 3.481 | 0 |
+| Spill-needle | 2 | full | synthetic HRR spill needle (NEEDLE_KV_SPILL_9f3c) at ~60%% depth in a repeating warehou... | 0/2 | 0.0% | 1.068 | 0 |
+| MMLU-Pro | 12032 | — | TIGER-Lab/MMLU-Pro test (full) | NOT RUN | NOT RUN | NOT RUN | — |
+| GPQA-Diamond | 198 | — | Idavidrein/gpqa Diamond via OpenAI simple-evals CSV | NOT RUN | NOT RUN | NOT RUN | — |
+| AIME 2024 | 30 | — | HuggingFaceH4/aime_2024 (AIME I 2024, 30 not 60) | NOT RUN | NOT RUN | NOT RUN | — |
+| AIME 2025 | 30 | — | math-ai/aime25 test | NOT RUN | NOT RUN | NOT RUN | — |
+| LiveCodeBench | — | — | livecodebench/code_generation_lite v5_v6 | NOT RUN | NOT RUN | NOT RUN | — |
+| GSM8K | 1319 | — | openai/gsm8k test (full) | NOT RUN | NOT RUN | NOT RUN | — |
+| MATH-500 | 500 | — | HuggingFaceH4/MATH-500 test (full) | NOT RUN | NOT RUN | NOT RUN | — |
+| HumanEval | 164 | — | openai/openai_humaneval test (full) | NOT RUN | NOT RUN | NOT RUN | — |
+| IFEval | 541 | — | google/IFEval train (full) | NOT RUN | NOT RUN | NOT RUN | — |
 
-IFEval is an in-repo checker (not official google-research); instruction-level strict-lite **757/834**.
-
-LiveCodeBench is `code_generation_lite` `v5_v6` (n=342), local Python exec of public tests plus decoded private tests when the blob is small enough — not the official `lcb_runner` package. pass@1, one sample.
-
-GPQA-Diamond is the 198-item Diamond split (OpenAI simple-evals CSV), n_repeats=1, A–D shuffled from sha256(Record ID). Item text is not republished in traces.
-
-This HF file is 30 problems (AIME I 2024), not both AIME I+II (60).
-
-HTTP errors on rows that ran: see the errors column. Traces: `evals/results/flash_hrr_full.json` in leCore.
+HTTP errors on rows that ran: see the errors column. Traces: `evals/results/suite_*_spill.json` in leCore.
 
 ## What HRR is for (plain)
 
@@ -42,7 +35,7 @@ The pitch is that memory, not a GSM8K bump.
 
 ## MEMORY SIG DIFF (differentiator)
 
-Measured on the **live in-weight overlay** through **Gateway auto-sticky** (no extra headers for the ON lane). Host: lab Gateway `http://127.0.0.1:8765/v1`. Same overlay both arms: `DeepSeek-V4-Flash-0731-serve`. Public raw vLLM (no Gateway): `http://198.145.108.57:30739/v1`.
+Measured on the **live in-weight overlay** through **Gateway auto-sticky** (no extra headers for the ON lane). Host: lab Gateway `http://127.0.0.1:8765/v1`. Same overlay both arms: `DeepSeek-V4-Flash-0731-serve`. Public API is the Flash+HRR-spill gateway `http://198.145.108.57:30739/v1` model `deepseek-v4-flash`.
 
 | arm | T2 nonce cite | Multi-turn 3-cite | Re-prompts |
 |---|---|---|---|
@@ -50,6 +43,6 @@ Measured on the **live in-weight overlay** through **Gateway auto-sticky** (no e
 | sticky ON | 5/5 | 3/3 | 1 ask, no paste |
 | OG commodity OpenRouter | NOT RUN | NOT RUN | NOT RUN |
 
-Raw vLLM does not auto-sticky. A nonce remember/recall against `:30739` with a fresh request (no client history) scored **0/5**. That is not a regression of the Gateway table above.
+Raw vLLM does not auto-sticky. A nonce remember/recall against `:30739` with a fresh request is expected to miss; that is not a regression of the Gateway table above.
 
 SWE-bench / Terminal-Bench: harness gap — not attempted, not claimed.

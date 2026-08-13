@@ -49,6 +49,12 @@ LAB_HOST = "lab box Gateway http://127.0.0.1:8765/v1"
 LAB_PUBLIC_VLLM = "http://198.145.108.57:30739/v1"
 LAB_OVERLAY = "DeepSeek-V4-Flash-0731-serve"
 LAB_MODEL_ID = "/workspace/models/DeepSeek-V4-Flash-0731-serve"
+SPILL_GATEWAY = "http://198.145.108.57:30739/v1"
+SPILL_MODEL = "deepseek-v4-flash"
+SPILL_STACK = "Flash+HRR-spill gateway"
+DEFAULT_API_KEY = os.environ.get("FLASH_EVAL_API_KEY") or os.environ.get("OPENAI_API_KEY") or "sk-lecore-dogfood"
+RESUME_SUFFIX = os.environ.get("FLASH_EVAL_RESUME_SUFFIX") or ""
+SPILL_NEEDLE = "NEEDLE_KV_SPILL_9f3c"
 LAB_SIG = {
     "t2_nonce_cite": {"off": "0/5", "on": "5/5"},
     "multi_turn_3cite": {"off": "0/3", "on": "3/3"},
@@ -93,58 +99,94 @@ class ChatClient:
             "Content-Type": "application/json",
             "Authorization": "Bearer " + self.api_key,
         }
-        req = urllib.request.Request(url, data=data, headers=headers, method="POST")
-        t0 = time.time()
-        try:
-            with urllib.request.urlopen(req, timeout=self.timeout) as resp:
-                raw = resp.read()
+        last_err = None
+        t_all = time.time()
+        for attempt in range(16):
+            req = urllib.request.Request(url, data=data, headers=headers, method="POST")
+            t0 = time.time()
+            try:
+                with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+                    raw = resp.read()
+                    elapsed = time.time() - t0
+                    payload = json.loads(raw.decode("utf-8"))
+                    text = (
+                        payload.get("choices", [{}])[0]
+                        .get("message", {})
+                        .get("content")
+                        or ""
+                    )
+                    if self.pause_s:
+                        time.sleep(self.pause_s)
+                    rec = {
+                        "ok": True,
+                        "text": text,
+                        "elapsed": elapsed,
+                        "usage": payload.get("usage") or {},
+                        "raw_id": payload.get("id"),
+                        "finish_reason": payload.get("choices", [{}])[0].get("finish_reason"),
+                        "max_tokens": max_tokens,
+                        "attempts": attempt + 1,
+                    }
+                    with self._lock:
+                        self.latencies.append(elapsed)
+                    return rec
+            except urllib.error.HTTPError as exc:
                 elapsed = time.time() - t0
-                payload = json.loads(raw.decode("utf-8"))
-                text = (
-                    payload.get("choices", [{}])[0]
-                    .get("message", {})
-                    .get("content")
-                    or ""
-                )
-                if self.pause_s:
-                    time.sleep(self.pause_s)
-                rec = {
-                    "ok": True,
-                    "text": text,
-                    "elapsed": elapsed,
-                    "usage": payload.get("usage") or {},
-                    "raw_id": payload.get("id"),
-                    "finish_reason": payload.get("choices", [{}])[0].get("finish_reason"),
-                    "max_tokens": max_tokens,
-                }
-                with self._lock:
-                    self.latencies.append(elapsed)
-                return rec
-        except Exception as exc:
-            elapsed = time.time() - t0
-            err = {"error": "%s: %s" % (type(exc).__name__, exc), "elapsed": elapsed}
-            with self._lock:
-                self.latencies.append(elapsed)
-                self.errors.append(err)
-            if self.pause_s:
-                time.sleep(self.pause_s)
-            return {"ok": False, "text": "", "elapsed": elapsed, "error": err["error"],
-                    "max_tokens": max_tokens}
+                body = ""
+                try:
+                    body = exc.read().decode("utf-8", "replace")[:240]
+                except Exception:
+                    pass
+                last_err = "HTTPError %s: %s" % (exc.code, body or exc)
+                if exc.code in (502, 503, 504) and attempt < 15:
+                    wait = min(60, 5 * (attempt + 1))
+                    print("HTTP %s from gateway, retry in %ss" % (exc.code, wait), file=sys.stderr)
+                    time.sleep(wait)
+                    continue
+                break
+            except Exception as exc:
+                elapsed = time.time() - t0
+                last_err = "%s: %s" % (type(exc).__name__, exc)
+                if "503" in str(exc) and attempt < 15:
+                    wait = min(60, 5 * (attempt + 1))
+                    print("gateway 503/err, retry in %ss (%s)" % (wait, last_err), file=sys.stderr)
+                    time.sleep(wait)
+                    continue
+                break
+        elapsed = time.time() - t_all
+        err = {"error": last_err or "unknown", "elapsed": elapsed}
+        with self._lock:
+            self.latencies.append(elapsed)
+            self.errors.append(err)
+        if self.pause_s:
+            time.sleep(self.pause_s)
+        return {"ok": False, "text": "", "elapsed": elapsed, "error": err["error"],
+                "max_tokens": max_tokens}
 
     def probe(self):
         url = self.base_url + "/models"
         headers = {"Authorization": "Bearer " + self.api_key}
-        req = urllib.request.Request(url, headers=headers, method="GET")
+        delay = 5
         t0 = time.time()
-        try:
-            with urllib.request.urlopen(req, timeout=min(30, self.timeout)) as resp:
-                raw = resp.read()
-                payload = json.loads(raw.decode("utf-8"))
-                ids = [m.get("id") for m in payload.get("data") or []]
-                return {"ok": True, "models": ids, "elapsed": time.time() - t0, "body": payload}
-        except Exception as exc:
-            return {"ok": False, "error": "%s: %s" % (type(exc).__name__, exc),
-                    "elapsed": time.time() - t0}
+        last = None
+        for _ in range(60):
+            req = urllib.request.Request(url, headers=headers, method="GET")
+            try:
+                with urllib.request.urlopen(req, timeout=min(30, self.timeout)) as resp:
+                    raw = resp.read()
+                    payload = json.loads(raw.decode("utf-8"))
+                    ids = [m.get("id") for m in payload.get("data") or []]
+                    return {"ok": True, "models": ids, "elapsed": time.time() - t0, "body": payload}
+            except urllib.error.HTTPError as exc:
+                last = "HTTPError %s" % exc.code
+                if exc.code not in (502, 503, 504) and exc.code != 401:
+                    break
+            except Exception as exc:
+                last = "%s: %s" % (type(exc).__name__, exc)
+            print("GET /v1/models not ready (%s), wait %ss" % (last, delay), file=sys.stderr)
+            time.sleep(delay)
+            delay = min(60, delay + 5)
+        return {"ok": False, "error": last or "probe failed", "elapsed": time.time() - t0}
 
 
 def p50(xs):
@@ -822,6 +864,8 @@ def _limit_items(sl, n):
 def _resume_path(name):
     RESULTS.mkdir(parents=True, exist_ok=True)
     slug = name.lower().replace(" ", "_").replace("-", "_")
+    if RESUME_SUFFIX:
+        slug = "%s_%s" % (slug, RESUME_SUFFIX)
     return RESULTS / ("resume_%s.jsonl" % slug)
 
 
@@ -1147,6 +1191,63 @@ def run_lcb(client, n=None, scale="full", workers=1):
     return packed
 
 
+def _haystack(target_tokens, needle):
+    unit = "The warehouse ledger lists ordinary crates and quiet inventory counts. "
+    # ~4 chars/token heuristic
+    unit_tok = max(1, len(unit) // 4)
+    n = max(8, int(target_tokens) // unit_tok)
+    mid = int(n * 0.6)
+    planted = " SECRET_NEEDLE=%s " % needle
+    return (unit * mid) + planted + (unit * (n - mid)), n, mid
+
+
+def run_spill_needle(client, n=None, scale="full", workers=1):
+    """Long-context spill prove. Not a capability quiz."""
+    targets = [250000, 500000]
+    rows = []
+    for i, tok in enumerate(targets):
+        hay, n_units, mid = _haystack(tok, SPILL_NEEDLE)
+        prompt = (
+            "You will be given a long warehouse document. Somewhere inside it is a "
+            "secret of the form SECRET_NEEDLE=.... After the document, reply with "
+            "only the needle value (no other words).\n\n"
+            "=== DOCUMENT START ===\n%s\n=== DOCUMENT END ===\n\n"
+            "What is the exact SECRET_NEEDLE value?"
+        ) % hay
+        print("  spill-needle ~%sk tokens, prompt_chars=%s" % (tok // 1000, len(prompt)), file=sys.stderr)
+        r = client.chat([{"role": "user", "content": prompt}], max_tokens=64)
+        text = r.get("text") or ""
+        hit = SPILL_NEEDLE in text
+        rows.append({
+            "index": i,
+            "target_tokens": tok,
+            "prompt_chars": len(prompt),
+            "gold": SPILL_NEEDLE,
+            "pred": text[:200],
+            "correct": bool(r.get("ok")) and hit,
+            "elapsed": r.get("elapsed"),
+            "error": r.get("error"),
+            "finish_reason": r.get("finish_reason"),
+            "text_head": text[:240],
+        })
+    sl = {
+        "source": (
+            "synthetic HRR spill needle (NEEDLE_KV_SPILL_9f3c) at ~60%% depth in a "
+            "repeating warehouse haystack. Targets 250k and 500k tokens (char/4 heuristic). "
+            "This is the spill prove, not a capability quiz."
+        ),
+        "canonical": "in-repo evals/flash_hrr_api_eval.py run_spill_needle",
+        "split": "spill-needle",
+        "n": 2,
+        "coverage": "full-file",
+        "offset": 0,
+    }
+    packed = _pack(sl, rows, "Spill-needle")
+    packed["grader"] = "substring match for NEEDLE_KV_SPILL_9f3c in the completion"
+    packed["stack"] = SPILL_STACK
+    return packed
+
+
 def _pack(sl, rows, name):
     n = len(rows)
     correct = sum(1 for r in rows if r.get("correct"))
@@ -1186,6 +1287,7 @@ def fmt_pct(acc):
 
 
 CAP_ORDER = [
+    "Spill-needle",
     "MMLU-Pro",
     "GPQA-Diamond",
     "AIME 2024",
@@ -1198,6 +1300,7 @@ CAP_ORDER = [
 ]
 
 CAP_DEFAULTS = {
+    "Spill-needle": ("2", "synthetic 250k/500k haystack, needle NEEDLE_KV_SPILL_9f3c"),
     "MMLU-Pro": ("12032", "TIGER-Lab/MMLU-Pro test (full)"),
     "GPQA-Diamond": ("198", "Idavidrein/gpqa Diamond via OpenAI simple-evals CSV"),
     "AIME 2024": ("30", "HuggingFaceH4/aime_2024 (AIME I 2024, 30 not 60)"),
@@ -1274,16 +1377,18 @@ def render_markdown(report):
         "DeepSeek-V4-Flash-0731-serve — not a new pretrained LLM."
     )
     lines.append("")
-    lines.append("## Capability evals (raw vLLM, temp 0)")
+    lines.append("## Capability evals (Flash+HRR-spill gateway, temp 0)")
     lines.append("")
     lines.append(
+        "Measured through the **public Flash+HRR-spill gateway** "
+        "(`deepseek-v4-flash` on `:30739`, Bearer auth). "
+        "These are **not** vanilla 32k raw-vLLM scores. Prior 32k-raw rows live in "
+        "`evals/results/suite_*.json` without the `_spill` suffix and must not be mixed. "
         "Quality numbers so the card is not empty of ordinary benches. They may be "
-        "flat vs published Flash. **Not** the pitch. High-bar sets first "
-        "(MMLU-Pro / GPQA-Diamond / AIME / LiveCodeBench); GSM8K / MATH-500 / "
-        "HumanEval / IFEval are the floor. Coverage is **full** or **first-n** — "
-        "never quote a lite n=20 leftover as the card. SWE-bench / Terminal-Bench / "
-        "DeepSWE / OSWorld: harness gap — not attempted, not claimed. "
-        "OG commodity OpenRouter was **not run** — empty, not invented."
+        "flat vs published Flash. **Not** the pitch except Spill-needle (the spill prove). "
+        "Coverage is **full** or **first-n**. "
+        "SWE-bench / Terminal-Bench / DeepSWE / OSWorld: harness gap — not attempted, "
+        "not claimed. OG commodity OpenRouter was **not run** — empty, not invented."
     )
     lines.append("")
     reachable = report.get("reachable")
@@ -1356,9 +1461,9 @@ def render_markdown(report):
     lines.append("")
     lines.append(
         "Same overlay both Gateway arms: `%s` (served model id `%s`). "
-        "Public raw vLLM (no Gateway): `%s`. "
+        "Public Flash+HRR-spill gateway: `%s` model `deepseek-v4-flash`. "
         "OG commodity OpenRouter column was **not run** — empty, not invented."
-        % (LAB_OVERLAY, LAB_MODEL_ID, LAB_PUBLIC_VLLM)
+        % (LAB_OVERLAY, LAB_MODEL_ID, SPILL_GATEWAY)
     )
     lines.append("")
     lines.append(
@@ -1460,14 +1565,13 @@ def render_hf_fragment(report):
         "Flash has no GDN."
     )
     lines.append("")
-    lines.append("## Evals (raw vLLM, temperature 0)")
+    lines.append("## Evals (Flash+HRR-spill gateway, temperature 0)")
     lines.append("")
     lines.append(
-        "Host `http://198.145.108.57:30739/v1`, model "
-        "`/workspace/models/DeepSeek-V4-Flash-0731-serve`. Sequential or conc≤2. "
-        "Coverage column says **full** vs **first-n** — do not read a first-n score "
-        "as a full-set published number. SWE-bench / Terminal-Bench / DeepSWE / "
-        "OSWorld not attempted (harness gap)."
+        "Host `http://198.145.108.57:30739/v1`, model `deepseek-v4-flash`, "
+        "Bearer `sk-lecore-…`. This is the **HRR spill gateway**, not vanilla 32k vLLM. "
+        "Coverage column says **full** vs **first-n**. "
+        "SWE-bench / Terminal-Bench / DeepSWE / OSWorld not attempted (harness gap)."
     )
     lines.append("")
     lines.extend(_cap_table_rows(report))
@@ -1499,7 +1603,7 @@ def render_hf_fragment(report):
         lines.append(cap["AIME 2024"]["note"])
         lines.append("")
     lines.append("HTTP errors on rows that ran: see the errors column. Traces: "
-                 "`evals/results/flash_hrr_full.json` in leCore.")
+                 "`evals/results/suite_*_spill.json` in leCore.")
     lines.append("")
     lines.append("## What HRR is for (plain)")
     lines.append("")
@@ -1514,8 +1618,8 @@ def render_hf_fragment(report):
     lines.append(
         "Measured on the **live in-weight overlay** through **Gateway auto-sticky** "
         "(no extra headers for the ON lane). Host: lab Gateway `http://127.0.0.1:8765/v1`. "
-        "Same overlay both arms: `DeepSeek-V4-Flash-0731-serve`. Public raw vLLM "
-        "(no Gateway): `http://198.145.108.57:30739/v1`."
+        "Same overlay both arms: `DeepSeek-V4-Flash-0731-serve`. Public API is the "
+        "Flash+HRR-spill gateway `http://198.145.108.57:30739/v1` model `deepseek-v4-flash`."
     )
     lines.append("")
     lines.append("| arm | T2 nonce cite | Multi-turn 3-cite | Re-prompts |")
@@ -1596,7 +1700,7 @@ def selftest():
 
 
 FULL_SUITES = [
-    "memory", "mmlupro", "gpqa", "aime24", "aime25", "lcb",
+    "memory", "spillneedle", "mmlupro", "gpqa", "aime24", "aime25", "lcb",
     "gsm8k", "math", "humaneval", "ifeval",
 ]
 LITE_SUITES = ["memory", "gsm8k", "math", "humaneval", "ifeval"]
@@ -1604,21 +1708,25 @@ LITE_SUITES = ["memory", "gsm8k", "math", "humaneval", "ifeval"]
 
 def parse_args(argv=None):
     p = argparse.ArgumentParser(description="API-only Flash HRR evals")
-    p.add_argument("--base-url", default=os.environ.get("FLASH_EVAL_BASE_URL", LAB_PUBLIC_VLLM))
-    p.add_argument("--model", default=os.environ.get("FLASH_EVAL_MODEL", LAB_MODEL_ID))
-    p.add_argument("--api-key", default=os.environ.get("OPENAI_API_KEY") or os.environ.get("FLASH_EVAL_API_KEY") or "EMPTY")
+    p.add_argument("--base-url", default=os.environ.get("FLASH_EVAL_BASE_URL", SPILL_GATEWAY))
+    p.add_argument("--model", default=os.environ.get("FLASH_EVAL_MODEL", SPILL_MODEL))
+    p.add_argument(
+        "--api-key",
+        default=os.environ.get("FLASH_EVAL_API_KEY") or os.environ.get("OPENAI_API_KEY") or "sk-lecore-dogfood",
+    )
     p.add_argument("--timeout", type=int, default=DEFAULT_TIMEOUT)
     p.add_argument("--temperature", type=float, default=DEFAULT_TEMPERATURE)
     p.add_argument(
         "--suites",
         default="all",
-        help="comma list: memory,mmlupro,gpqa,aime24,aime25,lcb,gsm8k,math,humaneval,ifeval,all",
+        help="comma list: memory,spillneedle,mmlupro,gpqa,aime24,aime25,lcb,gsm8k,math,humaneval,ifeval,all",
     )
     p.add_argument("--scale", choices=("full", "lite"), default="full")
     p.add_argument("--n", type=int, default=None, help="optional per-suite item cap (first-n)")
-    p.add_argument("--concurrency", type=int, default=2, help="1 or 2 (API max)")
+    p.add_argument("--concurrency", type=int, default=1, help="1 or 2")
+    p.add_argument("--resume-suffix", default=os.environ.get("FLASH_EVAL_RESUME_SUFFIX") or "")
     p.add_argument("--out-md", default=str(HERE / "flash-hrr-benches.md"))
-    p.add_argument("--out-json", default=str(RESULTS / "flash_hrr_full.json"))
+    p.add_argument("--out-json", default=str(RESULTS / "flash_hrr_spill.json"))
     p.add_argument("--out-hf", default=str(HERE / "HF-README-FRAGMENT.md"))
     p.add_argument("--selftest", action="store_true")
     p.add_argument("--probe-only", action="store_true")
@@ -1630,6 +1738,9 @@ def main(argv=None):
     args = parse_args(argv)
     if args.selftest:
         return selftest()
+
+    global RESUME_SUFFIX
+    RESUME_SUFFIX = args.resume_suffix or RESUME_SUFFIX
 
     RESULTS.mkdir(parents=True, exist_ok=True)
     if args.scale == "lite" and args.out_json == str(RESULTS / "flash_hrr_full.json"):
@@ -1645,7 +1756,7 @@ def main(argv=None):
     if args.fetch_only:
         keys = []
         for s in suites:
-            if s == "memory":
+            if s in ("memory", "spillneedle"):
                 continue
             keys.append({"aime24": "aime24", "aime25": "aime25", "lcb": "lcb",
                          "mmlupro": "mmlupro", "gpqa": "gpqa", "gsm8k": "gsm8k",
@@ -1675,14 +1786,15 @@ def main(argv=None):
         "suites": suites,
         "probe": {k: v for k, v in probe.items() if k != "body"},
         "reachable": bool(probe.get("ok")),
+        "stack": SPILL_STACK,
         "lab_sig_diff": {
             "host": LAB_HOST,
             "overlay": LAB_OVERLAY,
-            "model_id": LAB_MODEL_ID,
-            "public_vllm": LAB_PUBLIC_VLLM,
+            "model_id": SPILL_MODEL,
+            "public_vllm": SPILL_GATEWAY,
             "arms": LAB_SIG,
             "openrouter": "NOT RUN",
-            "note": "Gateway auto-sticky on the lab box. Same overlay both arms.",
+            "note": "Gateway auto-sticky on the lab box. Public API is Flash+HRR-spill gateway.",
         },
         "capability": {},
         "memory_raw_vllm": None,
@@ -1734,6 +1846,7 @@ def main(argv=None):
         checkpoint()
 
     cap_map = [
+        ("spillneedle", "Spill-needle", run_spill_needle),
         ("mmlupro", "MMLU-Pro", run_mmlupro),
         ("gpqa", "GPQA-Diamond", run_gpqa),
         ("aime24", "AIME 2024", run_aime24),
@@ -1747,7 +1860,7 @@ def main(argv=None):
     # Run high-bar smaller sets first so a timeout still leaves AIME/GPQA/LCB.
     run_order = [
         "aime24", "aime25", "gpqa", "humaneval", "lcb",
-        "math", "ifeval", "gsm8k", "mmlupro",
+        "math", "ifeval", "gsm8k", "mmlupro", "spillneedle",
     ]
     by_key = {k: (name, fn) for k, name, fn in cap_map}
     ordered = [k for k in run_order if k in suites] + [

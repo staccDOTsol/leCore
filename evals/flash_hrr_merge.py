@@ -80,7 +80,12 @@ def main():
             if blob.get("name") == name:
                 cap = blob
         if cap and cap.get("score") not in (None, "NOT RUN"):
-            report["capability"][name] = cap
+            # Keep traces in per-suite files; combined JSON stays small.
+            slim = dict(cap)
+            items = slim.pop("items", None)
+            if items:
+                slim["items_omitted"] = len(items)
+            report["capability"][name] = slim
             report["suites_merged"].append(name)
             have.add(name)
             if blob.get("memory_raw_vllm") and not report["memory_raw_vllm"]:

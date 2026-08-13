@@ -1218,10 +1218,13 @@ def run_spill_needle(client, n=None, scale="full", workers=1):
         r = client.chat([{"role": "user", "content": prompt}], max_tokens=64)
         text = r.get("text") or ""
         hit = SPILL_NEEDLE in text
+        usage = r.get("usage") or {}
         rows.append({
             "index": i,
             "target_tokens": tok,
             "prompt_chars": len(prompt),
+            "prompt_tokens": usage.get("prompt_tokens"),
+            "completion_tokens": usage.get("completion_tokens"),
             "gold": SPILL_NEEDLE,
             "pred": text[:200],
             "correct": bool(r.get("ok")) and hit,

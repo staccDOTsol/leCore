@@ -4,19 +4,21 @@ Smallest slice: detect Flash, refuse the Qwen GDN installer, attach
 registers and searchable passages in a **sidecar**. The Qwen path
 (`assimilation/install.py`, `GDNRuntime`) is unchanged.
 
-This is **not** assimilate compression, not an F8/FP4 loader, not a MoE
-runtime, and not in-weight Galvatron. Those are follow-ups.
+This is **not** assimilate compression, not a MoE runtime, and not
+in-weight Galvatron. One-shard F8/FP4 peek is included; 48-shard eager
+load is not.
 
 ## CLI
 
 From the repo root. `MODEL_DIR` needs a Hugging Face `config.json`
 (`model_type` `deepseek_v4`, or `architectures` containing
-`DeepseekV4ForCausalLM`). Weight shards are **not** loaded.
+`DeepseekV4ForCausalLM`). Weight shards are **not** all loaded.
 
 ```bash
 python assimilation/install_deepseek_v4.py MODEL_DIR OUT_DIR
+python assimilation/install_deepseek_v4.py MODEL_DIR OUT_DIR --smoke-shard
 python assimilation/install_deepseek_v4.py MODEL_DIR OUT_DIR --doc FILE --registers 16 --passages 24
-./assimilation/install_deepseek_v4.sh MODEL_DIR OUT_DIR
+./assimilation/install_deepseek_v4.sh MODEL_DIR OUT_DIR --smoke-shard
 ```
 
 Windows:
@@ -34,6 +36,7 @@ Flags:
 | `--passages N` | all provided | cap on indexed passages |
 | `--hrr-dim N` | 256 | sidecar HRR dimension |
 | `--seed N` | 0 | regenerates registers and the passage codebook |
+| `--smoke-shard [PATH]` | off | peek ONE shard: F8_E8M0 / F8_E4M3 / packed FP4 LUT. `auto` = smallest file |
 
 `OUT_DIR` receives:
 
@@ -81,8 +84,7 @@ at `install_deepseek_v4.py` instead of loading shards into `GDNRuntime`.
 
 ## Out of scope (this PR)
 
-- F8_E8M0 / F8_E4M3 / I8 packed-FP4 dequant
-- 48-shard / 156G load
+- 48-shard / 156G eager load
 - MoE forward
 - assimilate / Unicron compression
 - in-weight prepend, HRNN ladder, GDN router, head-row index

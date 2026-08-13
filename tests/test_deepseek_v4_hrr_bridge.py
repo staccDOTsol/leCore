@@ -232,3 +232,22 @@ def test_qwen_install_script_refuses_deepseek_dir(tmp_path):
     assert "detect_from_dir" in src
     assert "refuse_message" in src
     assert "load_runtime(a.model_dir)" in src
+
+
+def test_official_fp4_lut_and_one_shard_smoke(tmp_path):
+    packed = np.full((2, 16), 0x21, dtype=np.int8)
+    scale = np.ones((2, 1), np.float32)
+    got = D.dequant_fp4(packed, scale)
+    assert got.shape == (2, 32)
+    assert np.allclose(got[0, :2], [0.5, 1.0])
+    shard = tmp_path / "toy.safetensors"
+    D.write_flash_toy_shard(str(shard))
+    from holographic.io_and_interop.holographic_unicron import load_safetensors_one
+    e4 = load_safetensors_one(str(shard), "attn.q_proj.weight")
+    assert e4.shape == (4, 4) and np.allclose(e4, 1.0)
+    e8 = load_safetensors_one(str(shard), "attn.q_proj.scale")
+    assert float(e8.reshape(-1)[0]) == 1.0
+    smoke = D.smoke_one_shard(str(shard))
+    assert smoke["dequant"]["finite"]
+    assert "F8_E4M3" in smoke["dtypes"] and "I8" in smoke["dtypes"]
+

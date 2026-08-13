@@ -14,8 +14,9 @@ WHAT THIS SLICE DOES
                  registers        seed-derived orthonormal keys (real)
                  memory_index     searchable HRR passage index (real)
                  router           skipped -- needs a Flash forward, not GDN
-    not this   F8_E8M0 / F8_E4M3 / packed-FP4 loader, MoE runtime,
-               48-shard load, assimilate compression, in-weight Galvatron
+    load       one-shard peek: F8_E8M0 / F8_E4M3 / I8 packed FP4 (official LUT)
+    not this   MoE runtime, 48-shard eager install, assimilate compression,
+               in-weight Galvatron (follow-up)
 
 IN-WEIGHT vs SIDECAR, stated so nobody reads a skip as a success:
     Qwen registers live in the GDN recurrent state and regenerate from a
@@ -27,7 +28,7 @@ IN-WEIGHT vs SIDECAR, stated so nobody reads a skip as a success:
     sidecar via HRR bundle+nearest, not written into unused vocab rows
     (that write needs GDN hidden states and would mutate the 156G file).
 
-CLI:  python assimilation/install_deepseek_v4.py MODEL_DIR OUT_DIR
+CLI:  python assimilation/install_deepseek_v4.py MODEL_DIR OUT_DIR [--smoke-shard]
 """
 
 from __future__ import annotations
@@ -41,6 +42,18 @@ import numpy as np
 
 FORMAT = "leCore/deepseek_v4_hrr/1"
 HRR_DIM = 256
+
+# Official DeepSeek-V4 Flash FP4 E2M1 codebook, lifted from
+# inference/convert.py::FP4_TABLE (deepseek-ai/DeepSeek-V4-Flash).
+# Low nibble = even column, high nibble = odd column.
+FP4_TABLE = np.array(
+    [0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0,
+     0.0, -0.5, -1.0, -1.5, -2.0, -3.0, -4.0, -6.0],
+    dtype=np.float32,
+)
+FP4_BLOCK = 32    # one E8M0 scale per 32 input columns (expert / MXFP4)
+FP8_BLOCK = 128   # one E8M0 scale per 128x128 tile (non-expert E4M3)
+
 
 _MODEL_TYPES = frozenset({
     "deepseek_v4",
@@ -461,6 +474,148 @@ def fake_deepseek_v4_config(hidden=32, vocab=48, n_layers=2, n_experts=16):
     }
 
 
+def unpack_fp4(packed):
+    """I8 packed E2M1: two FP4 values per byte via the official LUT."""
+    raw = np.asarray(packed).view(np.uint8)
+    low = raw & 0x0F
+    high = (raw >> 4) & 0x0F
+    return np.stack([FP4_TABLE[low], FP4_TABLE[high]], axis=-1).reshape(
+        raw.shape[:-1] + (raw.shape[-1] * 2,))
+
+
+def dequant_fp4(packed, scale, block=FP4_BLOCK):
+    """Expert weights: packed I8 + per-row E8M0 scale (block=32)."""
+    w = unpack_fp4(packed)
+    s = np.asarray(scale, np.float32)
+    if s.ndim == 1:
+        s = s.reshape(w.shape[0], -1)
+    s = np.repeat(s, int(block), axis=-1)[:, :w.shape[-1]]
+    return (w * s).astype(np.float32)
+
+
+def dequant_fp8_block(weight, scale, block=FP8_BLOCK):
+    """Non-expert weights: F8_E4M3 + 128x128 E8M0 block scale."""
+    w = np.asarray(weight, np.float32)
+    s = np.asarray(scale, np.float32)
+    out_dim, in_dim = w.shape
+    b = int(block)
+    pad_o = (b - out_dim % b) % b
+    pad_i = (b - in_dim % b) % b
+    if pad_o or pad_i:
+        w = np.pad(w, ((0, pad_o), (0, pad_i)))
+    n_o = w.shape[0] // b
+    n_i = w.shape[1] // b
+    tiles = w.reshape(n_o, b, n_i, b)
+    s = s.reshape(n_o, n_i)
+    tiles = tiles * s[:, None, :, None]
+    return tiles.reshape(w.shape[0], w.shape[1])[:out_dim, :in_dim].astype(
+        np.float32)
+
+
+def first_shard(model_dir):
+    """Smallest *.safetensors in the directory -- one-shard smoke, not 48-way."""
+    names = sorted(f for f in os.listdir(model_dir)
+                   if f.endswith(".safetensors") and not f.endswith(".index.json"))
+    if not names:
+        return None
+    paths = [os.path.join(model_dir, f) for f in names]
+    return min(paths, key=lambda p: os.path.getsize(p))
+
+
+def smoke_one_shard(path):
+    """Header census + dequant of the smallest Flash-quant tensor. No 48-shard load.
+
+    Returns a report. Does not call GDNRuntime. Does not rewrite the file.
+    """
+    from holographic.io_and_interop.holographic_unicron import (
+        safetensors_header, load_safetensors_one)
+
+    header, _off = safetensors_header(path)
+    census = {}
+    tensors = []
+    for name, meta in header.items():
+        if name == "__metadata__" or not isinstance(meta, dict):
+            continue
+        dt = str(meta.get("dtype") or "?")
+        census[dt] = census.get(dt, 0) + 1
+        tensors.append((name, dt, tuple(meta.get("shape") or ())))
+    rep = {"path": os.path.abspath(path), "n_tensors": len(tensors),
+           "dtypes": census, "dequant": None}
+    by_name = {n: (dt, sh) for n, dt, sh in tensors}
+
+    def _nbytes(shape, dt):
+        n = 1
+        for d in shape:
+            n *= int(d)
+        return n
+
+    # Prefer a tiny I8 packed-FP4 weight with a sibling .scale
+    candidates = []
+    for name, dt, sh in tensors:
+        if not name.endswith(".weight"):
+            continue
+        scale = name[:-len(".weight")] + ".scale"
+        if scale not in by_name:
+            continue
+        sdt, ssh = by_name[scale]
+        candidates.append((_nbytes(sh, dt), name, dt, sh, scale, sdt, ssh))
+    candidates.sort()
+    if not candidates:
+        rep["note"] = "no .weight+.scale pair in this shard -- header census only"
+        return rep
+    _nb, name, dt, sh, scale, sdt, ssh = candidates[0]
+    w = load_safetensors_one(path, name)
+    s = load_safetensors_one(path, scale)
+    if dt == "I8":
+        out = dequant_fp4(w, s)
+        kind = "fp4_i8_e8m0"
+    elif dt in ("F8_E4M3", "F32") and sdt in ("F8_E8M0", "F32"):
+        out = dequant_fp8_block(w, s) if w.ndim == 2 else (w * s)
+        kind = "fp8_e4m3_e8m0"
+    else:
+        rep["note"] = "pair %s (%s) + %s (%s) has no dequant rule" % (
+            name, dt, scale, sdt)
+        return rep
+    finite = bool(np.all(np.isfinite(out)))
+    rep["dequant"] = {
+        "weight": name, "scale": scale, "kind": kind,
+        "packed_shape": list(sh), "out_shape": list(out.shape),
+        "finite": finite,
+        "absmax": float(np.nanmax(np.abs(out))) if out.size else 0.0,
+    }
+    if not finite:
+        raise ValueError("dequant of %s produced non-finite values" % name)
+    return rep
+
+
+def write_flash_toy_shard(path):
+    """Tiny Flash-shaped safetensors: I8 packed FP4 + F8_E8M0 scale + F8_E4M3."""
+    import struct as _st
+    packed = np.full((2, 16), 0x21, dtype=np.uint8)   # 0.5, 1.0 repeating
+    scale = np.full((2, 1), 127, dtype=np.uint8)      # 2**(127-127) = 1.0
+    e4 = np.full((4, 4), 0x38, dtype=np.uint8)        # E4M3 1.0
+    items = {
+        "experts.0.weight": ("I8", packed.shape, packed.tobytes()),
+        "experts.0.scale": ("F8_E8M0", scale.shape, scale.tobytes()),
+        "attn.q_proj.weight": ("F8_E4M3", e4.shape, e4.tobytes()),
+        "attn.q_proj.scale": ("F8_E8M0", (1, 1), np.array([127], np.uint8).tobytes()),
+    }
+    header, blobs, off = {}, [], 0
+    for name in sorted(items):
+        dt, shape, raw = items[name]
+        header[name] = {"dtype": dt, "shape": list(shape),
+                        "data_offsets": [off, off + len(raw)]}
+        blobs.append(raw)
+        off += len(raw)
+    hj = json.dumps(header, sort_keys=True).encode("utf-8")
+    with open(path, "wb") as f:
+        f.write(_st.pack("<Q", len(hj)))
+        f.write(hj)
+        for b in blobs:
+            f.write(b)
+    return path
+
+
 def _selftest():
     import tempfile
 
@@ -498,8 +653,18 @@ def _selftest():
     assert os.path.isfile(os.path.join(td, "lecore.json"))
     idx = load_sidecar(os.path.join(td, "lecore_hrr.npz"))
     assert search_index(idx, "capital of France", k=1)
+
+    packed = np.full((2, 16), 0x21, dtype=np.int8)   # nibbles 1,2 -> 0.5, 1.0
+    scale = np.ones((2, 1), np.float32)              # E8M0 2^0
+    got = dequant_fp4(packed, scale)
+    assert got.shape == (2, 32)
+    assert np.allclose(got[0, :4], [0.5, 1.0, 0.5, 1.0])
+    shard = os.path.join(td, "toy.safetensors")
+    write_flash_toy_shard(shard)
+    smoke = smoke_one_shard(shard)
+    assert smoke["dequant"]["finite"]
     print("deepseek_v4 selftest OK -- detect, refuse GDN, sidecar registers "
-          "+ searchable passages, router skipped with a reason")
+          "+ searchable passages, router skipped, one-shard FP4 dequant")
 
 
 if __name__ == "__main__":

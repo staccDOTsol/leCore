@@ -16,8 +16,11 @@ WHAT LANDS, in a SIDECAR next to the untouched base:
 
 WHAT DOES NOT LAND (follow-ups, not silent successes):
     in-weight Galvatron (prepend / GDN gate / head-row index)
-    F8_E8M0 / F8_E4M3 / packed-FP4 dequant
-    MoE runtime, 48-shard load, assimilate compression
+    MoE runtime, 48-shard eager load, assimilate compression
+
+Optional one-shard dtype smoke (does not load the whole checkpoint):
+
+    python assimilation/install_deepseek_v4.py MODEL_DIR OUT_DIR --smoke-shard
 
 The base checkpoint is not copied and not rewritten. OUT_DIR gets
 lecore.json, lecore_hrr.npz, a copy of config.json, and BASE.txt
@@ -70,11 +73,15 @@ def main(argv=None):
                     help="how many passages to index (0 = all provided)")
     ap.add_argument("--hrr-dim", type=int, default=256)
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--smoke-shard", nargs="?", const="auto", default=None,
+                    help="peek ONE safetensors shard (F8_E8M0 / F8_E4M3 / packed "
+                         "FP4). Does not load 48 shards. Omit path to use the "
+                         "smallest .safetensors in MODEL_DIR")
     a = ap.parse_args(argv)
 
     from holographic.io_and_interop.holographic_deepseek_v4 import (
-        detect_from_dir, install, is_deepseek_v4, load_config, search_index,
-        load_sidecar)
+        detect_from_dir, first_shard, install, is_deepseek_v4, load_config,
+        search_index, load_sidecar, smoke_one_shard)
 
     model_dir = os.path.abspath(a.model_dir)
     out_dir = os.path.abspath(a.out_dir)
@@ -100,7 +107,24 @@ def main(argv=None):
               % len(passages))
 
     print("[install] DeepSeek-V4 HRR-attach  %s -> %s" % (model_dir, out_dir))
-    print("          GDNRuntime is not called; base weights are not loaded")
+    print("          GDNRuntime is not called; 48 shards are not eager-loaded")
+    if a.smoke_shard is not None:
+        shard = (first_shard(model_dir) if a.smoke_shard == "auto"
+                 else os.path.abspath(a.smoke_shard))
+        if not shard or not os.path.isfile(shard):
+            raise SystemExit("no .safetensors shard to smoke in %s" % model_dir)
+        print("[smoke] one shard %s (%.1f MB)"
+              % (shard, os.path.getsize(shard) / 1e6))
+        srep = smoke_one_shard(shard)
+        print("        tensors %d  dtypes %s"
+              % (srep["n_tensors"], srep["dtypes"]))
+        if srep.get("dequant"):
+            d = srep["dequant"]
+            print("        dequant %s %s -> %s finite=%s absmax=%.4g"
+                  % (d["kind"], d["weight"], d["out_shape"], d["finite"],
+                     d["absmax"]))
+        elif srep.get("note"):
+            print("        %s" % srep["note"])
     _w, _c, rep = install(None, cfg, passages=passages,
                           n_registers=int(a.registers), seed=int(a.seed),
                           out_dir=out_dir, hrr_dim=int(a.hrr_dim),

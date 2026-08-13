@@ -15,7 +15,7 @@ Quality numbers so the card is not empty of ordinary benches. They may be flat v
 | LiveCodeBench | — | — | livecodebench/code_generation_lite v5_v6 | NOT RUN | NOT RUN | NOT RUN | — |
 | GSM8K | 1319 | — | openai/gsm8k test (full) | NOT RUN | NOT RUN | NOT RUN | — |
 | MATH-500 | 500 | — | HuggingFaceH4/MATH-500 test (full) | NOT RUN | NOT RUN | NOT RUN | — |
-| HumanEval | 164 | — | openai/openai_humaneval test (full) | NOT RUN | NOT RUN | NOT RUN | — |
+| HumanEval | 164 | full | openai/openai_humaneval test via HuggingFace datasets-server (full, n=164) | 150/164 | 91.5% | 0.678 | 0 |
 | IFEval | 541 | — | google/IFEval train (full) | NOT RUN | NOT RUN | NOT RUN | — |
 
 AIME 2024: This HF file is 30 problems (AIME I 2024), not both AIME I+II (60).
@@ -53,13 +53,14 @@ Recall failed, as expected on raw vLLM. **Do not treat this as a regression of t
 ### Exact prompt sources for rows that ran
 
 - **AIME 2024** (n=30, coverage=full): HuggingFaceH4/aime_2024 train via HuggingFace datasets-server (n=30; AIME 2024 I)
+- **HumanEval** (n=164, coverage=full): openai/openai_humaneval test via HuggingFace datasets-server (full, n=164)
 
 ### Run metadata
 
 | field | value |
 |---|---|
 | started_utc | 2026-08-13T03:36:55.198043+00:00 |
-| finished_utc | 2026-08-13T03:39:28.971065+00:00 |
+| finished_utc | 2026-08-13T03:46:18.780610+00:00 |
 | base_url | `http://198.145.108.57:30739/v1` |
 | model | `/workspace/models/DeepSeek-V4-Flash-0731-serve` |
 | temperature | 0.0 |

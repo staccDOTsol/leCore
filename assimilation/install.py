@@ -120,6 +120,13 @@ def main():
                                  "galvatron")
 
     print("[load] %s" % a.model_dir)
+    # DeepSeek-V4 Flash is not Qwen GDN. Refuse here, before load_runtime
+    # opens shards, and point at the HRR-attach CLI. Qwen continues below.
+    from holographic.io_and_interop.holographic_deepseek_v4 import (
+        detect_from_dir, refuse_message)
+    _ds = detect_from_dir(a.model_dir)
+    if _ds is not None:
+        raise SystemExit(refuse_message(a.model_dir, _ds))
     rt, cfg = load_runtime(a.model_dir)
     w = load_weights_dir(a.model_dir)
     hk = next(k for k in w if k.endswith("embed_tokens.weight"))

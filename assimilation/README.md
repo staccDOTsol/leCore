@@ -1,5 +1,17 @@
 # assimilation/ -- Unicron vs Qwen3.5-0.8B, start to finish
 
+**DeepSeek-V4 Flash** is a different door. Do not point `install.sh` /
+`install.py` at it -- those assume Qwen Gated DeltaNet and will refuse.
+HRR-attach (registers + searchable passages in a sidecar, no GDNRuntime,
+no assimilate, no 156G rewrite):
+
+    python assimilation/install_deepseek_v4.py MODEL_DIR OUT_DIR
+    ./assimilation/install_deepseek_v4.sh MODEL_DIR OUT_DIR
+
+See [`docs/DEEPSEEK_V4_FLASH.md`](../docs/DEEPSEEK_V4_FLASH.md) for the
+CLI, what attaches, and the inject-before-generate point
+(`python assimilation/flash_hrr.py attach|serve OUT_DIR`).
+
 Three commands, run from the repo root. A private venv appears at
 `assimilation/.venv` on first run; your system Python is never touched and no
 Hugging Face account or token is ever needed (the weights are public and the

@@ -68,6 +68,99 @@ def _decode_bf16(raw_u16):
     return u32.view(np.float32)
 
 
+def _decode_f8_e8m0(raw_u8):
+    """OCP / torch.float8_e8m0fnu: unsigned power-of-two, value = 2**(byte-127).
+    0xFF is the NaN sentinel (DeepSeek scale tensors do not use it)."""
+    b = np.frombuffer(raw_u8, dtype=np.uint8)
+    out = np.ldexp(np.ones(b.shape, np.float32), b.astype(np.int32) - 127)
+    out[b == 255] = np.nan
+    return out
+
+
+def _decode_f8_e4m3(raw_u8):
+    """IEEE-like FP8 E4M3FN (torch.float8_e4m3fn): bias 7, no inf, 0x7F/0xFF NaN.
+    Max finite is 448 (0x7E). Used for DeepSeek-V4 Flash non-expert weights."""
+    x = np.frombuffer(raw_u8, dtype=np.uint8)
+    sign = (x >> 7) & 1
+    exp = (x >> 3) & 0x0F
+    mant = x & 0x07
+    out = np.empty(x.shape, np.float32)
+    nan = (exp == 15) & (mant == 7)
+    zero = (exp == 0) & (mant == 0)
+    sub = (exp == 0) & (mant != 0)
+    norm = (exp > 0) & ~nan
+    out[zero] = 0.0
+    out[sub] = mant[sub].astype(np.float32) / 512.0
+    out[norm] = np.ldexp(1.0 + mant[norm].astype(np.float32) / 8.0,
+                         exp[norm].astype(np.int32) - 7)
+    out[nan] = np.nan
+    signed = sign.astype(bool) & ~nan
+    out[signed] = -out[signed]
+    return out
+
+
+def _decode_f8_e5m2(raw_u8):
+    """FP8 E5M2 (torch.float8_e5m2): bias 15, has inf. Loaded so a Flash shard
+    that ships this dtype does not crash the header walk."""
+    x = np.frombuffer(raw_u8, dtype=np.uint8)
+    sign = (x >> 7) & 1
+    exp = (x >> 2) & 0x1F
+    mant = x & 0x03
+    out = np.empty(x.shape, np.float32)
+    inf = (exp == 31) & (mant == 0)
+    nan = (exp == 31) & (mant != 0)
+    zero = (exp == 0) & (mant == 0)
+    sub = (exp == 0) & (mant != 0)
+    norm = (exp > 0) & (exp < 31)
+    out[zero] = 0.0
+    out[sub] = mant[sub].astype(np.float32) / 65536.0
+    out[norm] = np.ldexp(1.0 + mant[norm].astype(np.float32) / 4.0,
+                         exp[norm].astype(np.int32) - 15)
+    out[inf] = np.inf
+    out[nan] = np.nan
+    signed = sign.astype(bool) & ~nan
+    out[signed] = -out[signed]
+    return out
+
+
+def _decode_st_payload(dt, raw, shape):
+    """One safetensors tensor payload -> ndarray. F8_* decode to float32."""
+    if dt == "BF16":
+        arr = _decode_bf16(np.frombuffer(raw, dtype=np.uint16))
+    elif dt == "F8_E8M0":
+        arr = _decode_f8_e8m0(raw)
+    elif dt == "F8_E4M3":
+        arr = _decode_f8_e4m3(raw)
+    elif dt == "F8_E5M2":
+        arr = _decode_f8_e5m2(raw)
+    else:
+        if dt not in _ST_DTYPES:
+            raise ValueError("unsupported safetensors dtype: %s" % dt)
+        arr = np.frombuffer(raw, dtype=_ST_DTYPES[dt])
+    return arr.reshape(shape).copy()
+
+
+def safetensors_header(path):
+    """JSON header + payload start offset. Does not read tensor bytes."""
+    with open(path, "rb") as f:
+        (hdr_len,) = struct.unpack("<Q", f.read(8))
+        header = json.loads(f.read(hdr_len).decode("utf-8"))
+    return header, 8 + hdr_len
+
+
+def load_safetensors_one(path, name):
+    """Load a SINGLE tensor by name. One-shard smoke without materialising 156G."""
+    header, data_start = safetensors_header(path)
+    if name not in header or name == "__metadata__":
+        raise KeyError("tensor %r not in %s" % (name, path))
+    meta = header[name]
+    a, b = meta["data_offsets"]
+    with open(path, "rb") as f:
+        f.seek(data_start + a)
+        raw = f.read(b - a)
+    return _decode_st_payload(meta["dtype"], raw, tuple(meta["shape"]))
+
+
 def load_safetensors(path, return_dtypes=False):
     """Parse a .safetensors file into {name: ndarray} with stdlib + NumPy only.
     return_dtypes=True additionally returns {name: on-disk dtype string}, so a
@@ -76,7 +169,8 @@ def load_safetensors(path, return_dtypes=False):
     Format: first 8 bytes = little-endian uint64 length N of the JSON header;
     next N bytes = JSON mapping tensor name -> {dtype, shape, data_offsets};
     the rest = the concatenated raw tensor bytes the offsets index into.
-    bf16 tensors are decoded losslessly to float32 (see _decode_bf16)."""
+    bf16 tensors are decoded losslessly to float32 (see _decode_bf16).
+    F8_E4M3 / F8_E8M0 / F8_E5M2 decode to float32 (DeepSeek-V4 Flash)."""
     # MEMORY-MAP THE PAYLOAD, DO NOT READ IT. `blob = f.read()` pulls the whole
     # checkpoint into RAM before a single tensor is touched, which is precisely
     # the anti-pattern safetensors was designed to avoid -- the format exists so
@@ -86,10 +180,7 @@ def load_safetensors(path, return_dtypes=False):
     # while the installed and original copies were still held.
     # np.memmap is numpy-only, needs no dependency, and gives the same zero-copy
     # behaviour the safetensors library gets from mmap.
-    with open(path, "rb") as f:
-        (hdr_len,) = struct.unpack("<Q", f.read(8))
-        header = json.loads(f.read(hdr_len).decode("utf-8"))
-        data_start = 8 + hdr_len
+    header, data_start = safetensors_header(path)
     try:
         blob = np.memmap(path, dtype=np.uint8, mode="r", offset=data_start)
     except Exception:
@@ -104,15 +195,7 @@ def load_safetensors(path, return_dtypes=False):
             continue
         a, b = meta["data_offsets"]
         raw = blob[a:b]
-        shape = tuple(meta["shape"])
-        dt = meta["dtype"]
-        if dt == "BF16":
-            arr = _decode_bf16(np.frombuffer(raw, dtype=np.uint16))
-        else:
-            if dt not in _ST_DTYPES:
-                raise ValueError("unsupported safetensors dtype: %s" % dt)
-            arr = np.frombuffer(raw, dtype=_ST_DTYPES[dt])
-        out[name] = arr.reshape(shape).copy()  # copy: frombuffer is read-only
+        out[name] = _decode_st_payload(meta["dtype"], raw, tuple(meta["shape"]))
     if return_dtypes:
         return out, {k: header[k]["dtype"] for k in out}
     return out
@@ -1730,6 +1813,11 @@ def _selftest():
     vals = np.array([1.0, -2.5, 0.15625], dtype=np.float32)
     u16 = (vals.view(np.uint32) >> 16).astype(np.uint16)  # these values are exact in bf16
     assert np.array_equal(_decode_bf16(u16), vals)
+    # F8_E4M3 / F8_E8M0: DeepSeek-V4 Flash dtypes, decode to float32
+    assert float(_decode_f8_e4m3(bytes([0x38]))[0]) == 1.0
+    assert float(_decode_f8_e4m3(bytes([0x7E]))[0]) == 448.0
+    assert float(_decode_f8_e8m0(bytes([127]))[0]) == 1.0
+    assert float(_decode_f8_e8m0(bytes([128]))[0]) == 2.0
 
     # 2) RMT readout: pure noise has ~no outliers; a planted rank-5 spike shows
     #    EXACTLY 5, even though the spikes inflate the raw std (the kept negative

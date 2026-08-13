@@ -1,2 +1,3 @@
 run.log
 run.stdout.md
+*.tmp.json

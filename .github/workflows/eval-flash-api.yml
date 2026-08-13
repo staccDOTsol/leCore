@@ -1,7 +1,9 @@
 name: eval-flash-api
 
-# Manual lite suite against an OpenAI-compatible Flash serve.
-# Sequential. Does not download Flash weights. Does not kill remote vLLM.
+# Manual API suite against an OpenAI-compatible Flash serve.
+# Does not download Flash weights. Does not kill remote vLLM.
+# Default scale=lite (pinned slices, no HF fetch). scale=full fetches official
+# splits and runs MMLU-Pro / GPQA / AIME / LiveCodeBench as well.
 
 on:
   workflow_dispatch:
@@ -19,14 +21,22 @@ on:
         required: false
         default: "EMPTY"
       suites:
-        description: comma list (memory,gsm8k,math,humaneval,ifeval or all)
+        description: comma list (memory,mmlupro,gpqa,aime24,aime25,lcb,gsm8k,math,humaneval,ifeval or all)
         required: false
         default: "all"
+      scale:
+        description: lite (pinned slices) or full (official splits)
+        required: false
+        default: "lite"
+      concurrency:
+        description: 1 or 2
+        required: false
+        default: "1"
 
 jobs:
-  lite:
+  eval:
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 360
     steps:
       - uses: actions/checkout@v4
 
@@ -38,7 +48,7 @@ jobs:
       - name: Selftest graders (no API)
         run: python evals/flash_hrr_api_eval.py --selftest
 
-      - name: Run lite suite (sequential, temp 0, timeout 180s)
+      - name: Run suite (temp 0, timeout 180s)
         env:
           FLASH_EVAL_BASE_URL: ${{ inputs.base_url }}
           FLASH_EVAL_MODEL: ${{ inputs.model }}
@@ -50,15 +60,19 @@ jobs:
             --api-key "${FLASH_EVAL_API_KEY:-EMPTY}" \
             --timeout 180 \
             --temperature 0 \
+            --scale "${{ inputs.scale }}" \
+            --concurrency "${{ inputs.concurrency }}" \
             --suites "${{ inputs.suites }}" \
             --out-md evals/flash-hrr-benches.md \
-            --out-json evals/results/flash_hrr_lite.json
+            --out-hf evals/HF-README-FRAGMENT.md \
+            --out-json evals/results/flash_hrr_${{ inputs.scale }}.json
 
       - name: Upload results
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: flash-hrr-lite
+          name: flash-hrr-${{ inputs.scale }}
           path: |
             evals/flash-hrr-benches.md
-            evals/results/flash_hrr_lite.json
+            evals/HF-README-FRAGMENT.md
+            evals/results/flash_hrr_*.json

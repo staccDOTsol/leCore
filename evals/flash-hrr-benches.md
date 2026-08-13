@@ -1,8 +1,26 @@
 # Flash HRR benches
 
+In-weight holographic reduced representation (HRR) overlay on DeepSeek-V4-Flash-0731-serve — not a new pretrained LLM.
+
+## Capability evals (raw vLLM, temp 0)
+
+Quality numbers so the card is not empty of ordinary benches. They may be flat vs published Flash. **Not** the pitch. High-bar sets first (MMLU-Pro / GPQA-Diamond / AIME / LiveCodeBench); GSM8K / MATH-500 / HumanEval / IFEval are the floor. Coverage is **full** or **first-n** — never quote a lite n=20 leftover as the card. SWE-bench / Terminal-Bench / DeepSWE / OSWorld: harness gap — not attempted, not claimed. OG commodity OpenRouter was **not run** — empty, not invented.
+
+| bench | n | coverage | source | score | accuracy | latency p50 (s) | errors |
+|---|---|---|---|---|---|---|---|
+| MMLU-Pro | 12032 | — | TIGER-Lab/MMLU-Pro test (full) | NOT RUN | NOT RUN | NOT RUN | — |
+| GPQA-Diamond | 198 | — | Idavidrein/gpqa Diamond via OpenAI simple-evals CSV | NOT RUN | NOT RUN | NOT RUN | — |
+| AIME 2024 | 30 | — | HuggingFaceH4/aime_2024 (AIME I 2024, 30 not 60) | NOT RUN | NOT RUN | NOT RUN | — |
+| AIME 2025 | 30 | — | math-ai/aime25 test | NOT RUN | NOT RUN | NOT RUN | — |
+| LiveCodeBench | — | — | livecodebench/code_generation_lite v5_v6 | NOT RUN | NOT RUN | NOT RUN | — |
+| GSM8K | 1319 | — | openai/gsm8k test (full) | NOT RUN | NOT RUN | NOT RUN | — |
+| MATH-500 | 500 | — | HuggingFaceH4/MATH-500 test (full) | NOT RUN | NOT RUN | NOT RUN | — |
+| HumanEval | 164 | — | openai/openai_humaneval test (full) | NOT RUN | NOT RUN | NOT RUN | — |
+| IFEval | 541 | — | google/IFEval train (full) | NOT RUN | NOT RUN | NOT RUN | — |
+
 ## MEMORY SIG DIFF
 
-Measured on the **live in-weight overlay** through **Gateway auto-sticky** (no extra headers for the ON lane).
+Measured on the **live in-weight overlay** through **Gateway auto-sticky** (no extra headers for the ON lane). This is the differentiator.
 
 | arm | host | overlay | T2 nonce cite | Multi-turn 3-cite | Re-prompts |
 |---|---|---|---|---|---|
@@ -12,60 +30,28 @@ Measured on the **live in-weight overlay** through **Gateway auto-sticky** (no e
 
 Same overlay both Gateway arms: `DeepSeek-V4-Flash-0731-serve` (served model id `/workspace/models/DeepSeek-V4-Flash-0731-serve`). Public raw vLLM (no Gateway): `http://198.145.108.57:30739/v1`. OG commodity OpenRouter column was **not run** — empty, not invented.
 
-SWE-bench / Terminal-Bench: harness gap — not attempted, not claimed.
+SWE-bench / Terminal-Bench / DeepSWE / OSWorld: harness gap — not attempted, not claimed.
 
 ## Raw vLLM memory probe (this run)
 
-Host: `http://198.145.108.57:30739/v1`. Model: `/workspace/models/DeepSeek-V4-Flash-0731-serve`. n=5 nonce remember/recall, **fresh request** (no client history, no Gateway). Score: **0/5**.
-
-raw vLLM has no Gateway auto-sticky; SIG DIFF is Gateway+overlay. This probe used a fresh request (no client-side history, no extra headers).
-
-Recall failed, as expected on raw vLLM. **Do not treat this as a regression of the Gateway SIG DIFF (0/5 vs 5/5).**
-
-| trial | nonce | cited on recall | recall head |
-|---|---|---|---|
-| 0 | `HRR-SIG-61ae93b85888-0` | no | 0 |
-| 1 | `HRR-SIG-5ba4df1dd387-1` | no | I don’t have any record of a nonce you asked me to remember in this thread. |
-| 2 | `HRR-SIG-ce20ad610e0c-2` | no | 0 |
-| 3 | `HRR-SIG-d7e4651232e5-3` | no | 0 |
-| 4 | `HRR-SIG-784794d059b3-4` | no | I don’t have any record of a nonce you asked me to remember in this thread. |
-
-## Appendix — capability lite (no-regress, not the pitch)
-
-GSM8K / MATH-500 / HumanEval / IFEval are quality numbers so a Hugging Face README is not empty. They may be flat vs published Flash. These are **first-n lite slices**, not full-set published scores. GPQA skipped (too long for this lite pass). SWE-bench / Terminal-Bench not attempted.
-
-| bench | n | source | score | accuracy | latency p50 (s) | errors |
-|---|---|---|---|---|---|---|
-| GSM8K | 20 | openai/gsm8k main/test via HuggingFace datasets-server offset=0 length=20 | 20/20 | 100.0% | 0.342 | 0 |
-| MATH-500 | 20 | HuggingFaceH4/MATH-500 test via HuggingFace datasets-server offset=0 length=20 | 16/20 | 80.0% | 0.905 | 0 |
-| HumanEval | 10 | openai/openai_humaneval test via HuggingFace datasets-server offset=0 length=10 | 10/10 | 100.0% | 0.343 | 0 |
-| IFEval | 20 | google/IFEval train via HuggingFace datasets-server offset=0 length=20 (same order as google-research instruction_following_eval/data/input_data.jsonl head) | 19/20 | 95.0% | 2.394 | 0 |
-| GPQA | — | skipped (too long) | skipped | — | — | — |
-
-MATH-500: 3/20 items ended with `finish_reason=length` (counted as misses). Remaining misses are wrong answers, not HTTP errors.
-
-IFEval instruction-level strict-lite: **29/30**. Grader: lite IFEval checkers in evals/flash_hrr_api_eval.py (strict-ish; json allows a single markdown fence; Kannada via Unicode block U+0C80–U+0CFF; not the official google-research package)
-
-Exact prompt sources for rows that ran:
-
-- **GSM8K** (n=20): openai/gsm8k main/test via HuggingFace datasets-server offset=0 length=20
-- **MATH-500** (n=20): HuggingFaceH4/MATH-500 test via HuggingFace datasets-server offset=0 length=20
-- **HumanEval** (n=10): openai/openai_humaneval test via HuggingFace datasets-server offset=0 length=10
-- **IFEval** (n=20): google/IFEval train via HuggingFace datasets-server offset=0 length=20 (same order as google-research instruction_following_eval/data/input_data.jsonl head)
+NOT RUN. Raw vLLM has no Gateway auto-sticky; SIG DIFF is Gateway+overlay. Lab 0/5 vs 5/5 numbers above are the measured headline.
 
 ### Run metadata
 
 | field | value |
 |---|---|
-| started_utc | 2026-08-13T03:10:42.223577+00:00 |
-| finished_utc | 2026-08-13T03:12:22.090395+00:00 |
+| started_utc | 2026-08-13T03:30:43.882559+00:00 |
+| finished_utc |  |
 | base_url | `http://198.145.108.57:30739/v1` |
 | model | `/workspace/models/DeepSeek-V4-Flash-0731-serve` |
 | temperature | 0.0 |
 | timeout_s | 180 |
-| sequential | yes |
-| overall latency p50 (s) | 0.409 |
+| concurrency | 2 |
+| scale | full |
+| overall latency p50 (s) | — |
 | client errors | 0 |
 | reachable | True |
+
+Harness upgraded for full/high-bar splits. Live numbers pending this run.
 
 Do not claim OpenRouter live. Do not claim Galvatron-in-Flash GDN (Flash has no GDN; 64 embed-row passages is not GDN).

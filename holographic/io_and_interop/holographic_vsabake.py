@@ -87,9 +87,11 @@ def embed_key(weights):
     picked the wrong row, because the rows being compared were not the ones I
     had written."""
     for k in weights:
-        if k.endswith("embed_tokens.weight"):
+        if (k.endswith("embed_tokens.weight") or k == "embed.weight"
+                or k.endswith(".embed.weight") or k.endswith("wte.weight")
+                or k.endswith("tok_embeddings.weight")):
             return k
-    raise KeyError("no embed_tokens.weight in these weights (found %d tensors)"
+    raise KeyError("no embedding weight in these weights (found %d tensors)"
                    % len(weights))
 
 

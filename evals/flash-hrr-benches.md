@@ -14,9 +14,11 @@ Quality numbers so the card is not empty of ordinary benches. They may be flat v
 | AIME 2025 | 30 | full | math-ai/aime25 test via HuggingFace datasets-server (n=30) | 15/30 | 50.0% | 9.143 | 1 |
 | LiveCodeBench | 342 | full | livecodebench/code_generation_lite v5_v6 files v5:167, v6:175 (HuggingFace resolve/main... | 97/342 | 28.4% | 1.173 | 0 |
 | GSM8K | 1319 | full | openai/gsm8k main/test via HuggingFace datasets-server (full test) | 1280/1319 | 97.0% | 0.573 | 0 |
-| MATH-500 | 500 | — | HuggingFaceH4/MATH-500 test (full) | NOT RUN | NOT RUN | NOT RUN | — |
+| MATH-500 | 500 | full | HuggingFaceH4/MATH-500 test via HuggingFace datasets-server (full, n=500) | 448/500 | 89.6% | 1.326 | 0 |
 | HumanEval | 164 | full | openai/openai_humaneval test via HuggingFace datasets-server (full, n=164) | 150/164 | 91.5% | 0.678 | 0 |
 | IFEval | 541 | — | google/IFEval train (full) | NOT RUN | NOT RUN | NOT RUN | — |
+
+MATH-500: 2/500 items still `finish_reason=length` after 4096 retry (counted as misses).
 
 LiveCodeBench: version `v5_v6`, private decoded 284, private skipped 58. local stdin/functional Python exec of public tests plus decoded private tests; not the official lcb_runner package. pass@1, temp 0, n=1 sample.
 
@@ -61,6 +63,7 @@ Recall failed, as expected on raw vLLM. **Do not treat this as a regression of t
 - **AIME 2025** (n=30, coverage=full): math-ai/aime25 test via HuggingFace datasets-server (n=30)
 - **LiveCodeBench** (n=342, coverage=full): livecodebench/code_generation_lite v5_v6 files v5:167, v6:175 (HuggingFace resolve/main). Private tests decoded when encoded size ≤ 2000000 bytes (284 decoded, 58 public-only).
 - **GSM8K** (n=1319, coverage=full): openai/gsm8k main/test via HuggingFace datasets-server (full test)
+- **MATH-500** (n=500, coverage=full): HuggingFaceH4/MATH-500 test via HuggingFace datasets-server (full, n=500)
 - **HumanEval** (n=164, coverage=full): openai/openai_humaneval test via HuggingFace datasets-server (full, n=164)
 
 ### Run metadata
@@ -68,14 +71,14 @@ Recall failed, as expected on raw vLLM. **Do not treat this as a regression of t
 | field | value |
 |---|---|
 | started_utc | 2026-08-13T03:36:55.198043+00:00 |
-| finished_utc | 2026-08-13T04:00:27.305522+00:00 |
+| finished_utc | 2026-08-13T04:02:53.901436+00:00 |
 | base_url | `http://198.145.108.57:30739/v1` |
 | model | `/workspace/models/DeepSeek-V4-Flash-0731-serve` |
 | temperature | 0.0 |
 | timeout_s | 180 |
 | concurrency | parallel suites, conc=1 each, ~8 in-flight cap |
 | scale | full |
-| overall latency p50 (s) | 1.978 |
+| overall latency p50 (s) | 1.326 |
 | client errors | 0 |
 | reachable | True |
 

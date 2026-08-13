@@ -18,7 +18,7 @@ Host `http://198.145.108.57:30739/v1`, model `/workspace/models/DeepSeek-V4-Flas
 | AIME 2025 | 30 | full | math-ai/aime25 test via HuggingFace datasets-server (n=30) | 15/30 | 50.0% | 9.143 | 1 |
 | LiveCodeBench | 342 | full | livecodebench/code_generation_lite v5_v6 files v5:167, v6:175 (HuggingFace resolve/main... | 97/342 | 28.4% | 1.173 | 0 |
 | GSM8K | 1319 | full | openai/gsm8k main/test via HuggingFace datasets-server (full test) | 1280/1319 | 97.0% | 0.573 | 0 |
-| MATH-500 | 500 | — | HuggingFaceH4/MATH-500 test (full) | NOT RUN | NOT RUN | NOT RUN | — |
+| MATH-500 | 500 | full | HuggingFaceH4/MATH-500 test via HuggingFace datasets-server (full, n=500) | 448/500 | 89.6% | 1.326 | 0 |
 | HumanEval | 164 | full | openai/openai_humaneval test via HuggingFace datasets-server (full, n=164) | 150/164 | 91.5% | 0.678 | 0 |
 | IFEval | 541 | — | google/IFEval train (full) | NOT RUN | NOT RUN | NOT RUN | — |
 

@@ -17,11 +17,13 @@ Host `http://198.145.108.57:30739/v1`, model `deepseek-v4-flash`, Bearer `sk-lec
 | GPQA-Diamond | 198 | full | OpenAI simple-evals gpqa_diamond.csv (https://openaipublic.blob.core.windows.net/simple... | 138/198 | 69.7% | 5.295 | 0 |
 | AIME 2024 | 30 | full | HuggingFaceH4/aime_2024 train via HuggingFace datasets-server (n=30; AIME 2024 I) | 22/30 | 73.3% | 9.823 | 0 |
 | AIME 2025 | 30 | full | math-ai/aime25 test via HuggingFace datasets-server (n=30) | 16/30 | 53.3% | 8.626 | 0 |
-| LiveCodeBench | — | — | livecodebench/code_generation_lite v5_v6 | NOT RUN | NOT RUN | NOT RUN | — |
+| LiveCodeBench | 342 | full | livecodebench/code_generation_lite v5_v6 files v5:167, v6:175 (HuggingFace resolve/main... | 105/342 | 30.7% | 6.363 | 11 |
 | GSM8K | 1319 | — | openai/gsm8k test (full) | NOT RUN | NOT RUN | NOT RUN | — |
 | MATH-500 | 500 | full | HuggingFaceH4/MATH-500 test via HuggingFace datasets-server (full, n=500) | 449/500 | 89.8% | 6.883 | 2 |
 | HumanEval | 164 | full | openai/openai_humaneval test via HuggingFace datasets-server (full, n=164) | 147/164 | 89.6% | 2.242 | 0 |
 | IFEval | 541 | — | google/IFEval train (full) | NOT RUN | NOT RUN | NOT RUN | — |
+
+LiveCodeBench is `code_generation_lite` `v5_v6` (n=342), local Python exec of public tests plus decoded private tests when the blob is small enough — not the official `lcb_runner` package. pass@1, one sample.
 
 GPQA-Diamond is the 198-item Diamond split (OpenAI simple-evals CSV), n_repeats=1, A–D shuffled from sha256(Record ID). Item text is not republished in traces.
 

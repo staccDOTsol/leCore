@@ -1,30 +1,13 @@
-"""install_deepseek_v4.py -- HRR-attach leCore onto DeepSeek-V4 Flash.
+"""install_deepseek_v4.py -- in-weight + sidecar HRR onto DeepSeek-V4 Flash.
 
     python assimilation/install_deepseek_v4.py MODEL_DIR OUT_DIR
-    python assimilation/install_deepseek_v4.py MODEL_DIR OUT_DIR --doc FILE --registers 16
-
-THIS DOES NOT CALL GDNRuntime. The Qwen Galvatron path
-(`assimilation/install.py`) assumes Qwen3-Next Gated DeltaNet tensors.
-DeepSeek-V4 Flash is a different architecture (MoE, Flash quant, no GDN
-recurrent state). Pointing the Qwen installer at it is refused; this is
-the other door.
-
-WHAT LANDS, in a SIDECAR next to the untouched base:
-    registers       seed-derived orthonormal keys (real attach)
-    memory_index    searchable HRR passages (real attach)
-    router          skipped with a reason -- needs a Flash forward
-
-WHAT DOES NOT LAND (follow-ups, not silent successes):
-    in-weight Galvatron (prepend / GDN gate / head-row index)
-    MoE runtime, 48-shard eager load, assimilate compression
-
-Optional one-shard dtype smoke (does not load the whole checkpoint):
-
     python assimilation/install_deepseek_v4.py MODEL_DIR OUT_DIR --smoke-shard
+    python assimilation/prove_flash_in_weight.py MODEL_DIR OUT_DIR
 
-The base checkpoint is not copied and not rewritten. OUT_DIR gets
-lecore.json, lecore_hrr.npz, a copy of config.json, and BASE.txt
-pointing at MODEL_DIR.
+THIS DOES NOT CALL GDNRuntime. Writes faculties into unused/placeholder
+embed rows (lecore.json in_weight=1) plus a sidecar for request-time inject.
+One embed shard is loaded (F8/BF16 decode). 48 shards are not eager-loaded.
+Assimilate compression is not the SKU.
 """
 
 import argparse
@@ -106,7 +89,8 @@ def main(argv=None):
         print("[corpus] built-in %d passages (pass --doc FILE for your own)"
               % len(passages))
 
-    print("[install] DeepSeek-V4 HRR-attach  %s -> %s" % (model_dir, out_dir))
+    print("[install] DeepSeek-V4 Flash in-weight + sidecar  %s -> %s"
+          % (model_dir, out_dir))
     print("          GDNRuntime is not called; 48 shards are not eager-loaded")
     if a.smoke_shard is not None:
         shard = (first_shard(model_dir) if a.smoke_shard == "auto"
@@ -139,6 +123,9 @@ def main(argv=None):
     if skipped:
         print("        skipped:    %s" % ", ".join(skipped))
     print("        sidecar:    %s" % rep.get("sidecar"))
+    print("        in_weight:  %s" % rep.get("in_weight"))
+    if rep.get("in_weight_embed"):
+        print("        embed:      %s" % rep.get("in_weight_embed"))
 
     if "memory_index" in rep["installed"] and rep.get("sidecar"):
         idx = load_sidecar(rep["sidecar"])

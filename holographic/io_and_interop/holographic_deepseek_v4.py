@@ -10,22 +10,23 @@ WHAT THIS SLICE DOES
     detect     config.json model_type == deepseek_v4, or architectures
                containing DeepseekV4ForCausalLM
     refuse     any Qwen GDN load of that config, with a pointer at the CLI
-    attach     HRR faculties into a SIDECAR + lecore.json
-                 registers        seed-derived orthonormal keys (real)
-                 memory_index     searchable HRR passage index (real)
-                 router           skipped -- needs a Flash forward, not GDN
+    in-weight  write faculties into unused / placeholder embed rows
+                 (Flash-shaped; F8/FP4 decode on the embed shard).
+                 lecore.json in_weight=1 when at least one faculty lands.
+    sidecar    registers + searchable passages also in lecore_hrr.npz
+                 so request-time inject still works without a forward
     consume    load OUT_DIR, recall, Gateway-shaped system inject (<=1024)
                into a real OpenAI chat/completions body BEFORE generate
     load       one-shard peek: F8_E8M0 / F8_E4M3 / I8 packed FP4 (official LUT)
-    not this   MoE runtime, 48-shard eager install, assimilate compression,
-               in-weight Galvatron (follow-up). GDNRuntime is not a Flash
-               forward. vLLM (or anything that speaks /v1/chat/completions)
-               is the lab generate backend; HRR runs on the request.
+    skip       GDNRuntime, HRNN ladder, GDN prepend, layer-hidden router
+               (Flash has no GDN recurrent state -- next bridge named)
+    not this   MoE runtime, 48-shard eager install, assimilate compression.
+               GDNRuntime is not a Flash forward.
 
-FLASH-AS-HRR (the consume path, not a README):
-    client body  ->  FlashHRR.attach()  ->  vLLM /v1/chat/completions
-    Integration point: mutate the OpenAI body (system inject) BEFORE tokens.
-    The Flash weights are not rewritten. in_weight stays False.
+FLASH-AS-HRR:
+    in-weight embed rows  ->  vLLM loads patched embed shard
+    sidecar inject        ->  FlashHRR.attach() before /v1/chat/completions
+    They compose. Sidecar-only is not the Vast SKU.
 
 CLI:
     python assimilation/install_deepseek_v4.py MODEL_DIR OUT_DIR [--smoke-shard]
@@ -150,16 +151,16 @@ def refuse_message(model_dir=None, cfg=None):
         "GDNRuntime will not load %s (model_type=%r, architectures=%r) "
         "and will not mmap Flash shards into a Qwen forward.\n"
         "\n"
-        "Use the HRR-attach path, which does not call GDNRuntime:\n"
+        "Use the Flash-shaped HRR install, which does not call GDNRuntime:\n"
         "\n"
         "    python assimilation/install_deepseek_v4.py MODEL_DIR OUT_DIR\n"
         "    ./assimilation/install_deepseek_v4.sh MODEL_DIR OUT_DIR\n"
         "\n"
-        "That writes lecore.json plus a sidecar with registers and searchable "
-        "passages. It does not assimilate, does not rewrite the base weights, "
-        "and does not pretend a GDN router fitted. In-weight Galvatron "
-        "(prepend / GDN gate / head-row index) is a follow-up -- Flash has "
-        "no GDN recurrent state on this path."
+        "That writes faculties into unused/placeholder embed rows "
+        "(in_weight=1 for memory_index) plus a sidecar for request-time "
+        "inject. It does not assimilate and does not claim a Qwen GDN "
+        "forward. GDN prepend / HRNN / layer-hidden router stay skipped -- "
+        "Flash has no GDN recurrent state."
         % (where, mt, arch)
     )
 
@@ -243,10 +244,201 @@ def attach_memory_index(passages, dim, seed=0):
         "where": "sidecar",
         "in_weight": False,
         "in_weight_skip": (
-            "In-weight head-row index needs GDN hidden-state addresses and "
-            "unused tokenizer rows. This path does not call GDNRuntime and "
-            "does not rewrite Flash weights. Search the sidecar instead."
+            "Sidecar index is HRR-dim. In-weight landing is a separate step: "
+            "install() writes these passages into Flash placeholder / unused "
+            "embed rows after F8/BF16 decode. GDN hidden-state addresses are "
+            "not used -- Flash is not Gated DeltaNet."
         ),
+    }
+
+
+_EMBED_KEYS = (
+    "embed.weight", "model.embed.weight",
+    "model.embed_tokens.weight", "embed_tokens.weight",
+)
+
+
+def _find_embed_key(weights):
+    if not weights:
+        return None
+    for k in _EMBED_KEYS:
+        if k in weights:
+            return k
+    for k in weights:
+        ks = str(k)
+        if ks.endswith("embed_tokens.weight") or ks.endswith("embed.weight"):
+            return k
+    return None
+
+
+def _lift_to_hidden(vec, hidden, seed=0):
+    """Seeded isometry: HRR-dim vector -> Flash hidden. Not a GDN projection."""
+    v = np.asarray(vec, np.float64).reshape(-1)
+    h = int(hidden)
+    if v.size == h:
+        n = np.linalg.norm(v) or 1.0
+        return v / n
+    rng = np.random.default_rng(int(seed) + 17)
+    out = np.zeros(h, np.float64)
+    ncopy = min(v.size, h)
+    out[:ncopy] = v[:ncopy]
+    if v.size < h:
+        extra = rng.standard_normal(h - v.size)
+        extra -= extra.mean()
+        en = np.linalg.norm(extra) or 1.0
+        out[v.size:] = extra / en * (np.linalg.norm(v[:ncopy]) / np.sqrt(h) + 1e-12)
+    n = np.linalg.norm(out) or 1.0
+    return out / n
+
+
+def _passage_embed_address(E, text, tokenize=None):
+    ids = []
+    if tokenize is not None:
+        try:
+            ids = [int(i) for i in list(tokenize(text))[:64]]
+        except Exception:
+            ids = []
+    if not ids:
+        v = int(E.shape[0])
+        ids = [b % max(v - 1, 1) for b in str(text).encode("utf-8")[:32]] or [1]
+    ids = [min(max(int(i), 0), int(E.shape[0]) - 1) for i in ids]
+    addr = np.asarray(E[ids], np.float64).mean(0)
+    n = np.linalg.norm(addr)
+    if n < 1e-8:
+        return None
+    return addr / n
+
+
+def placeholder_or_tail_rows(model_dir, vocab, n_needed):
+    """Flash place_holder ids if the tokenizer ships them, else tail vocab rows.
+
+    Writing into a defined special token would corrupt EOS / vision markers.
+    Placeholder rows and the unused tail are the Flash-legal in-weight bank.
+    """
+    rows = []
+    if model_dir:
+        try:
+            from holographic.io_and_interop.holographic_flash_hrr import (
+                placeholder_rows)
+            rows = list(placeholder_rows(model_dir, limit=max(int(n_needed), 8)))
+        except Exception:
+            rows = []
+    seen = set(rows)
+    if len(rows) < int(n_needed):
+        start = max(0, int(vocab) - int(n_needed))
+        for i in range(start, int(vocab)):
+            if i not in seen:
+                rows.append(i)
+                seen.add(i)
+            if len(rows) >= int(n_needed):
+                break
+    return rows[: int(n_needed)]
+
+
+def load_embed_for_install(weights, model_dir):
+    """One embed tensor, decoded (F8/BF16 -> float32). Never 48 shards."""
+    key = _find_embed_key(weights)
+    if key is not None:
+        return key, np.asarray(weights[key]).copy(), None
+    if not model_dir:
+        return None, None, None
+    try:
+        from holographic.io_and_interop.holographic_flash_hrr import (
+            load_embed_only, _embed_shard_path)
+        key, w = load_embed_only(model_dir)
+        _k, src = _embed_shard_path(model_dir)
+        return key, np.asarray(w[key]).copy(), src
+    except Exception:
+        return None, None, None
+
+
+def install_in_weight_embed(weights, passages, keys=None, sidecar_vectors=None,
+                            model_dir=None, seed=0, tokenize=None):
+    """Write memory_index (and registers if rows remain) into embed rows.
+
+    Flash-shaped: unused / placeholder vocab rows of embed.weight.
+    GDNRuntime is not called. Returns (new_weights_or_None, report).
+    """
+    key, E, src_shard = load_embed_for_install(weights, model_dir)
+    if key is None or E is None or E.ndim != 2:
+        return weights, {
+            "ok": False,
+            "in_weight": 0,
+            "reason": (
+                "no embed.weight / embed_tokens.weight to write into -- "
+                "pass a weights dict or a MODEL_DIR with one embed shard"
+            ),
+        }
+    vocab, hidden = int(E.shape[0]), int(E.shape[1])
+    texts = [str(p).strip() for p in (passages or ()) if str(p).strip()]
+    n_keys = 0 if keys is None else int(np.asarray(keys).shape[0])
+    n_needed = len(texts) + n_keys
+    if n_needed <= 0:
+        return weights, {
+            "ok": False, "in_weight": 0,
+            "reason": "no passages or registers to write into embed rows",
+        }
+    rows = placeholder_or_tail_rows(model_dir, vocab, n_needed)
+    if len(rows) < 1:
+        return weights, {
+            "ok": False, "in_weight": 0,
+            "reason": "no placeholder or tail vocab rows available",
+        }
+    peak = float(np.median(np.abs(np.asarray(E, np.float64)).max(axis=1)))
+    if not np.isfinite(peak) or peak < 1e-8:
+        peak = 1.0
+    E2 = np.asarray(E, np.float64).copy()
+    mem_rows = []
+    n_pass = min(len(texts), len(rows))
+    vecs = None if sidecar_vectors is None else np.asarray(sidecar_vectors)
+    for i in range(n_pass):
+        addr = _passage_embed_address(E, texts[i], tokenize=tokenize)
+        if addr is None and vecs is not None and i < len(vecs):
+            addr = _lift_to_hidden(vecs[i], hidden, seed=int(seed) + i)
+        if addr is None:
+            addr = _lift_to_hidden(
+                np.random.default_rng(int(seed) + 200 + i).standard_normal(hidden),
+                hidden, seed=int(seed) + 200 + i)
+        E2[int(rows[i])] = np.asarray(addr, np.float64) * peak
+        mem_rows.append(int(rows[i]))
+    reg_rows = []
+    if n_keys and len(rows) > n_pass:
+        K = np.asarray(keys, np.float64)
+        for j in range(min(n_keys, len(rows) - n_pass)):
+            addr = _lift_to_hidden(K[j], hidden, seed=int(seed) + 300 + j)
+            E2[int(rows[n_pass + j])] = addr * peak
+            reg_rows.append(int(rows[n_pass + j]))
+    new_w = dict(weights) if weights else {key: E2.astype(np.float32)}
+    orig_dt = None if weights is None else getattr(weights.get(key), "dtype", None)
+    new_w[key] = E2.astype(orig_dt or np.float32, copy=False)
+    return new_w, {
+        "ok": True,
+        "in_weight": 1,
+        "embed_key": key,
+        "hidden": hidden,
+        "vocab": vocab,
+        "peak": peak,
+        "src_shard": src_shard,
+        "memory_index": {
+            "ok": True,
+            "in_weight": 1,
+            "where": "embed.placeholder_or_tail_rows",
+            "rows": mem_rows,
+            "n": len(mem_rows),
+            "passages": n_pass,
+        },
+        "registers": {
+            "ok": bool(reg_rows),
+            "in_weight": 1 if reg_rows else 0,
+            "where": "embed.placeholder_or_tail_rows" if reg_rows else None,
+            "rows": reg_rows,
+            "n": len(reg_rows),
+            "in_weight_skip": None if reg_rows else (
+                "GDN-state orthogonalisation is impossible on Flash (no "
+                "recurrent state). Next bridge: more placeholder rows, or a "
+                "Flash-native key bank in unused embed rows."
+            ),
+        },
     }
 
 
@@ -297,12 +489,13 @@ def _note(rep, name, ok, detail):
 
 
 def install(weights, cfg, passages=(), n_registers=16, seed=0, out_dir=None,
-            hrr_dim=HRR_DIM, model_dir=None):
-    """Attach HRR faculties to a DeepSeek-V4 config. Never calls GDNRuntime.
+            hrr_dim=HRR_DIM, model_dir=None, tokenize=None):
+    """Attach HRR faculties to DeepSeek-V4 Flash. Never calls GDNRuntime.
 
-    `weights` may be a tiny dict (tests) or None (CLI -- we do not load 156G).
-    Returns (weights, cfg, report). Weights are returned UNCHANGED -- this
-    path does not rewrite the base.
+    Sidecar (lecore_hrr.npz) still lands for request-time inject.
+    In-weight: unused/placeholder embed rows are rewritten (in_weight=1)
+    when an embed tensor is available -- fake dict in tests, or ONE embed
+    shard from MODEL_DIR (F8/BF16 decode). 48 shards are not eager-loaded.
     """
     if not is_deepseek_v4(cfg):
         raise ValueError(
@@ -321,10 +514,9 @@ def install(weights, cfg, passages=(), n_registers=16, seed=0, out_dir=None,
                                                      dict) else cfg
         hidden = block.get("hidden_size") or block.get("hidden")
     if weights:
-        for key, arr in weights.items():
-            if str(key).endswith("embed_tokens.weight"):
-                hidden = int(np.asarray(arr).shape[-1])
-                break
+        ek = _find_embed_key(weights)
+        if ek is not None:
+            hidden = int(np.asarray(weights[ek]).shape[-1])
     model_hidden = int(hidden) if hidden else None
 
     rep = {
@@ -339,8 +531,8 @@ def install(weights, cfg, passages=(), n_registers=16, seed=0, out_dir=None,
         "steps": [],
         "installed": [],
         "skipped": [],
-        "in_weight": False,
-        "runtime": "none -- GDNRuntime is Qwen-only and is not called",
+        "in_weight": 0,
+        "runtime": "flash-embed-rows -- GDNRuntime is Qwen-only and is not called",
         "assimilate": False,
     }
 
@@ -349,8 +541,8 @@ def install(weights, cfg, passages=(), n_registers=16, seed=0, out_dir=None,
     if rrep.get("ok"):
         rrep["model_hidden"] = model_hidden
         _note(rep, "registers", True,
-              "%d reserved slots in sidecar dim %d (seed %d); in-weight "
-              "GDN enforcement skipped" % (rrep["count"], dim, seed))
+              "%d reserved slots in sidecar dim %d (seed %d)"
+              % (rrep["count"], dim, seed))
     else:
         _note(rep, "registers", False, rrep.get("reason", "skipped"))
 
@@ -361,7 +553,7 @@ def install(weights, cfg, passages=(), n_registers=16, seed=0, out_dir=None,
               "%d searchable passages in sidecar HRR dim %d"
               % (irep["passages"], dim))
         _note(rep, "passages", True,
-              "%d passages indexed (sidecar; not written into vocab rows)"
+              "%d passages indexed (sidecar + in-weight rows when embed exists)"
               % irep["passages"])
         rep["passages"] = {"count": irep["passages"], "where": "sidecar",
                            "ok": True}
@@ -369,9 +561,67 @@ def install(weights, cfg, passages=(), n_registers=16, seed=0, out_dir=None,
         _note(rep, "memory_index", False, irep.get("reason", "skipped"))
         _note(rep, "passages", False, irep.get("reason", "skipped"))
 
+    w_out, iw = install_in_weight_embed(
+        weights, texts or passages, keys=keys, sidecar_vectors=vectors,
+        model_dir=model_dir, seed=seed, tokenize=tokenize)
+    rep["in_weight_report"] = {
+        k: iw[k] for k in iw if k not in ("memory_index", "registers")
+    }
+    if iw.get("ok") and iw.get("in_weight"):
+        rep["in_weight"] = 1
+        if iw.get("memory_index", {}).get("in_weight"):
+            irep.update(iw["memory_index"])
+            irep["ok"] = True
+            irep["in_weight"] = 1
+            rep["memory_index"] = irep
+            if "passages" in rep:
+                rep["passages"]["where"] = "embed.placeholder_or_tail_rows"
+                rep["passages"]["in_weight"] = 1
+            _note(rep, "in_weight_memory_index", True,
+                  "%d passages written into embed rows %s"
+                  % (iw["memory_index"]["n"], iw["memory_index"]["rows"][:4]))
+        if iw.get("registers", {}).get("in_weight"):
+            rrep["in_weight"] = 1
+            rrep["where"] = iw["registers"]["where"]
+            rrep["rows"] = iw["registers"]["rows"]
+            rrep.pop("in_weight_skip", None)
+            _note(rep, "in_weight_registers", True,
+                  "%d register keys written into embed rows %s"
+                  % (iw["registers"]["n"], iw["registers"]["rows"][:4]))
+        else:
+            _note(rep, "in_weight_registers", False,
+                  (iw.get("registers") or {}).get("in_weight_skip")
+                  or "registers stayed sidecar-only")
+    else:
+        _note(rep, "in_weight_memory_index", False,
+              iw.get("reason") or "in-weight embed write skipped")
+
     rtr = attach_router()
     rep["router"] = rtr
     _note(rep, "router", False, rtr["reason"])
+    _note(rep, "hrnn_ladder", False,
+          "needs GDN decay channels; Flash has no recurrent state. "
+          "Next bridge: Flash-native state tensor, not GDNRuntime.")
+    _note(rep, "prepend", False,
+          "GDN blank-layer prepend assumes Qwen layer_types. "
+          "Next bridge: Flash MLA / MoE blank expert, not claimed here.")
+
+    if model_dir and os.path.isdir(model_dir):
+        try:
+            shard = first_shard(model_dir)
+            if shard:
+                srep = smoke_one_shard(shard)
+                rep["dequant_smoke"] = {
+                    "n_tensors": srep.get("n_tensors"),
+                    "dtypes": srep.get("dtypes"),
+                    "dequant": srep.get("dequant"),
+                    "path": os.path.basename(shard),
+                }
+                _note(rep, "dequant_smoke", True,
+                      "one shard %s dtypes %s" % (
+                          os.path.basename(shard), srep.get("dtypes")))
+        except Exception as exc:
+            _note(rep, "dequant_smoke", False, "%s: %s" % (type(exc).__name__, exc))
 
     sidecar = None
     if out_dir:
@@ -382,12 +632,26 @@ def install(weights, cfg, passages=(), n_registers=16, seed=0, out_dir=None,
                          "format": FORMAT,
                          "family": "deepseek_v4",
                          "base": rep.get("base"),
+                         "in_weight": int(rep.get("in_weight") or 0),
                      })
         rep["sidecar"] = os.path.abspath(sidecar)
+        ek = iw.get("embed_key")
+        if iw.get("ok") and ek and w_out is not None and ek in w_out:
+            from holographic.io_and_interop.holographic_unicron import (
+                save_safetensors)
+            embed_path = os.path.join(out_dir, "lecore_in_weight.safetensors")
+            save_safetensors(embed_path, {ek: np.asarray(w_out[ek])})
+            rep["in_weight_embed"] = os.path.abspath(embed_path)
+            src_shard = iw.get("src_shard")
+            if src_shard and os.path.isfile(src_shard):
+                from holographic.io_and_interop.holographic_flash_hrr import (
+                    _write_patched_shard)
+                dest = os.path.join(out_dir, os.path.basename(src_shard))
+                _write_patched_shard(src_shard, ek, w_out[ek], dest)
+                rep["patched_embed_shard"] = os.path.abspath(dest)
         serial = _jsonable(rep)
         with open(os.path.join(out_dir, "lecore.json"), "w") as f:
             json.dump(serial, f, indent=2)
-        # pointer only -- do not copy 156G weights
         with open(os.path.join(out_dir, "BASE.txt"), "w") as f:
             f.write("%s\n" % (rep.get("base") or ""))
         if model_dir:
@@ -398,8 +662,21 @@ def install(weights, cfg, passages=(), n_registers=16, seed=0, out_dir=None,
                     card = json.load(f)
                 with open(dst_cfg, "w") as f:
                     json.dump(card, f, indent=2)
+        with open(os.path.join(out_dir, "IN_WEIGHT.txt"), "w") as f:
+            f.write(
+                "in_weight=%s\n"
+                "memory_index rows=%s\n"
+                "registers rows=%s\n"
+                "GDNRuntime is not a Flash forward.\n"
+                "Serve: python assimilation/flash_in_weight_serve_dir.py "
+                "MODEL_DIR OUT_DIR SERVE_DIR\n"
+                "then vLLM --model SERVE_DIR\n"
+                % (rep.get("in_weight"),
+                   (rep.get("memory_index") or {}).get("rows"),
+                   (rep.get("registers") or {}).get("rows"))
+            )
 
-    return weights, cfg, rep
+    return w_out, cfg, rep
 
 
 def save_sidecar(path, keys=None, vectors=None, passages=None, seed=0, dim=HRR_DIM,
@@ -531,11 +808,10 @@ def attach_messages(messages, inject):
 class FlashHRR:
     """Flash-native consume of an install OUT_DIR. No GDNRuntime. No 48 shards.
 
-    This is flash-as-hrr at the request layer: recall from the sidecar, then
-    attach memory into the generation request BEFORE tokens. Downstream
-    generate (vLLM OpenAI server in the lab) sees a normal chat body with a
-    Gateway-shaped system inject. in_weight remains False -- this is not a
-    Galvatron inside Flash tensors.
+    This is flash-as-hrr at two layers: (1) in-weight embed rows written at
+    install (lecore.json in_weight=1), (2) sidecar recall attached into the
+    generation request BEFORE tokens. Downstream generate (vLLM) can load the
+    patched embed shard. GDNRuntime is not a Flash forward.
     """
 
     def __init__(self, index, card=None, out_dir=None):
@@ -585,9 +861,8 @@ class FlashHRR:
             "seed": int(self.index.get("seed") or 0),
             "passages": len(passages),
             "registers": 0 if keys is None else int(keys.shape[0]),
-            "in_weight": False,
-            "runtime": "sidecar -- generate is external (vLLM / OpenAI); "
-                       "HRR runs before tokens",
+            "in_weight": int(self.card.get("in_weight") or 0),
+            "runtime": "flash-embed-rows + sidecar inject; GDNRuntime not called",
             "inject_max": GATEWAY_INJECT_MAX,
             "gateway_header": GATEWAY_INJECT_HEADER,
         }
@@ -621,7 +896,8 @@ class FlashHRR:
             "inject": inject,
             "inject_chars": len(inject),
             "inject_max": int(max_chars),
-            "in_weight": False,
+            "in_weight": int(self.card.get("in_weight") or 0),
+            "inject_where": "system" if body.get("messages") is not None else "prompt",
             "where": "system" if body.get("messages") is not None else "prompt",
         }
         if not inject:
@@ -780,6 +1056,46 @@ def first_shard(model_dir):
     return min(paths, key=lambda p: os.path.getsize(p))
 
 
+def make_in_weight_serve_dir(model_dir, out_dir, serve_dir):
+    """Symlink MODEL_DIR into SERVE_DIR, overlay the patched embed shard.
+
+    Does not copy 156G. vLLM --model SERVE_DIR then sees in-weight rows.
+    """
+    import shutil
+    model_dir = os.path.abspath(model_dir)
+    out_dir = os.path.abspath(out_dir)
+    serve_dir = os.path.abspath(serve_dir)
+    os.makedirs(serve_dir, exist_ok=True)
+    patched = None
+    card_path = os.path.join(out_dir, "lecore.json")
+    if os.path.isfile(card_path):
+        with open(card_path) as f:
+            card = json.load(f)
+        patched = card.get("patched_embed_shard")
+    if not patched or not os.path.isfile(patched):
+        for name in os.listdir(out_dir):
+            if name.endswith(".safetensors") and name.startswith("model-"):
+                patched = os.path.join(out_dir, name)
+                break
+    for name in os.listdir(model_dir):
+        src = os.path.join(model_dir, name)
+        dst = os.path.join(serve_dir, name)
+        if os.path.lexists(dst):
+            continue
+        try:
+            os.symlink(src, dst)
+        except OSError:
+            if os.path.isfile(src) and os.path.getsize(src) < 50_000_000:
+                shutil.copy2(src, dst)
+    if patched and os.path.isfile(patched):
+        dest = os.path.join(serve_dir, os.path.basename(patched))
+        if os.path.lexists(dest):
+            os.remove(dest)
+        shutil.copy2(patched, dest)
+        return {"serve_dir": serve_dir, "patched_embed": dest, "in_weight": 1}
+    return {"serve_dir": serve_dir, "patched_embed": None, "in_weight": 0}
+
+
 def smoke_one_shard(path):
     """Header census + dequant of the smallest Flash-quant tensor. No 48-shard load.
 
@@ -901,14 +1217,21 @@ def _selftest():
 
     cfg = fake_deepseek_v4_config()
     w = fake_deepseek_v4_weights()
+    orig = np.array(w["model.embed_tokens.weight"], copy=True)
     td = tempfile.mkdtemp()
     _w, _c, rep = install(w, cfg, passages=passages, n_registers=8, seed=1,
                           out_dir=td, hrr_dim=64)
-    assert _w is w
+    assert _w is not w
+    assert not np.array_equal(_w["model.embed_tokens.weight"], orig)
+    assert int(rep["in_weight"]) == 1
+    assert int(rep["memory_index"]["in_weight"]) == 1
     assert "registers" in rep["installed"]
     assert "memory_index" in rep["installed"]
     assert "router" not in rep["installed"]
     assert os.path.isfile(os.path.join(td, "lecore.json"))
+    card = json.loads(open(os.path.join(td, "lecore.json")).read())
+    assert int(card["in_weight"]) == 1
+    assert os.path.isfile(os.path.join(td, "lecore_in_weight.safetensors"))
     idx = load_sidecar(os.path.join(td, "lecore_hrr.npz"))
     assert search_index(idx, "capital of France", k=1)
 
@@ -917,12 +1240,13 @@ def _selftest():
     assert hits and "paris" in hits[0][2].lower()
     keys = sess.register_keys()
     assert keys is not None and keys.shape[0] == 8
+    assert int(sess.status()["in_weight"]) == 1
     body = {"model": "deepseek-v4-flash",
             "messages": [{"role": "user",
                           "content": "what is the capital of France?"}],
             "max_tokens": 32, "temperature": 0}
     attached, info = sess.attach(body)
-    assert info["attached"] and info["in_weight"] is False
+    assert info["attached"] and int(info["in_weight"]) == 1
     assert attached["messages"][0]["role"] == "system"
     assert attached["messages"][0]["content"].startswith(GATEWAY_INJECT_HEADER)
     assert "paris" in attached["messages"][0]["content"].lower()
@@ -947,9 +1271,9 @@ def _selftest():
     write_flash_toy_shard(shard)
     smoke = smoke_one_shard(shard)
     assert smoke["dequant"]["finite"]
-    print("deepseek_v4 selftest OK -- detect, refuse GDN, sidecar registers "
-          "+ searchable passages, router skipped, one-shard FP4 dequant, "
-          "FlashHRR attach injects recall into an OpenAI body (<=1024)")
+    print("deepseek_v4 selftest OK -- detect, refuse GDN, in_weight=1 embed "
+          "rows, sidecar registers + searchable passages, router/HRNN/prepend "
+          "skipped, one-shard FP4 dequant, FlashHRR attach injects recall")
 
 
 def _cli(argv=None):
@@ -992,7 +1316,7 @@ def _cli(argv=None):
         st = sess.status()
         print(json.dumps({
             "count": st["registers"], "dim": st["hrr_dim"], "seed": st["seed"],
-            "in_weight": False,
+            "in_weight": int(st.get("in_weight") or 0),
             "shape": None if keys is None else list(keys.shape),
         }, indent=2))
         return 0

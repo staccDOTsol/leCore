@@ -1,5 +1,7 @@
 run.log
 run.stdout.md
+run_*.log
+run_*.stdout.md
 *.tmp.json
 resume_*.jsonl
 tmp_*.md

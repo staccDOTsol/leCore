@@ -8,7 +8,7 @@ Quality numbers so the card is not empty of ordinary benches. They may be flat v
 
 | bench | n | coverage | source | score | accuracy | latency p50 (s) | errors |
 |---|---|---|---|---|---|---|---|
-| MMLU-Pro | 4414 | first-n (n=4414 of 12032) | TIGER-Lab/MMLU-Pro test via HuggingFace datasets-server (full test) | 3570/4414 | 80.9% | 0.600 | 0 |
+| MMLU-Pro | 5930 | first-n (n=5930 of 12032) | TIGER-Lab/MMLU-Pro test via HuggingFace datasets-server (full test) | 4750/5930 | 80.1% | 0.535 | 1 |
 | GPQA-Diamond | 198 | full | OpenAI simple-evals gpqa_diamond.csv (https://openaipublic.blob.core.windows.net/simple... | 144/198 | 72.7% | 1.978 | 0 |
 | AIME 2024 | 30 | full | HuggingFaceH4/aime_2024 train via HuggingFace datasets-server (n=30; AIME 2024 I) | 18/30 | 60.0% | 4.642 | 0 |
 | AIME 2025 | 30 | full | math-ai/aime25 test via HuggingFace datasets-server (n=30) | 15/30 | 50.0% | 9.143 | 1 |
@@ -60,7 +60,7 @@ Recall failed, as expected on raw vLLM. **Do not treat this as a regression of t
 
 ### Exact prompt sources for rows that ran
 
-- **MMLU-Pro** (n=4414, coverage=first-n (n=4414 of 12032)): TIGER-Lab/MMLU-Pro test via HuggingFace datasets-server (full test)
+- **MMLU-Pro** (n=5930, coverage=first-n (n=5930 of 12032)): TIGER-Lab/MMLU-Pro test via HuggingFace datasets-server (full test)
 - **GPQA-Diamond** (n=198, coverage=full): OpenAI simple-evals gpqa_diamond.csv (https://openaipublic.blob.core.windows.net/simple-evals/gpqa_diamond.csv); Idavidrein/gpqa Diamond split; n=198. Choices shuffled via sha256(Record ID).
 - **AIME 2024** (n=30, coverage=full): HuggingFaceH4/aime_2024 train via HuggingFace datasets-server (n=30; AIME 2024 I)
 - **AIME 2025** (n=30, coverage=full): math-ai/aime25 test via HuggingFace datasets-server (n=30)
@@ -75,7 +75,7 @@ Recall failed, as expected on raw vLLM. **Do not treat this as a regression of t
 | field | value |
 |---|---|
 | started_utc | 2026-08-13T03:36:55.198043+00:00 |
-| finished_utc | 2026-08-13T04:51:26.388848+00:00 |
+| finished_utc | 2026-08-13T05:11:49.832102+00:00 |
 | base_url | `http://198.145.108.57:30739/v1` |
 | model | `/workspace/models/DeepSeek-V4-Flash-0731-serve` |
 | temperature | 0.0 |

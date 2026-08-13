@@ -12,7 +12,7 @@ Host `http://198.145.108.57:30739/v1`, model `/workspace/models/DeepSeek-V4-Flas
 
 | bench | n | coverage | source | score | accuracy | latency p50 (s) | errors |
 |---|---|---|---|---|---|---|---|
-| MMLU-Pro | 4414 | first-n (n=4414 of 12032) | TIGER-Lab/MMLU-Pro test via HuggingFace datasets-server (full test) | 3570/4414 | 80.9% | 0.600 | 0 |
+| MMLU-Pro | 5930 | first-n (n=5930 of 12032) | TIGER-Lab/MMLU-Pro test via HuggingFace datasets-server (full test) | 4750/5930 | 80.1% | 0.535 | 1 |
 | GPQA-Diamond | 198 | full | OpenAI simple-evals gpqa_diamond.csv (https://openaipublic.blob.core.windows.net/simple... | 144/198 | 72.7% | 1.978 | 0 |
 | AIME 2024 | 30 | full | HuggingFaceH4/aime_2024 train via HuggingFace datasets-server (n=30; AIME 2024 I) | 18/30 | 60.0% | 4.642 | 0 |
 | AIME 2025 | 30 | full | math-ai/aime25 test via HuggingFace datasets-server (n=30) | 15/30 | 50.0% | 9.143 | 1 |

@@ -14,7 +14,7 @@ Measured through the **public Flash+HRR-spill gateway** (`deepseek-v4-flash` on 
 | AIME 2024 | 30 | full | HuggingFaceH4/aime_2024 train via HuggingFace datasets-server (n=30; AIME 2024 I) | 22/30 | 73.3% | 9.823 | 0 |
 | AIME 2025 | 30 | full | math-ai/aime25 test via HuggingFace datasets-server (n=30) | 16/30 | 53.3% | 8.626 | 0 |
 | LiveCodeBench | 342 | full | livecodebench/code_generation_lite v5_v6 files v5:167, v6:175 (HuggingFace resolve/main... | 105/342 | 30.7% | 6.363 | 11 |
-| GSM8K | 1319 | — | openai/gsm8k test (full) | NOT RUN | NOT RUN | NOT RUN | — |
+| GSM8K | 1319 | full | openai/gsm8k main/test via HuggingFace datasets-server (full test) | 1274/1319 | 96.6% | 1.879 | 2 |
 | MATH-500 | 500 | full | HuggingFaceH4/MATH-500 test via HuggingFace datasets-server (full, n=500) | 449/500 | 89.8% | 6.883 | 2 |
 | HumanEval | 164 | full | openai/openai_humaneval test via HuggingFace datasets-server (full, n=164) | 147/164 | 89.6% | 2.242 | 0 |
 | IFEval | 541 | full | google/IFEval train via HuggingFace datasets-server (full, n=541; same order as google-... | 473/541 | 87.4% | 7.578 | 2 |
@@ -52,6 +52,7 @@ NOT RUN. Raw vLLM has no Gateway auto-sticky; SIG DIFF is Gateway+overlay. Lab 0
 - **AIME 2024** (n=30, coverage=full): HuggingFaceH4/aime_2024 train via HuggingFace datasets-server (n=30; AIME 2024 I)
 - **AIME 2025** (n=30, coverage=full): math-ai/aime25 test via HuggingFace datasets-server (n=30)
 - **LiveCodeBench** (n=342, coverage=full): livecodebench/code_generation_lite v5_v6 files v5:167, v6:175 (HuggingFace resolve/main). Private tests decoded when encoded size ≤ 2000000 bytes (284 decoded, 58 public-only).
+- **GSM8K** (n=1319, coverage=full): openai/gsm8k main/test via HuggingFace datasets-server (full test)
 - **MATH-500** (n=500, coverage=full): HuggingFaceH4/MATH-500 test via HuggingFace datasets-server (full, n=500)
 - **HumanEval** (n=164, coverage=full): openai/openai_humaneval test via HuggingFace datasets-server (full, n=164)
 - **IFEval** (n=541, coverage=full): google/IFEval train via HuggingFace datasets-server (full, n=541; same order as google-research instruction_following_eval/data/input_data.jsonl)
@@ -61,14 +62,14 @@ NOT RUN. Raw vLLM has no Gateway auto-sticky; SIG DIFF is Gateway+overlay. Lab 0
 | field | value |
 |---|---|
 | started_utc |  |
-| finished_utc | 2026-08-13T06:58:51.985946+00:00 |
+| finished_utc | 2026-08-13T07:01:28.572186+00:00 |
 | base_url | `http://198.145.108.57:30739/v1` |
 | model | `deepseek-v4-flash` |
 | temperature | 0.0 |
 | timeout_s | 180 |
 | concurrency | parallel suites, conc=1 each, ~8 in-flight cap |
 | scale | full |
-| overall latency p50 (s) | 6.883 |
+| overall latency p50 (s) | 6.363 |
 | client errors | 0 |
 | reachable | True |
 

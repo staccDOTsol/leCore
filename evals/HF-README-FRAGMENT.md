@@ -13,7 +13,7 @@ Host `http://198.145.108.57:30739/v1`, model `deepseek-v4-flash`, Bearer `sk-lec
 | bench | n | coverage | source | score | accuracy | latency p50 (s) | errors |
 |---|---|---|---|---|---|---|---|
 | Spill-needle | 2 | full | synthetic HRR spill needle (NEEDLE_KV_SPILL_9f3c) at ~60%% depth in a repeating warehou... | 0/2 | 0.0% | 1.068 | 0 |
-| MMLU-Pro | 5408 | first-n (n=5408 of 12032) | TIGER-Lab/MMLU-Pro test via HuggingFace datasets-server (full test) | 3860/5408 | 71.4% | 0.601 | 676 |
+| MMLU-Pro | 7858 | first-n (n=7858 of 12032) | TIGER-Lab/MMLU-Pro test via HuggingFace datasets-server (full test) | 5915/7858 | 75.3% | 0.527 | 678 |
 | GPQA-Diamond | 198 | full | OpenAI simple-evals gpqa_diamond.csv (https://openaipublic.blob.core.windows.net/simple... | 138/198 | 69.7% | 5.295 | 0 |
 | AIME 2024 | 30 | full | HuggingFaceH4/aime_2024 train via HuggingFace datasets-server (n=30; AIME 2024 I) | 22/30 | 73.3% | 9.823 | 0 |
 | AIME 2025 | 30 | full | math-ai/aime25 test via HuggingFace datasets-server (n=30) | 16/30 | 53.3% | 8.626 | 0 |

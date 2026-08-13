@@ -1214,6 +1214,10 @@ def config_from_json(cfg_json, weights=None):
     if isinstance(cfg_json, str):
         with open(cfg_json) as f:
             cfg_json = json.load(f)
+    from holographic.io_and_interop.holographic_deepseek_v4 import (
+        is_deepseek_v4, refuse_qwen_gdn)
+    if is_deepseek_v4(cfg_json):
+        refuse_qwen_gdn(cfg=cfg_json)
     c = dict(cfg_json)
     # multimodal checkpoints keep the language stack in text_config; the visual
     # tower is not executed here (policy parity with assimilation)
@@ -1355,6 +1359,16 @@ def load_runtime(model_dir, lazy=False, max_cached=8):
     # perfectly valid model that simply names its config differently.
     cfg_path = os.path.join(model_dir, "config.json")
     gv_path = os.path.join(model_dir, "galvatron.json")
+    # REFUSE DEEPSEEK-V4 BEFORE OPENING SHARDS. Flash is not Qwen GDN; a
+    # 48-shard mmap into this forward is the expensive failure. The HRR
+    # bridge is assimilation/install_deepseek_v4.py and does not call us.
+    if os.path.exists(cfg_path):
+        with open(cfg_path) as _df:
+            _raw = json.load(_df)
+        from holographic.io_and_interop.holographic_deepseek_v4 import (
+            is_deepseek_v4, refuse_qwen_gdn)
+        if is_deepseek_v4(_raw):
+            refuse_qwen_gdn(model_dir, _raw)
     if not os.path.exists(cfg_path) and not os.path.exists(gv_path):
         raise FileNotFoundError(
             "no config.json and no galvatron.json in %r -- a model directory "

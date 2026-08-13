@@ -1380,6 +1380,22 @@ PROVEN, on our own trained model: unbind and bind agree with the FFT to 1e-10; a
                        n_registers=n_registers, prepend=prepend, seed=seed,
                        progress=progress)
 
+    def unicron_install_deepseek_v4(self, weights, cfg, passages=(),
+                                    n_registers=16, seed=0, out_dir=None,
+                                    hrr_dim=256, model_dir=None):
+        """HRR-ATTACH leCore onto DeepSeek-V4 Flash WITHOUT GDNRuntime.
+        Qwen3-Next is Gated DeltaNet; Flash is not. unicron_install_lecore
+        takes a GDNRuntime and will not execute this architecture. This
+        faculty writes a sidecar: registers (seed-derived orthonormal keys)
+        and a searchable HRR passage index. The router is skipped with a
+        reason -- it needs a Flash forward, and a stubbed gate is a fake
+        success. Does not assimilate, does not rewrite the base weights.
+        See holographic_deepseek_v4.install."""
+        from holographic.io_and_interop.holographic_deepseek_v4 import install
+        return install(weights, cfg, passages=passages,
+                       n_registers=n_registers, seed=seed, out_dir=out_dir,
+                       hrr_dim=hrr_dim, model_dir=model_dir)
+
     def unicron_write_policy(self, runtime, text, tokenize, n_slots=16,
                              min_nats=None):
         """WHAT DESERVES ONE OF THE PERMANENT REGISTERS -- the last gap, closed.
@@ -1952,6 +1968,19 @@ def _selftest():
         hidden_dim = 32
     g = m.unicron_galvatron(_StubRuntime())
     assert hasattr(g, "generate") or hasattr(g, "step") or g is not None
+    # DeepSeek-V4 Flash HRR-attach: the sidecar faculty takes no GDNRuntime and must
+    # write lecore.json with registers installed and the router honestly skipped.
+    import os, tempfile
+    from holographic.io_and_interop.holographic_deepseek_v4 import (
+        fake_deepseek_v4_config, fake_deepseek_v4_weights)
+    td = tempfile.mkdtemp()
+    _w, _c, rep = m.unicron_install_deepseek_v4(
+        fake_deepseek_v4_weights(), fake_deepseek_v4_config(),
+        passages=["the capital of France is Paris"],
+        n_registers=4, seed=0, out_dir=td, hrr_dim=64)
+    assert "registers" in rep["installed"]
+    assert "router" not in rep["installed"]
+    assert os.path.isfile(os.path.join(td, "lecore.json"))
     print("OK: unified p16 (unicron) part contract holds over %d facade defs; galvatron facade "
           "constructs on a stub runtime (torch-side behavior tested in its own module)" % n)
 

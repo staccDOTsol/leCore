@@ -9,7 +9,8 @@ no assimilate, no 156G rewrite):
     ./assimilation/install_deepseek_v4.sh MODEL_DIR OUT_DIR
 
 See [`docs/DEEPSEEK_V4_FLASH.md`](../docs/DEEPSEEK_V4_FLASH.md) for the
-exact CLI, what attaches, and what is honestly skipped.
+CLI, what attaches, and the inject-before-generate point
+(`python assimilation/flash_hrr.py attach|serve OUT_DIR`).
 
 Three commands, run from the repo root. A private venv appears at
 `assimilation/.venv` on first run; your system Python is never touched and no

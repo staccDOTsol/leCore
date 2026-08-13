@@ -1,6 +1,6 @@
 {
   "started_utc": "",
-  "finished_utc": "2026-08-13T07:22:36.707216+00:00",
+  "finished_utc": "2026-08-13T07:53:00.147776+00:00",
   "base_url": "http://198.145.108.57:30739/v1",
   "model": "deepseek-v4-flash",
   "temperature": 0.0,
@@ -262,18 +262,18 @@
     },
     "MMLU-Pro": {
       "name": "MMLU-Pro",
-      "n": 2645,
+      "n": 3775,
       "split_n": 12032,
-      "correct": 1544,
-      "accuracy": 0.583742911153119,
-      "score": "1544/2645",
+      "correct": 2547,
+      "accuracy": 0.6747019867549668,
+      "score": "2547/3775",
       "source": "TIGER-Lab/MMLU-Pro test via HuggingFace datasets-server (full test)",
       "canonical": "https://huggingface.co/datasets/TIGER-Lab/MMLU-Pro",
       "split": "test",
       "offset": 0,
       "coverage": "first-n",
-      "latency_p50_s": 0.9347991943359375,
-      "n_errors": 675,
+      "latency_p50_s": 0.6135950088500977,
+      "n_errors": 676,
       "errors": [
         {
           "index": 359,
@@ -476,10 +476,10 @@
           "error": "ConnectionResetError: [Errno 104] Connection reset by peer"
         }
       ],
-      "note": "first-n snapshot from resume while the full 12032 run is still going. Not the full test. Grader: letter extract A-J vs dataset answer; n_repeats=1.",
+      "note": "first-n snapshot from resume while the full 12032 run is still going. Not the full test.",
       "grader": "letter extract A-J vs dataset answer; n_repeats=1",
       "snapshot": true,
-      "items_omitted": 2645
+      "items_omitted": 3775
     }
   },
   "memory_raw_vllm": null,

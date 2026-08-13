@@ -167,13 +167,27 @@ def chat_retry_length(client, messages, max_tokens, retry_tokens=None):
     return r
 
 
-def map_items(items, fn, workers=1, label=""):
+def map_items(items, fn, workers=1, label="", resume_path=None):
     """Run fn(item) over items. workers=1 sequential; 2 max for the live API."""
     n = len(items)
     rows = [None] * n
     workers = max(1, min(int(workers or 1), 2))
     done = 0
     t0 = time.time()
+    resume_path = Path(resume_path) if resume_path else None
+    cached = {}
+    if resume_path and resume_path.exists():
+        for line in resume_path.read_text(encoding="utf-8").splitlines():
+            if not line.strip():
+                continue
+            try:
+                rec = json.loads(line)
+            except Exception:
+                continue
+            if "index" in rec:
+                cached[rec["index"]] = rec
+        if cached:
+            print("  %s resume %s items" % (label or "items", len(cached)), file=sys.stderr)
 
     def _tick():
         nonlocal done
@@ -185,9 +199,26 @@ def map_items(items, fn, workers=1, label=""):
                 file=sys.stderr,
             )
 
+    write_lock = threading.Lock()
+
+    def _store(i, row, fresh):
+        rows[i] = row
+        if fresh and resume_path is not None:
+            resume_path.parent.mkdir(parents=True, exist_ok=True)
+            with write_lock:
+                with open(resume_path, "a", encoding="utf-8") as fh:
+                    fh.write(json.dumps(row) + "\n")
+
+    def _one(i, it):
+        key = it.get("index", i)
+        if key in cached:
+            return cached[key], False
+        return fn(it), True
+
     if workers <= 1:
         for i, it in enumerate(items):
-            rows[i] = fn(it)
+            row, fresh = _one(i, it)
+            _store(i, row, fresh)
             _tick()
         return rows
 
@@ -195,8 +226,9 @@ def map_items(items, fn, workers=1, label=""):
 
     def wrapped(pair):
         i, it = pair
-        row = fn(it)
+        row, fresh = _one(i, it)
         with lock:
+            _store(i, row, fresh)
             _tick()
         return i, row
 
@@ -787,6 +819,12 @@ def _limit_items(sl, n):
     return items, coverage
 
 
+def _resume_path(name):
+    RESULTS.mkdir(parents=True, exist_ok=True)
+    slug = name.lower().replace(" ", "_").replace("-", "_")
+    return RESULTS / ("resume_%s.jsonl" % slug)
+
+
 def run_gsm8k(client, n=None, scale="full", workers=1):
     sl = _load_suite_data("gsm8k", scale)
     items, coverage = _limit_items(sl, n)
@@ -811,7 +849,7 @@ def run_gsm8k(client, n=None, scale="full", workers=1):
             "text_head": (r.get("text") or "")[:240],
         }
 
-    rows = map_items(items, one, workers=workers, label="GSM8K")
+    rows = map_items(items, one, workers=workers, label="GSM8K", resume_path=_resume_path("GSM8K"))
     packed = _pack(sl, rows, "GSM8K")
     packed["coverage"] = coverage
     return packed
@@ -848,7 +886,7 @@ def run_math(client, n=None, scale="full", workers=1):
             "text_head": (r.get("text") or "")[:240],
         }
 
-    rows = map_items(items, one, workers=workers, label="MATH-500")
+    rows = map_items(items, one, workers=workers, label="MATH-500", resume_path=_resume_path("MATH-500"))
     packed = _pack(sl, rows, "MATH-500")
     packed["max_tokens"] = "2048, retry 4096 on length"
     packed["coverage"] = coverage
@@ -887,7 +925,7 @@ def run_humaneval(client, n=None, scale="full", workers=1):
             "text_head": (r.get("text") or "")[:240],
         }
 
-    rows = map_items(items, one, workers=workers, label="HumanEval")
+    rows = map_items(items, one, workers=workers, label="HumanEval", resume_path=_resume_path("HumanEval"))
     packed = _pack(sl, rows, "HumanEval")
     packed["coverage"] = coverage
     return packed
@@ -917,7 +955,7 @@ def run_ifeval(client, n=None, scale="full", workers=1):
             "text_head": (r.get("text") or "")[:240],
         }
 
-    rows = map_items(items, one, workers=workers, label="IFEval")
+    rows = map_items(items, one, workers=workers, label="IFEval", resume_path=_resume_path("IFEval"))
     packed = _pack(sl, rows, "IFEval")
     inst_total = sum(len(r["instruction_flags"]) for r in rows)
     inst_ok = sum(sum(1 for f in r["instruction_flags"] if f) for r in rows)
@@ -959,7 +997,7 @@ def run_gpqa(client, n=None, scale="full", workers=1):
             "text_head": (r.get("text") or "")[:240],
         }
 
-    rows = map_items(items, one, workers=workers, label="GPQA-Diamond")
+    rows = map_items(items, one, workers=workers, label="GPQA-Diamond", resume_path=_resume_path("GPQA-Diamond"))
     packed = _pack(sl, rows, "GPQA-Diamond")
     packed["coverage"] = coverage
     packed["grader"] = (
@@ -997,7 +1035,7 @@ def run_mmlupro(client, n=None, scale="full", workers=1):
             "text_head": (r.get("text") or "")[:240],
         }
 
-    rows = map_items(items, one, workers=workers, label="MMLU-Pro")
+    rows = map_items(items, one, workers=workers, label="MMLU-Pro", resume_path=_resume_path("MMLU-Pro"))
     packed = _pack(sl, rows, "MMLU-Pro")
     packed["coverage"] = coverage
     packed["grader"] = "letter extract A-J vs dataset answer; n_repeats=1"
@@ -1032,7 +1070,7 @@ def _run_aime(client, key, name, n=None, workers=1):
             "text_head": (r.get("text") or "")[:240],
         }
 
-    rows = map_items(items, one, workers=workers, label=name)
+    rows = map_items(items, one, workers=workers, label=name, resume_path=_resume_path(name))
     packed = _pack(sl, rows, name)
     packed["coverage"] = coverage
     packed["note"] = sl.get("note")
@@ -1098,7 +1136,7 @@ def run_lcb(client, n=None, scale="full", workers=1):
             "text_head": (r.get("text") or "")[:240],
         }
 
-    rows = map_items(items, one, workers=workers, label="LiveCodeBench")
+    rows = map_items(items, one, workers=workers, label="LiveCodeBench", resume_path=_resume_path("LiveCodeBench"))
     packed = _pack(sl, rows, "LiveCodeBench")
     packed["coverage"] = coverage
     packed["grader"] = sl.get("grader")

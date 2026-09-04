@@ -76,3 +76,6 @@ docs/UNICRON_REMAINING.md
 galvatron.npz
 galvatron_profile.npz
 hrnn_debug.json
+
+# Claude Code workflow worktrees (session-local)
+.claude/worktrees/

@@ -18,7 +18,7 @@ creation through the real API, `learn api:` / `use api:` / `find a tool for`, an
 `health` for the saturation estimate. Model settings: none (default) / local mini /
 any Ollama-compatible endpoint.
 
-**The hosted MCP surface** (26 tools): `zoo_tools` now carries `op=status`
+**The hosted MCP surface** (40 hosted tools): `zoo_tools` now carries `op=status`
 (saturation + taught rows + registered services) alongside `find`/`call`. The SSRF
 boundary is enforced and stated in the tool description: hosted callers cannot
 register URLs; only operator-registered services are callable.

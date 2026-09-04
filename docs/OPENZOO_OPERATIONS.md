@@ -3,7 +3,9 @@
 *Everything an operator needs, specific and current. The tool table in §2 and
 every tool count on this page are pinned to `holographic_mcp._TOOLS` by
 `tests/test_openzoo_operations_doc.py` — if they disagree with the code, that test
-fails CI and names the drifted tool. Regenerate with
+fails CI and names the drifted tool (it is selected on every push that touches
+`holographic_mcp.py`; a doc-only edit is `.md`-inert to `tools/select_tests.py` and
+is caught by the full suite). Regenerate with
 `python3 tests/test_openzoo_operations_doc.py --write` (it rewrites only the fenced
 table and the counts; the prose is hand-written). This file is deliberately not in
 `tools/regen_docs.py`, which owns only docs regenerated in full — an earlier version
@@ -116,21 +118,36 @@ Row numbers are the count; the last row must equal the `tools/list` length and t
 ## 7. Integration status (x402-tokens gateway)
 
 What the paid gateway in front of this service actually consumes today, per leCore
-surface. "Integrated" means a gateway route exists and is tested there; "not yet"
-means the surface is served by this MCP/HTTP service but no gateway route reaches it.
-Everything in the second group is being landed through ONE generic bridge rather than
-a route per tool: leCore HTTP `POST /door {name, arguments}` → gateway
+surface. "Integrated" means a gateway route exists in `src/server.ts` and forwards to
+the named upstream; "not yet" means the surface is served by this MCP/HTTP service but
+no gateway route reaches it. Two facts an operator must NOT infer from "integrated":
+
+- **No passthrough route below has a gateway test.** `src/lecore.test.ts` and
+  `src/multimodal.test.ts` exercise the chat-completion spill path against a mock
+  sidecar (`/internal/v1/hrr/bind|recall`); nothing in the gateway suite calls
+  `/v1/hrr/*`, `/v1/lecore/*` or `/v1/memory/*`. An earlier version of this section
+  said "tested there"; it was not.
+- **All of them are free** (no 402; each logs `status: "free"`) and tenant-scoped by
+  `x-openzoo-namespace` (`/v1/memory/*` reports `namespace.isolated` on every reply).
+  `/v1/hrr/recall` is protected only by the unguessability of the `context_id`: a
+  leaked id is a leaked corpus, and free recall makes reading one cost nothing.
+
+The "not yet" group is being landed through ONE generic bridge rather than a route per
+tool: leCore HTTP `POST /door {name, arguments}` → gateway
 `POST /v1/lecore/door/<name>`, with an `x-hrr-gate` abstain gate (an honest abstain
 is not billed) and `_meta.lecore.cost` (`elapsed_ms`, `payload_bytes`, stamped on
-every `tools/call`) surfaced as metering headers.
+every `tools/call`) surfaced as metering headers. **None of that is on `main` in either
+repo at the time of writing**: `x-hrr-gate` appears in the gateway today only in its
+CORS allow-list, and no handler reads it yet. Do not look for `/door` in a deployment
+built from `main`.
 
 | leCore surface | Gateway status | How it reaches the gateway |
 |---|---|---|
 | `corpus_bind` | integrated | `POST /v1/hrr/bind` → HRR sidecar `/internal/v1/hrr/bind` |
 | `corpus_delta` | integrated | `POST /v1/hrr/delta` → sidecar `/internal/v1/hrr/delta` |
 | `corpus_ask` (plain, no gate) | integrated | `POST /v1/hrr/recall` → sidecar `/internal/v1/hrr/recall` |
-| `lecore_find` | integrated | `POST /v1/lecore/find` → lecore-front `POST /tools {query, top}` |
-| `lecore_invoke` | integrated | `POST /v1/lecore/invoke` → lecore-front `POST /invoke {name, args}` |
+| `lecore_find` / `lecore_describe` | route exists, **upstream 404** | `POST /v1/lecore/find` and `/describe` → lecore-front `POST /tools {query, top}`. lecore-front's route table registers only `GET /tools` (the full manifest; its handler ignores `query`/`top`), and `dispatch()` matches on exact (method, path), so it answers `404 no such endpoint: POST /tools` -- measured in-process: `Service().dispatch("POST", "/tools", {})` → `(404, ...)`. Dead until lecore-front serves a ranked `POST /tools` or the gateway routes these through the `/door` bridge (`lecore_find` and `lecore_describe` are doors). |
+| `lecore_invoke` | integrated | `POST /v1/lecore/invoke` → lecore-front `POST /invoke {name, args}` (`POST /invoke` IS registered) |
 | `memory_write` / `memory_search` | integrated | `POST /v1/memory/write`, `/v1/memory/search` → sidecar `/internal/v1/memory/*` |
 | `corpus_ask gate=dispatch` (exact → dense → BM25 → abstain, payment-gate verdict) | not yet | `/door` bridge + `x-hrr-gate` |
 | `transcript_prefix_route` | not yet | `/door` bridge |
@@ -142,7 +159,7 @@ every `tools/call`) surfaced as metering headers.
 | `scene_create` / `scene_adjust` / `scene_export`, `image_tool`, `chart_make` | not yet | `/door` bridge |
 | `math_eval`, `fact_check`, `series_analyze`, `dataset_decompose` | not yet | `/door` bridge (memo-pure: hash-replay eligible) |
 | `zoo_*` ladder (16 tools, `zoo_ask` … `zoo_agent`) | not yet | `/door` bridge |
-| `lecore_map` / `lecore_describe` | not yet | `/door` bridge (`/v1/lecore/describe` exists but only proxies lecore-front `/tools`) |
+| `lecore_map` | not yet | `/door` bridge (`lecore_describe` is in the dead-wire row above) |
 | saturation / `decision_report` (`zoo_tools op=status`) | not yet | `/door` bridge |
 | `tool_memo` ledger | not yet | `/door` bridge |
 | hash-replay (memoised pure tools, `LECORE_MCP_MEMO`) | not yet | `/door` bridge |

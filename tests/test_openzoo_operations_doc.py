@@ -11,7 +11,8 @@ tools/ mentions it), so the number was typed by hand and rotted silently. A doc 
 not have is worse than one that claims nothing -- a reader trusts the claim and stops checking.
 
 This module IS that guard. It pins three things:
-  1. every count claim in the manual and in docs/INDEX.md -- "N hosted tools", "tool pin = N", "tool pin N",
+  1. every count claim in the manual, docs/INDEX.md and docs/OPENZOO_INTEGRATION.md -- "N hosted tools",
+     "tool pin = N", "tool pin N",
      and the "`zoo_*` ladder (N tools)" row of the integration table -- equals the count in source;
   2. the tool table lists exactly _TOOLS' names, in _TOOLS' order (the row number column makes the count
      visible on the page itself, so the last row IS the pin a reader can eyeball);
@@ -38,6 +39,14 @@ sys.path.insert(0, str(ROOT))
 
 DOC = ROOT / "docs" / "OPENZOO_OPERATIONS.md"
 INDEX = ROOT / "docs" / "INDEX.md"
+# The sister doc INDEX.md sends operators to for the numbers. Review found it still saying "(26 tools)" after
+# the manual moved to 40 -- a count that lives in three files must be pinned in three files.
+INTEGRATION = ROOT / "docs" / "OPENZOO_INTEGRATION.md"
+
+
+def PINNED():
+    """The files that state a count -- read late so test_write_is_idempotent can monkeypatch the paths."""
+    return (DOC, INDEX, INTEGRATION)
 
 # The markers fence the ONLY generated span of the manual. Prose outside them is hand-written and
 # never touched by --write.
@@ -96,7 +105,7 @@ def write(tools=None):
     tools = tools if tools is not None else _tools()
     n, nzoo = len(tools), sum(1 for t in tools if t["name"].startswith("zoo_"))
     changed = []
-    for path in (DOC, INDEX):
+    for path in PINNED():
         old = path.read_text(encoding="utf-8")
         new = old
         if path == DOC:
@@ -116,7 +125,7 @@ def test_every_count_claim_matches_source():
     """THE PIN. "26 hosted tools" sat in the manual while the server served 40. Every stated count, in both
     docs that state one, must equal len(_TOOLS) -- and there must BE claims, or the regex rotted."""
     n = len(_tools())
-    for path in (DOC, INDEX):
+    for path in PINNED():
         claims = _claims(path.read_text(encoding="utf-8"))
         assert claims, "%s states no tool count -- COUNT_CLAIM no longer matches its phrasing" % path.name
         wrong = sorted(set(c for c in claims if c != n))
@@ -151,11 +160,13 @@ def test_tool_table_matches_source():
 
 def test_write_is_idempotent(tmp_path, monkeypatch):
     """--write on an up-to-date tree changes nothing (the regen_docs determinism contract, applied here)."""
-    doc, idx = tmp_path / "OPENZOO_OPERATIONS.md", tmp_path / "INDEX.md"
+    doc, idx, integ = tmp_path / "OPENZOO_OPERATIONS.md", tmp_path / "INDEX.md", tmp_path / "OPENZOO_INTEGRATION.md"
     doc.write_text(DOC.read_text(encoding="utf-8"), encoding="utf-8")
     idx.write_text(INDEX.read_text(encoding="utf-8"), encoding="utf-8")
+    integ.write_text(INTEGRATION.read_text(encoding="utf-8"), encoding="utf-8")
     monkeypatch.setattr(sys.modules[__name__], "DOC", doc)
     monkeypatch.setattr(sys.modules[__name__], "INDEX", idx)
+    monkeypatch.setattr(sys.modules[__name__], "INTEGRATION", integ)
     monkeypatch.setattr(sys.modules[__name__], "ROOT", tmp_path)
     assert write() == [], "the committed manual is not what --write produces; commit the regenerated copy"
 

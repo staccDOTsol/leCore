@@ -1,0 +1,504 @@
+{
+  "started_utc": "",
+  "finished_utc": "2026-08-13T09:34:52.884628+00:00",
+  "base_url": "http://198.145.108.57:30739/v1",
+  "model": "deepseek-v4-flash",
+  "temperature": 0.0,
+  "timeout_s": 180,
+  "concurrency": "parallel suites, conc=1 each, ~8 in-flight cap",
+  "scale": "full",
+  "reachable": true,
+  "lab_sig_diff": null,
+  "capability": {
+    "Spill-needle": {
+      "name": "Spill-needle",
+      "n": 2,
+      "split_n": 2,
+      "correct": 0,
+      "accuracy": 0.0,
+      "score": "0/2",
+      "source": "synthetic HRR spill needle (NEEDLE_KV_SPILL_9f3c) at ~60%% depth in a repeating warehouse haystack. Targets 250k and 500k tokens (char/4 heuristic). This is the spill prove, not a capability quiz.",
+      "canonical": "in-repo evals/flash_hrr_api_eval.py run_spill_needle",
+      "split": "spill-needle",
+      "offset": 0,
+      "coverage": "full-file",
+      "latency_p50_s": 1.0680174827575684,
+      "n_errors": 0,
+      "errors": [],
+      "note": "Honest miss 0/2. Wall time ~1s per item with 1\u20132MB prompts, so the gateway almost certainly did not prefill 250k/500k tokens (likely truncated or haystack dropped before the 60% needle). Not a fake pass. Needle string NEEDLE_KV_SPILL_9f3c.",
+      "grader": "substring match for NEEDLE_KV_SPILL_9f3c in the completion",
+      "stack": "Flash+HRR-spill gateway",
+      "items_omitted": 2
+    },
+    "AIME 2024": {
+      "name": "AIME 2024",
+      "n": 30,
+      "split_n": 30,
+      "correct": 22,
+      "accuracy": 0.7333333333333333,
+      "score": "22/30",
+      "source": "HuggingFaceH4/aime_2024 train via HuggingFace datasets-server (n=30; AIME 2024 I)",
+      "canonical": "https://huggingface.co/datasets/HuggingFaceH4/aime_2024",
+      "split": "train",
+      "offset": 0,
+      "coverage": "full-file",
+      "latency_p50_s": 9.823407292366028,
+      "n_errors": 0,
+      "errors": [],
+      "note": "This HF file is 30 problems (AIME I 2024), not both AIME I+II (60).",
+      "max_tokens": "4096, retry 8192 on length",
+      "items_omitted": 30
+    },
+    "AIME 2025": {
+      "name": "AIME 2025",
+      "n": 30,
+      "split_n": 30,
+      "correct": 16,
+      "accuracy": 0.5333333333333333,
+      "score": "16/30",
+      "source": "math-ai/aime25 test via HuggingFace datasets-server (n=30)",
+      "canonical": "https://huggingface.co/datasets/math-ai/aime25",
+      "split": "test",
+      "offset": 0,
+      "coverage": "full-file",
+      "latency_p50_s": 8.625972867012024,
+      "n_errors": 0,
+      "errors": [],
+      "note": null,
+      "max_tokens": "4096, retry 8192 on length",
+      "items_omitted": 30
+    },
+    "GPQA-Diamond": {
+      "name": "GPQA-Diamond",
+      "n": 198,
+      "split_n": 198,
+      "correct": 138,
+      "accuracy": 0.696969696969697,
+      "score": "138/198",
+      "source": "OpenAI simple-evals gpqa_diamond.csv (https://openaipublic.blob.core.windows.net/simple-evals/gpqa_diamond.csv); Idavidrein/gpqa Diamond split; n=198. Choices shuffled via sha256(Record ID).",
+      "canonical": "https://huggingface.co/datasets/Idavidrein/gpqa",
+      "split": "diamond",
+      "offset": 0,
+      "coverage": "full",
+      "latency_p50_s": 5.294565796852112,
+      "n_errors": 0,
+      "errors": [],
+      "note": "Gated HF terms ask not to republish item text. Traces store record_id / letter / correctness, not the question. n_repeats=1 (not simple-evals default 10).",
+      "grader": "A-D letter extract; choices shuffled sha256(Record ID); n_repeats=1; item text omitted from traces (GPQA anti-contamination)",
+      "items_omitted": 198
+    },
+    "HumanEval": {
+      "name": "HumanEval",
+      "n": 164,
+      "split_n": 164,
+      "correct": 147,
+      "accuracy": 0.8963414634146342,
+      "score": "147/164",
+      "source": "openai/openai_humaneval test via HuggingFace datasets-server (full, n=164)",
+      "canonical": "https://huggingface.co/datasets/openai/openai_humaneval",
+      "split": "test",
+      "offset": 0,
+      "coverage": "full",
+      "latency_p50_s": 2.242409348487854,
+      "n_errors": 0,
+      "errors": [],
+      "note": null,
+      "items_omitted": 164
+    },
+    "LiveCodeBench": {
+      "name": "LiveCodeBench",
+      "n": 342,
+      "split_n": 342,
+      "correct": 105,
+      "accuracy": 0.30701754385964913,
+      "score": "105/342",
+      "source": "livecodebench/code_generation_lite v5_v6 files v5:167, v6:175 (HuggingFace resolve/main). Private tests decoded when encoded size \u2264 2000000 bytes (284 decoded, 58 public-only).",
+      "canonical": "https://huggingface.co/datasets/livecodebench/code_generation_lite",
+      "split": "v5_v6",
+      "offset": 0,
+      "coverage": "subset-files",
+      "latency_p50_s": 6.363075852394104,
+      "n_errors": 11,
+      "errors": [
+        {
+          "index": 212,
+          "error": "TimeoutError: timed out"
+        },
+        {
+          "index": 288,
+          "error": "ConnectionResetError: [Errno 104] Connection reset by peer"
+        },
+        {
+          "index": 289,
+          "error": "ConnectionResetError: [Errno 104] Connection reset by peer"
+        },
+        {
+          "index": 290,
+          "error": "ConnectionResetError: [Errno 104] Connection reset by peer"
+        },
+        {
+          "index": 291,
+          "error": "ConnectionResetError: [Errno 104] Connection reset by peer"
+        },
+        {
+          "index": 292,
+          "error": "ConnectionResetError: [Errno 104] Connection reset by peer"
+        },
+        {
+          "index": 293,
+          "error": "ConnectionResetError: [Errno 104] Connection reset by peer"
+        },
+        {
+          "index": 294,
+          "error": "ConnectionResetError: [Errno 104] Connection reset by peer"
+        },
+        {
+          "index": 295,
+          "error": "ConnectionResetError: [Errno 104] Connection reset by peer"
+        },
+        {
+          "index": 296,
+          "error": "ConnectionResetError: [Errno 104] Connection reset by peer"
+        },
+        {
+          "index": 297,
+          "error": "ConnectionResetError: [Errno 104] Connection reset by peer"
+        }
+      ],
+      "note": null,
+      "grader": "local stdin/functional Python exec of public tests plus decoded private tests; not the official lcb_runner package. pass@1, temp 0, n=1 sample.",
+      "lcb_version": "v5_v6",
+      "n_private_decoded": 284,
+      "n_private_skipped": 58,
+      "files": [
+        "v5:167",
+        "v6:175"
+      ],
+      "items_omitted": 342
+    },
+    "MATH-500": {
+      "name": "MATH-500",
+      "n": 500,
+      "split_n": 500,
+      "correct": 449,
+      "accuracy": 0.898,
+      "score": "449/500",
+      "source": "HuggingFaceH4/MATH-500 test via HuggingFace datasets-server (full, n=500)",
+      "canonical": "https://huggingface.co/datasets/HuggingFaceH4/MATH-500",
+      "split": "test",
+      "offset": 0,
+      "coverage": "full",
+      "latency_p50_s": 6.883213043212891,
+      "n_errors": 2,
+      "errors": [
+        {
+          "index": 301,
+          "error": "TimeoutError: timed out"
+        },
+        {
+          "index": 465,
+          "error": "TimeoutError: timed out"
+        }
+      ],
+      "note": null,
+      "max_tokens": "2048, retry 4096 on length",
+      "items_omitted": 500
+    },
+    "IFEval": {
+      "name": "IFEval",
+      "n": 541,
+      "split_n": 541,
+      "correct": 473,
+      "accuracy": 0.8743068391866913,
+      "score": "473/541",
+      "source": "google/IFEval train via HuggingFace datasets-server (full, n=541; same order as google-research instruction_following_eval/data/input_data.jsonl)",
+      "canonical": "https://huggingface.co/datasets/google/IFEval",
+      "split": "train",
+      "offset": 0,
+      "coverage": "full",
+      "latency_p50_s": 7.5778961181640625,
+      "n_errors": 2,
+      "errors": [
+        {
+          "index": 217,
+          "error": "TimeoutError: timed out"
+        },
+        {
+          "index": 363,
+          "error": "TimeoutError: timed out"
+        }
+      ],
+      "note": null,
+      "instruction_level_strict_lite": "766/834",
+      "grader": "in-repo IFEval checkers in evals/flash_hrr_api_eval.py (strict-ish; json allows a single markdown fence; Kannada via Unicode block U+0C80\u2013U+0CFF; other languages via langdetect if installed else fail-closed; sentence count is regex not nltk; not the official google-research package)",
+      "items_omitted": 541
+    },
+    "GSM8K": {
+      "name": "GSM8K",
+      "n": 1319,
+      "split_n": 1319,
+      "correct": 1274,
+      "accuracy": 0.9658832448824868,
+      "score": "1274/1319",
+      "source": "openai/gsm8k main/test via HuggingFace datasets-server (full test)",
+      "canonical": "https://huggingface.co/datasets/openai/gsm8k",
+      "split": "test",
+      "offset": 0,
+      "coverage": "full",
+      "latency_p50_s": 1.8793160915374756,
+      "n_errors": 2,
+      "errors": [
+        {
+          "index": 443,
+          "error": "TimeoutError: timed out"
+        },
+        {
+          "index": 648,
+          "error": "TimeoutError: timed out"
+        }
+      ],
+      "note": null,
+      "items_omitted": 1319
+    },
+    "MMLU-Pro": {
+      "name": "MMLU-Pro",
+      "n": 9278,
+      "split_n": 12032,
+      "correct": 7224,
+      "accuracy": 0.7786160810519509,
+      "score": "7224/9278",
+      "source": "TIGER-Lab/MMLU-Pro test via HuggingFace datasets-server (full test)",
+      "canonical": "https://huggingface.co/datasets/TIGER-Lab/MMLU-Pro",
+      "split": "test",
+      "offset": 0,
+      "coverage": "first-n",
+      "latency_p50_s": 0.5445061922073364,
+      "n_errors": 680,
+      "errors": [
+        {
+          "index": 359,
+          "error": "TimeoutError: timed out"
+        },
+        {
+          "index": 534,
+          "error": "TimeoutError: timed out"
+        },
+        {
+          "index": 1581,
+          "error": "ConnectionResetError: [Errno 104] Connection reset by peer"
+        },
+        {
+          "index": 1582,
+          "error": "ConnectionResetError: [Errno 104] Connection reset by peer"
+        },
+        {
+          "index": 1583,
+          "error": "ConnectionResetError: [Errno 104] Connection reset by peer"
+        },
+        {
+          "index": 1584,
+          "error": "ConnectionResetError: [Errno 104] Connection reset by peer"
+        },
+        {
+          "index": 1585,
+          "error": "ConnectionResetError: [Errno 104] Connection reset by peer"
+        },
+        {
+          "index": 1586,
+          "error": "ConnectionResetError: [Errno 104] Connection reset by peer"
+        },
+        {
+          "index": 1587,
+          "error": "ConnectionResetError: [Errno 104] Connection reset by peer"
+        },
+        {
+          "index": 1588,
+          "error": "ConnectionResetError: [Errno 104] Connection reset by peer"
+        },
+        {
+          "index": 1589,
+          "error": "ConnectionResetError: [Errno 104] Connection reset by peer"
+        },
+        {
+          "index": 1590,
+          "error": "ConnectionResetError: [Errno 104] Connection reset by peer"
+        },
+        {
+          "index": 1591,
+          "error": "ConnectionResetError: [Errno 104] Connection reset by peer"
+        },
+        {
+          "index": 1592,
+          "error": "ConnectionResetError: [Errno 104] Connection reset by peer"
+        },
+        {
+          "index": 1593,
+          "error": "ConnectionResetError: [Errno 104] Connection reset by peer"
+        },
+        {
+          "index": 1594,
+          "error": "ConnectionResetError: [Errno 104] Connection reset by peer"
+        },
+        {
+          "index": 1595,
+          "error": "ConnectionResetError: [Errno 104] Connection reset by peer"
+        },
+        {
+          "index": 1596,
+          "error": "ConnectionResetError: [Errno 104] Connection reset by peer"
+        },
+        {
+          "index": 1597,
+          "error": "ConnectionResetError: [Errno 104] Connection reset by peer"
+        },
+        {
+          "index": 1598,
+          "error": "ConnectionResetError: [Errno 104] Connection reset by peer"
+        },
+        {
+          "index": 1599,
+          "error": "ConnectionResetError: [Errno 104] Connection reset by peer"
+        },
+        {
+          "index": 1600,
+          "error": "ConnectionResetError: [Errno 104] Connection reset by peer"
+        },
+        {
+          "index": 1601,
+          "error": "ConnectionResetError: [Errno 104] Connection reset by peer"
+        },
+        {
+          "index": 1602,
+          "error": "ConnectionResetError: [Errno 104] Connection reset by peer"
+        },
+        {
+          "index": 1603,
+          "error": "ConnectionResetError: [Errno 104] Connection reset by peer"
+        },
+        {
+          "index": 1604,
+          "error": "ConnectionResetError: [Errno 104] Connection reset by peer"
+        },
+        {
+          "index": 1605,
+          "error": "ConnectionResetError: [Errno 104] Connection reset by peer"
+        },
+        {
+          "index": 1606,
+          "error": "ConnectionResetError: [Errno 104] Connection reset by peer"
+        },
+        {
+          "index": 1607,
+          "error": "ConnectionResetError: [Errno 104] Connection reset by peer"
+        },
+        {
+          "index": 1608,
+          "error": "ConnectionResetError: [Errno 104] Connection reset by peer"
+        },
+        {
+          "index": 1609,
+          "error": "ConnectionResetError: [Errno 104] Connection reset by peer"
+        },
+        {
+          "index": 1610,
+          "error": "ConnectionResetError: [Errno 104] Connection reset by peer"
+        },
+        {
+          "index": 1611,
+          "error": "ConnectionResetError: [Errno 104] Connection reset by peer"
+        },
+        {
+          "index": 1612,
+          "error": "ConnectionResetError: [Errno 104] Connection reset by peer"
+        },
+        {
+          "index": 1613,
+          "error": "ConnectionResetError: [Errno 104] Connection reset by peer"
+        },
+        {
+          "index": 1614,
+          "error": "ConnectionResetError: [Errno 104] Connection reset by peer"
+        },
+        {
+          "index": 1615,
+          "error": "ConnectionResetError: [Errno 104] Connection reset by peer"
+        },
+        {
+          "index": 1616,
+          "error": "ConnectionResetError: [Errno 104] Connection reset by peer"
+        },
+        {
+          "index": 1617,
+          "error": "ConnectionResetError: [Errno 104] Connection reset by peer"
+        },
+        {
+          "index": 1618,
+          "error": "ConnectionResetError: [Errno 104] Connection reset by peer"
+        },
+        {
+          "index": 1619,
+          "error": "ConnectionResetError: [Errno 104] Connection reset by peer"
+        },
+        {
+          "index": 1620,
+          "error": "ConnectionResetError: [Errno 104] Connection reset by peer"
+        },
+        {
+          "index": 1621,
+          "error": "ConnectionResetError: [Errno 104] Connection reset by peer"
+        },
+        {
+          "index": 1622,
+          "error": "ConnectionResetError: [Errno 104] Connection reset by peer"
+        },
+        {
+          "index": 1623,
+          "error": "ConnectionResetError: [Errno 104] Connection reset by peer"
+        },
+        {
+          "index": 1624,
+          "error": "ConnectionResetError: [Errno 104] Connection reset by peer"
+        },
+        {
+          "index": 1625,
+          "error": "ConnectionResetError: [Errno 104] Connection reset by peer"
+        },
+        {
+          "index": 1626,
+          "error": "ConnectionResetError: [Errno 104] Connection reset by peer"
+        },
+        {
+          "index": 1627,
+          "error": "ConnectionResetError: [Errno 104] Connection reset by peer"
+        },
+        {
+          "index": 1628,
+          "error": "ConnectionResetError: [Errno 104] Connection reset by peer"
+        }
+      ],
+      "note": "first-n snapshot from resume while the full 12032 run is still going. Not the full test.",
+      "grader": "letter extract A-J vs dataset answer; n_repeats=1",
+      "snapshot": true,
+      "items_omitted": 9278
+    }
+  },
+  "memory_raw_vllm": null,
+  "client_errors": [],
+  "note": "Suites run as separate processes against the Flash+HRR-spill gateway (deepseek-v4-flash, Bearer auth). Not vanilla 32k raw vLLM. OG OpenRouter NOT RUN. SWE/Terminal-Bench/DeepSWE not attempted.",
+  "probe": {
+    "ok": true
+  },
+  "suites_merged": [
+    "Spill-needle",
+    "AIME 2024",
+    "AIME 2025",
+    "GPQA-Diamond",
+    "HumanEval",
+    "LiveCodeBench",
+    "MATH-500",
+    "IFEval",
+    "GSM8K",
+    "MMLU-Pro"
+  ],
+  "latency_p50_s": 6.363075852394104
+}

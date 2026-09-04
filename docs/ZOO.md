@@ -396,3 +396,25 @@ certificates. A session state — or a pre-loaded expert memory written external
 0.951 readback with zero forward passes — is a content-addressed file stacc can host,
 price, and let buyers *verify by receipt* before purchase. The synthetic-exact numbers
 in §7 are the referee; the real-weight lane runs where the weights live.
+
+## openzoo-transmute
+
+The zoo's frontends live on the same chain the zoo bills on. `openzoo-transmute/`
+(an ESM Node package in this repo) takes a Vercel-shaped app — Next.js
+`pages/api`, app-router `route.ts`, or a Vite repo with `api/*.js` — and
+transmutes it into a Rust Pinocchio Solana program whose instruction routes are
+the `/api/*` Lambdas, plus one rent-exempt account per static file; then deploys
+it and serves it through a local gateway (`npx openzoo build | deploy | serve`).
+Reads are free `simulateTransaction` calls, writes are signed transactions, and
+a gateway without a wallet answers `402` — the seam the x402 proxy plugs into.
+
+* `openzoo-transmute/README.md` — install, quickstart, CLI reference, tests, roadmap.
+* `openzoo-transmute/docs/VERCEL_TO_SOLANA.md` — the reverse-engineering document,
+  in Vercel's own terms: Build Output API v3, the `@vercel/node-bridge` Invoke
+  contract, Fluid Compute, the Vercel→Solana mapping table, limits, cost model
+  (6.96 SOL/MB, free reads, frozen when the upgrade authority is burned), security.
+* `openzoo-transmute/docs/OPENZOO_CLI_PATCH.md` — the diff that mounts the
+  commands in `staccDOTsol/openzoo`'s `bin/openzoo.js`; the burner wallet at
+  `~/.openzoo/wallet.json` is picked up automatically.
+* `openzoo-transmute/runtime/zoo-host/` — the `no_std` runtime the generated
+  program links (`Ctx`, `Val`, KV and asset PDAs, the wire codec).

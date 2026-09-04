@@ -1,0 +1,29 @@
+{
+  "name": "openzoo-transmute",
+  "version": "0.1.0",
+  "description": "Transmute a Vercel-shaped app (Next.js / Vite + /api Lambdas) into a Pinocchio Rust program and asset accounts on Solana mainnet. `openzoo build` / `openzoo deploy` / `openzoo serve`.",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "openzoo-transmute": "bin/openzoo-transmute.js"
+  },
+  "files": [
+    "bin",
+    "lib",
+    "runtime",
+    "docs",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.js"
+  },
+  "dependencies": {
+    "@solana/web3.js": "^1.98.4",
+    "acorn": "^8.14.0",
+    "acorn-walk": "^8.3.4"
+  },
+  "keywords": ["vercel", "lambda", "solana", "pinocchio", "openzoo", "transmute", "x402"]
+}

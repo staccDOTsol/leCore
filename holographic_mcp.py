@@ -22,7 +22,7 @@ import hashlib
 import json
 import sys
 
-from holographic_service import Service
+from holographic_service import Service, cost_meta
 
 _PROTOCOL = "2024-11-05"
 
@@ -1851,8 +1851,6 @@ class MCPServer:
                 # some faculties (bind: 0.025 ms CPU, ~10 KB JSON) -- a flat per-call price
                 # would be fiction. An x402 proxy bills these two numbers directly; the
                 # engine is deterministic, so quoted costs REPRODUCE.
-                meta = {"elapsed_ms": round((_t.perf_counter() - _t0) * 1e3, 3),
-                        "payload_bytes": len(text)}
                 # THE RECEIPT (proof-of-inference, the deterministic dividend): the engine's
                 # outputs are functions of (tool, arguments) alone, so a sha256 pair is a
                 # complete, re-verifiable claim about what was computed -- 'don't trust,
@@ -1860,12 +1858,11 @@ class MCPServer:
                 # once, serve the hash'), and ANY party can dispute it by re-invoking and
                 # comparing 64 hex chars. No zero-knowledge machinery; determinism is the
                 # proof system. (Wall-clock lives in cost, not the receipt -- time is the
-                # one thing an honest re-run will not reproduce.)
-                _canon = json.dumps({"tool": tool, "arguments": a}, sort_keys=True,
-                                    separators=(",", ":"), default=str)
-                receipt = {"input_sha256": hashlib.sha256(_canon.encode()).hexdigest(),
-                           "output_sha256": hashlib.sha256(text.encode()).hexdigest(),
-                           "deterministic": True}
+                # one thing an honest re-run will not reproduce.) ONE helper computes both
+                # here and on the HTTP doors (holographic_service.cost_meta), so the proxy
+                # meets one shape whichever wire it came in on.
+                _cm = cost_meta(tool, a, text, _t0)
+                meta, receipt = _cm["lecore.cost"], _cm["lecore.receipt"]
                 content = [{"type": "text", "text": text}] + _media_blocks(out)
                 # payload accounting must cover the MEDIA too, or the wire-dominates
                 # census under-bills every render by orders of magnitude

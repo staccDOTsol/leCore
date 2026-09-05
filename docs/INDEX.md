@@ -19,6 +19,12 @@ Pick your seat; read two documents, not fifty.
    boundaries, cost levers, adoption steps, troubleshooting.
 2. **docs/OPENZOO_INTEGRATION.md** — the why behind each lever, with measured numbers.
 
+## "I want the RFP service-arbitrage indexer"
+1. **docs/RFP_ARBITRAGE.md** — index US + Canadian federal / state-provincial / municipal
+   solicitations, keep the intellectual work, gate each on the explicit non-denial of
+   delegation (subcontractors, AI teams) with an LLM reading through the openzoo proxy,
+   price the ask, intersect with provably-good under-priced talent. `python -m rfp_arbitrage`.
+
 ## "I'm building on the engine locally"
 1. **docs/WHATS_NEW.md** → then `commands` in the chat, and `m.tool_find("<task>")`
    / `m.explain("<topic>")` in Python — the engine explains itself from its own

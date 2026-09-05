@@ -1,0 +1,10 @@
+# rfp_arbitrage -- extra dependencies for the RFP indexer / legal gate / talent matcher.
+# The core (models, store, taxonomy, clause heuristics, pricing, matching, CLI) is stdlib-only;
+# these are imported lazily by the stages that need them.
+requests>=2.31          # API / CSV / JSON sources, attachment download
+scrapy>=2.13            # MERX + BidNet HTML portals (spiders/)
+beautifulsoup4>=4.12    # optional HTML helpers
+lxml>=5.0
+pdfminer.six>=20231228  # PDF text extraction (attachments)
+python-docx>=1.1        # DOCX text extraction
+anthropic>=1.0          # only for RFP_LLM_PROVIDER=anthropic; the default openzoo path is stdlib urllib

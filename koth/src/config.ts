@@ -57,10 +57,12 @@ export function resolveZooWallet(env: NodeJS.ProcessEnv = process.env): PublicKe
   if (env.OPENZOO_WALLET_ADDRESS) return new PublicKey(env.OPENZOO_WALLET_ADDRESS);
   const file = env.OPENZOO_WALLET || path.join(process.env.HOME || '', '.openzoo', 'wallet.json');
   try {
-    const j = JSON.parse(fs.readFileSync(file, 'utf8')) as { publicKey?: string; address?: string; secretKey?: number[] };
+    const j = JSON.parse(fs.readFileSync(file, 'utf8')) as { publicKey?: string; address?: string; secretKey?: number[]; solana?: number[] } | number[];
+    if (Array.isArray(j)) return Keypair.fromSecretKey(Uint8Array.from(j)).publicKey;   // a solana-keygen file
     if (j.publicKey) return new PublicKey(j.publicKey);
     if (j.address) return new PublicKey(j.address);
     if (j.secretKey) return Keypair.fromSecretKey(Uint8Array.from(j.secretKey)).publicKey;
+    if (j.solana) return Keypair.fromSecretKey(Uint8Array.from(j.solana)).publicKey;     // what `openzoo proxy` writes: { solana: [...], evm }
   } catch { /* no wallet on this machine */ }
   return null;
 }

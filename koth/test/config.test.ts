@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { Keypair } from '@solana/web3.js';
 import bs58 from 'bs58';
-import { loadConfig, parseKeypair, resolveRpcUrl } from '../src/config.js';
+import { loadConfig, parseKeypair, resolveRpcUrl, resolveZooWallet } from '../src/config.js';
 
 describe('KOTH_KEYPAIR', () => {
   const kp = Keypair.generate();
@@ -38,5 +38,23 @@ describe('rpc', () => {
     expect(resolveRpcUrl({ SOLANA_RPC_KEY: 'https://rpc.example/x?api-key=k' })).toBe('https://rpc.example/x?api-key=k');
     expect(resolveRpcUrl({ SOLANA_RPC_URL: 'https://rpc/{key}', SOLANA_RPC_KEY: 'k' })).toBe('https://rpc/k');
     expect(resolveRpcUrl({})).toBe('https://api.mainnet-beta.solana.com');
+  });
+});
+
+describe('OPENZOO_WALLET', () => {
+  const kp = Keypair.generate();
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'koth-zoo-'));
+  it("reads the { solana: [...], evm } file `openzoo proxy` writes", () => {
+    const f = path.join(dir, 'w.json');
+    fs.writeFileSync(f, JSON.stringify({ solana: [...kp.secretKey], evm: '0xabc' }));
+    expect(resolveZooWallet({ OPENZOO_WALLET: f })?.equals(kp.publicKey)).toBe(true);
+  });
+  it('reads a bare solana-keygen byte array too', () => {
+    const f = path.join(dir, 'k.json');
+    fs.writeFileSync(f, JSON.stringify([...kp.secretKey]));
+    expect(resolveZooWallet({ OPENZOO_WALLET: f })?.equals(kp.publicKey)).toBe(true);
+  });
+  it('is null when there is no wallet on this machine', () => {
+    expect(resolveZooWallet({ OPENZOO_WALLET: path.join(dir, 'missing.json') })).toBeNull();
   });
 });

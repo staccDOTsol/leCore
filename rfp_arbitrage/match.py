@@ -114,6 +114,10 @@ def build_matches(opps: Iterable[Opportunity], verdicts: dict[str, ClauseVerdict
                 continue
             margin_norm = min(1.0, (margin - cfg.min_margin) / (0.9 - cfg.min_margin))
             score = round(max(0.05, gate_conf) * (0.35 * margin_norm + 0.25 * f + 0.25 * q + 0.15 * p), 4)
+            if pr["ask_basis"].endswith("(regex)"):
+                # a dollar figure a regex found near a budget word is a lead, not a budget: half weight
+                score = round(score * 0.5, 4)
+                notes.append("ask is a regex-found figure -- verify before trusting the margin")
             out.append(Match(opportunity_key=o.key, talent_keys=[m.key for m in members], ask_value=ask, ask_basis=pr["ask_basis"],
                              labor_cost=round(cost, 2), hours_estimate=hours, margin=round(margin, 3), fit_score=round(f, 3),
                              quality_score=round(q, 3), price_score=round(p, 3), gate_ok=bool(v and v.arbitrage_viable),

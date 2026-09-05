@@ -96,7 +96,8 @@ def prescreen(text: str, window: int = 700, max_chars: int = 36_000) -> list[Exc
 # A gap that must not contain consent language: "prohibited ... unless approved" is consent, not a ban.
 _NOCONSENT = r"(?:(?!consent|approv|authori[sz]|permission|unless|except|disclos|prior written).){0,120}"
 SUB_PROHIBIT = [
-    r"(shall|must|may|will|can) ?not (sub-?contract|delegate)\b(?!.{0,80}(without|unless|except))",
+    # "will not subcontract MORE THAN 70 percent" (FAR 52.215-23 pass-through limits) is a cap, not a ban
+    r"(shall|must|may|will|can) ?not (sub-?contract|delegate)\b(?! (more than|in excess of|greater than|any more than|over)\b)(?!.{0,80}(without|unless|except))",
     r"(shall|must|may|will|can) ?not assign (the |any |all |its )?(work|services|performance|duties|obligations)\b(?!.{0,80}(without|unless|except))",
     r"\bno (sub-?contracting|subcontractors?|assignment)\b(?!.{0,60}(without|unless|except))",
     r"sub-?contracting (is|will be|shall be|are) (not (permitted|allowed|acceptable)|prohibited|forbidden)",
@@ -118,6 +119,7 @@ SUB_PERMIT = [
     r"teaming (agreements?|arrangements?) (are|is) (permitted|allowed|encouraged)|joint ventures? (are|is) (permitted|allowed|eligible)",
 ]
 SELF_PERFORM = [
+    r"not sub-?contract (more than|in excess of|greater than|over)\s*(\d{1,3})\s?(%|percent)",
     r"(self-?perform|perform(ed)?|complete[ds]?).{0,60}(at least|a minimum of|not less than|no less than|minimum)\s*(\d{1,3})\s?(%|percent)",
     r"(\d{1,3})\s?(%|percent).{0,80}(own (forces|employees|personnel|staff)|self-?perform|prime contractor)",
     r"(at least|a minimum of|not less than|no less than)\s*(\d{1,3})\s?(%|percent).{0,100}(own (forces|employees|personnel)|self-?perform|by the (prime|contractor))",
@@ -181,6 +183,8 @@ def heuristic_verdict(key: str, text: str) -> ClauseVerdict:
             nums = [g for g in m.groups() if g and g.isdigit()]
             if nums:
                 self_perf = float(nums[0])
+                if p.startswith("not sub-?contract"):
+                    self_perf = 100.0 - self_perf
                 break
     kp = _find(KEY_PERSONNEL_LOCK, t)
     ai_pro, ai_res, ai_ok = _find(AI_PROHIBIT, t), _find(AI_RESTRICT, t), _find(AI_PERMIT, t)

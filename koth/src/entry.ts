@@ -129,6 +129,39 @@ export function computeQuote(a: { playFeeSol: number; inferenceUsd: number; solU
 export type VaultPosition = { lpMint: string; pool: string | null; lp: string; share: number; usd: number; priced: boolean };
 const POT_CACHE_MS = 60_000;
 
+/**
+ * A ONE-TIME SIGNER FOR ANYTHING THAT TOUCHES SOL.
+ *
+ * The operator's canonical wrapped-SOL account is squatted: the address every wallet and router
+ * derives for it is owned by someone else, so any swap that wraps or unwraps SOL "for the user"
+ * fails with `Token account … is owned by … instead of the user`. So the operator never wraps.
+ * A fresh keypair is funded with the lamports plus a fee cushion, it is the swap's user (its
+ * wrapped-SOL account is brand new and its own), the output is delivered to whoever it was for,
+ * and whatever SOL is left is swept back. The keypair is used once and forgotten.
+ */
+export type SolRunner = { keypair: Keypair; sweep: () => Promise<void> };
+export const SOL_FEE_CUSHION = 8_000_000n;   // rent for a wrapped-SOL account + priority fees + the sweep
+
+export async function spawnSolRunner(connection: Connection, operator: Keypair, lamports: bigint, log?: (s: string) => void): Promise<SolRunner> {
+  const keypair = Keypair.generate();
+  const fund = new Transaction().add(SystemProgram.transfer({ fromPubkey: operator.publicKey, toPubkey: keypair.publicKey, lamports: lamports + SOL_FEE_CUSHION }));
+  await sendAndConfirmTransaction(connection, fund, [operator], { commitment: 'confirmed' });
+  log?.(`sol runner ${keypair.publicKey.toBase58()} funded with ${lamports + SOL_FEE_CUSHION} lamports`);
+  return {
+    keypair,
+    sweep: async () => {
+      const bal = BigInt(await connection.getBalance(keypair.publicKey, 'confirmed'));
+      const back = bal - 5_000n;
+      if (back <= 0n) return;
+      const tx = new Transaction().add(SystemProgram.transfer({ fromPubkey: keypair.publicKey, toPubkey: operator.publicKey, lamports: back }));
+      await sendAndConfirmTransaction(connection, tx, [keypair], { commitment: 'confirmed' });
+      log?.(`sol runner ${keypair.publicKey.toBase58()} swept ${back} lamports back`);
+    },
+  };
+}
+
+const involvesSol = (a: { inputMint: PublicKey; outputMint: PublicKey }) => a.inputMint.equals(NATIVE_SOL_MINT) || a.outputMint.equals(NATIVE_SOL_MINT);
+
 export interface Swapper {
   /** Swap `amountRaw` of `inputMint` into `outputMint`; output lands in `destination`'s ATA (or the operator's). */
   swap(a: { inputMint: PublicKey; outputMint: PublicKey; amountRaw: bigint; destinationOwner?: PublicKey }): Promise<{ signature: string; outAmountRaw: bigint }>;
@@ -136,8 +169,20 @@ export interface Swapper {
 
 /** Jupiter swap API (lite-api needs no key; api.jup.ag takes one). */
 export class JupiterSwapper implements Swapper {
-  constructor(private connection: Connection, private operator: Keypair, private opts: { baseUrl?: string; apiKey?: string; slippageBps?: number; fetchImpl?: typeof fetch } = {}) {}
+  constructor(private connection: Connection, private operator: Keypair, private opts: { baseUrl?: string; apiKey?: string; slippageBps?: number; fetchImpl?: typeof fetch; solRunner?: (lamports: bigint) => Promise<SolRunner>; log?: (s: string) => void } = {}) {}
+
   async swap(a: { inputMint: PublicKey; outputMint: PublicKey; amountRaw: bigint; destinationOwner?: PublicKey }): Promise<{ signature: string; outAmountRaw: bigint }> {
+    if (!involvesSol(a)) return this.swapAs(this.operator, a);
+    // SOL on either side: a one-time signer wraps and unwraps with its own fresh account (see spawnSolRunner)
+    const runner = await (this.opts.solRunner ?? ((l) => spawnSolRunner(this.connection, this.operator, l, this.opts.log)))(a.inputMint.equals(NATIVE_SOL_MINT) ? a.amountRaw : 0n);
+    try {
+      return await this.swapAs(runner.keypair, { ...a, destinationOwner: a.outputMint.equals(NATIVE_SOL_MINT) ? undefined : (a.destinationOwner ?? this.operator.publicKey) });
+    } finally {
+      await runner.sweep().catch((e) => this.opts.log?.(`sol runner sweep failed: ${e instanceof Error ? e.message : e}`));
+    }
+  }
+
+  private async swapAs(user: Keypair, a: { inputMint: PublicKey; outputMint: PublicKey; amountRaw: bigint; destinationOwner?: PublicKey }): Promise<{ signature: string; outAmountRaw: bigint }> {
     const base = (this.opts.baseUrl ?? (this.opts.apiKey ? 'https://api.jup.ag' : 'https://lite-api.jup.ag')).replace(/\/+$/, '');
     const f = this.opts.fetchImpl ?? fetch;
     const headers: Record<string, string> = { 'content-type': 'application/json', ...(this.opts.apiKey ? { 'x-api-key': this.opts.apiKey } : {}) };
@@ -149,19 +194,26 @@ export class JupiterSwapper implements Swapper {
     const qr = await f(q, { headers, signal: AbortSignal.timeout(20_000) });
     const quote = (await qr.json()) as Record<string, unknown>;
     if (!qr.ok || !quote.outAmount) throw new Error(`jupiter quote failed: ${JSON.stringify(quote).slice(0, 200)}`);
+    // wrapAndUnwrapSol is only ever true for a one-time signer; the operator's own wrapped-SOL account is never used
     const body: Record<string, unknown> = {
-      quoteResponse: quote, userPublicKey: this.operator.publicKey.toBase58(), wrapAndUnwrapSol: true,
+      quoteResponse: quote, userPublicKey: user.publicKey.toBase58(), wrapAndUnwrapSol: !user.publicKey.equals(this.operator.publicKey),
       dynamicComputeUnitLimit: true, prioritizationFeeLamports: 'auto',
     };
-    if (a.destinationOwner) {
+    if (a.destinationOwner && !a.outputMint.equals(NATIVE_SOL_MINT)) {
       const outProgram = await tokenProgramFor(this.connection, a.outputMint);
-      body.destinationTokenAccount = getAssociatedTokenAddressSync(a.outputMint, a.destinationOwner, true, outProgram).toBase58();
+      const dst = getAssociatedTokenAddressSync(a.outputMint, a.destinationOwner, true, outProgram);
+      if (!user.publicKey.equals(a.destinationOwner)) {
+        // Jupiter delivers into an existing account only: make sure it is there (the operator pays the rent)
+        const mk = new Transaction().add(createAssociatedTokenAccountIdempotentInstruction(this.operator.publicKey, dst, a.destinationOwner, a.outputMint, outProgram));
+        await sendAndConfirmTransaction(this.connection, mk, [this.operator], { commitment: 'confirmed' });
+      }
+      body.destinationTokenAccount = dst.toBase58();
     }
     const sr = await f(`${base}/swap/v1/swap`, { method: 'POST', headers, body: JSON.stringify(body), signal: AbortSignal.timeout(30_000) });
     const s = (await sr.json()) as { swapTransaction?: string; error?: string };
     if (!sr.ok || !s.swapTransaction) throw new Error(`jupiter swap failed: ${s.error ?? sr.status}`);
     const tx = VersionedTransaction.deserialize(Buffer.from(s.swapTransaction, 'base64'));
-    tx.sign([this.operator]);
+    tx.sign([user]);
     const signature = await this.connection.sendRawTransaction(tx.serialize(), { skipPreflight: false, maxRetries: 3 });
     const latest = await this.connection.getLatestBlockhash('confirmed');
     await this.connection.confirmTransaction({ signature, ...latest }, 'confirmed');
@@ -178,7 +230,7 @@ export class JupiterSwapper implements Swapper {
 export class UltraSwapper implements Swapper {
   constructor(
     private connection: Connection, private operator: Keypair,
-    private opts: { apiKey: string; baseUrl?: string; fetchImpl?: typeof fetch; fallback?: Swapper; log?: (s: string) => void },
+    private opts: { apiKey: string; baseUrl?: string; fetchImpl?: typeof fetch; fallback?: Swapper; log?: (s: string) => void; solRunner?: (lamports: bigint) => Promise<SolRunner> },
   ) {}
 
   async swap(a: { inputMint: PublicKey; outputMint: PublicKey; amountRaw: bigint; destinationOwner?: PublicKey }): Promise<{ signature: string; outAmountRaw: bigint }> {
@@ -192,6 +244,17 @@ export class UltraSwapper implements Swapper {
   }
 
   private async ultra(a: { inputMint: PublicKey; outputMint: PublicKey; amountRaw: bigint; destinationOwner?: PublicKey }): Promise<{ signature: string; outAmountRaw: bigint }> {
+    if (!involvesSol(a)) return this.ultraAs(this.operator, a);
+    // SOL on either side: a one-time taker (see spawnSolRunner); its output is forwarded, its leftover SOL swept back
+    const runner = await (this.opts.solRunner ?? ((l) => spawnSolRunner(this.connection, this.operator, l, this.opts.log)))(a.inputMint.equals(NATIVE_SOL_MINT) ? a.amountRaw : 0n);
+    try {
+      return await this.ultraAs(runner.keypair, { ...a, destinationOwner: a.destinationOwner ?? this.operator.publicKey });
+    } finally {
+      await runner.sweep().catch((e) => this.opts.log?.(`sol runner sweep failed: ${e instanceof Error ? e.message : e}`));
+    }
+  }
+
+  private async ultraAs(taker: Keypair, a: { inputMint: PublicKey; outputMint: PublicKey; amountRaw: bigint; destinationOwner?: PublicKey }): Promise<{ signature: string; outAmountRaw: bigint }> {
     const base = (this.opts.baseUrl ?? 'https://api.jup.ag').replace(/\/+$/, '');
     const f = this.opts.fetchImpl ?? fetch;
     const headers = { 'content-type': 'application/json', 'x-api-key': this.opts.apiKey };
@@ -199,12 +262,12 @@ export class UltraSwapper implements Swapper {
     u.searchParams.set('inputMint', a.inputMint.toBase58());
     u.searchParams.set('outputMint', a.outputMint.toBase58());
     u.searchParams.set('amount', a.amountRaw.toString());
-    u.searchParams.set('taker', this.operator.publicKey.toBase58());
+    u.searchParams.set('taker', taker.publicKey.toBase58());
     const or = await f(u, { headers, signal: AbortSignal.timeout(20_000) });
     const order = (await or.json().catch(() => ({}))) as { transaction?: string | null; requestId?: string; outAmount?: string; router?: string; errorMessage?: string; error?: string };
     if (!or.ok || !order.transaction || !order.requestId) throw new Error(`order: ${order.errorMessage ?? order.error ?? or.status}`);
     const tx = VersionedTransaction.deserialize(Buffer.from(order.transaction, 'base64'));
-    tx.sign([this.operator]);
+    tx.sign([taker]);
     const er = await f(`${base}/ultra/v1/execute`, {
       method: 'POST', headers, signal: AbortSignal.timeout(60_000),
       body: JSON.stringify({ signedTransaction: Buffer.from(tx.serialize()).toString('base64'), requestId: order.requestId }),
@@ -213,23 +276,25 @@ export class UltraSwapper implements Swapper {
     if (!er.ok || ex.status !== 'Success' || !ex.signature) throw new Error(`execute: ${ex.error ?? ex.code ?? er.status}`);
     const outAmountRaw = BigInt(ex.outputAmountResult ?? order.outAmount ?? '0');
     this.opts.log?.(`jupiter ultra via ${order.router ?? '?'}: ${a.amountRaw} ${a.inputMint.toBase58().slice(0, 6)} -> ${outAmountRaw} ${a.outputMint.toBase58().slice(0, 6)}, tx ${ex.signature}`);
-    if (a.destinationOwner && !a.destinationOwner.equals(this.operator.publicKey) && outAmountRaw > 0n) {
-      await this.forward(a.outputMint, outAmountRaw, a.destinationOwner);
+    // SOL out lands as lamports on the taker and the runner's sweep carries it home; tokens are forwarded
+    if (a.destinationOwner && !a.destinationOwner.equals(taker.publicKey) && outAmountRaw > 0n && !a.outputMint.equals(NATIVE_SOL_MINT)) {
+      await this.forward(taker, a.outputMint, outAmountRaw, a.destinationOwner);
     }
     return { signature: ex.signature, outAmountRaw };
   }
 
-  /** Ultra always pays the taker: move the output on to whoever it was for. */
-  private async forward(mint: PublicKey, amount: bigint, to: PublicKey): Promise<string> {
+  /** Ultra always pays the taker: move the output on to whoever it was for. The operator pays the rent for the destination account. */
+  private async forward(from: Keypair, mint: PublicKey, amount: bigint, to: PublicKey): Promise<string> {
     const program = await tokenProgramFor(this.connection, mint);
     const decimals = (await getMint(this.connection, mint, 'confirmed', program)).decimals;
-    const src = getAssociatedTokenAddressSync(mint, this.operator.publicKey, false, program);
+    const src = getAssociatedTokenAddressSync(mint, from.publicKey, false, program);
     const dst = getAssociatedTokenAddressSync(mint, to, true, program);
     const tx = new Transaction().add(
       createAssociatedTokenAccountIdempotentInstruction(this.operator.publicKey, dst, to, mint, program),
-      createTransferCheckedInstruction(src, mint, dst, this.operator.publicKey, amount, decimals, [], program),
+      createTransferCheckedInstruction(src, mint, dst, from.publicKey, amount, decimals, [], program),
     );
-    return sendAndConfirmTransaction(this.connection, tx, [this.operator], { commitment: 'confirmed' });
+    const signers = from.publicKey.equals(this.operator.publicKey) ? [this.operator] : [this.operator, from];
+    return sendAndConfirmTransaction(this.connection, tx, signers, { commitment: 'confirmed' });
   }
 }
 
@@ -267,7 +332,7 @@ export class Entry implements EntryLike {
   private prices: (mint: string) => Promise<Prices>;
   private raydium: Promise<Raydium> | null = null;
   constructor(private d: EntryDeps) {
-    const classic = new JupiterSwapper(d.connection, d.operator, { apiKey: d.jupiterApiKey, slippageBps: d.slippageBps });
+    const classic = new JupiterSwapper(d.connection, d.operator, { apiKey: d.jupiterApiKey, slippageBps: d.slippageBps, log: d.log });
     this.swapper = d.swapper ?? (d.jupiterApiKey ? new UltraSwapper(d.connection, d.operator, { apiKey: d.jupiterApiKey, fallback: classic, log: d.log }) : classic);
     this.prices = d.prices ?? ((mint) => jupiterPrices(mint));
     fs.mkdirSync(this.quotesDir, { recursive: true });

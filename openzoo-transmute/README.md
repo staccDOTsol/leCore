@@ -46,12 +46,18 @@ these commands in `npx openzoo` is [`docs/OPENZOO_CLI_PATCH.md`](docs/OPENZOO_CL
 ## Install
 
 ```sh
-# stand-alone
-npx openzoo-transmute help
+# from this repository — the package is not on npm yet (`npm view openzoo-transmute` → 404)
+cd openzoo-transmute && npm install --no-audit --no-fund
+node bin/openzoo-transmute.js help        # or: npm link && openzoo-transmute help
 
-# or through the openzoo CLI once docs/OPENZOO_CLI_PATCH.md is applied
+# once published: npx openzoo-transmute help
+# through the openzoo CLI once docs/OPENZOO_CLI_PATCH.md is applied:
 npx openzoo build | deploy | serve | inspect
 ```
+
+Until it is published, read `npx openzoo-transmute` in the examples below as
+`node <repo>/openzoo-transmute/bin/openzoo-transmute.js` (or the `npm link`ed
+`openzoo-transmute`).
 
 Requirements: Node ≥ 18, and for `build`/`deploy` the Solana toolchain
 (`cargo build-sbf`): `sh -c "$(curl -sSfL https://release.anza.xyz/stable/install)"`.
@@ -80,41 +86,43 @@ functions (2):
 ```
 
 `deploy` prints the rent sheet before spending anything and refuses mainnet
-without `--yes`:
+without `--yes` (this one was measured on a local validator for the two-route
+sample in [The generated crate](#the-generated-crate), `.so` built with `--arch v3`):
 
 ```
   item                                bytes       SOL
   program account                        36    0.0011
-  program data (2×.so = 382,048 B)  382,093    2.6603
-  /app.js                                60    0.0013
-  /index.html                           101    0.0016
+  program data (2×.so = 416,672 B)  416,717    2.9012
+  /app.js                                52    0.0013
+  /index.html                            44    0.0012
   /.zoo/manifest.json (manifest)        939    0.0074
-  rent total                                   2.6717
-  + tx fees (approx.)                          0.0011
-  TOTAL                                        2.6728
+  rent total                                   2.9123
+  + tx fees (approx.)                          0.0012
+  TOTAL                                        2.9135
+  (rent per http://127.0.0.1:8899)
 ```
 
 Then `serve` maps HTTP onto the program:
 
 ```
-GET /                    → 200 text/html          (asset PDA, etag, 304 on If-None-Match)
-GET /api/hello?name=zoo  → 200 {"hello":"zoo",...}  x-zoo-simulated: true, x-zoo-cu: 16595
-POST /api/counter        → 200 {"hits":1}           x-zoo-signature: <tx>, x-zoo-simulated: false
-POST /api/counter        → 402 payment required     (gateway started without a keypair)
+GET /                        → 200 text/html          (asset PDA, etag, 304 on If-None-Match)
+GET /api/hello?name=zoo&n=21 → 200 {"hello":"zoo","n":42,"greeting":"hi"}   x-zoo-simulated: true, x-zoo-cu: 11067
+POST /api/counter            → 200 {"hits":1}         x-zoo-signature: <tx>, x-zoo-simulated: false, x-zoo-cu: 10634
+POST /api/counter            → 402 payment required   (gateway started without a keypair)
 ```
 
 ## CLI reference
 
 | command | what it does |
 |---|---|
-| `build [dir] [--out .zoo-out] [--name <crate>] [--arch v0\|v3] [--cluster <c>] [--skip-cargo] [--json]` | read the app (`lib/vercel.js`), transmute (`lib/compile/`), write `<out>/.zoo/{crate/, manifest.json, report.json, static-plan.json, build.json}`, run `cargo build-sbf --arch <arch>` → `.zoo/deploy/<name>.so`, print the cost sheet. Default arch is `v0` (mainnet); `deploy` re-detects the cluster's SBPF version and rebuilds if needed. Exit code 2 when nothing was eligible |
+| `build [dir] [--out .zoo-out] [--name <crate>] [--arch v0\|v3] [--cluster <c>] [--skip-cargo] [--json]` | read the app (`lib/vercel.js`), transmute (`lib/compile/`), write `<out>/.zoo/{crate/, manifest.json, report.json, static-plan.json, build.json}`, run `cargo build-sbf --arch <arch>` → `.zoo/deploy/<name>.so`, print the cost sheet (`--cluster` only chooses the RPC whose rent parameters price it, default `localnet`; unreachable → the 6.96 SOL/MB rule). Default arch is `v0` (mainnet); `deploy` re-detects the cluster's SBPF version and rebuilds if needed. Exit code 2 when nothing was eligible |
 | `deploy [dir\|outDir] [--cluster mainnet\|devnet\|testnet\|localnet\|<url>] [--keypair <path>] [--yes] [--program <id>] [--concurrency 4] [--skip-assets] [--force] [--json]` | deploy or upgrade the program (keypair kept at `.zoo/program-keypair.json`, so redeploys upgrade in place), upload every static file (unchanged ones skipped by comparing bytes on chain), write `/.zoo/manifest.json`, record `.zoo/deploy.json` |
-| `serve [programId] [--cluster <c>] [--port 4402] [--host 127.0.0.1] [--keypair <path>] [--quiet]` | the local gateway; `programId` defaults to the last `.zoo/deploy.json`. Reads are simulated, writes are signed by the wallet; without a wallet writes answer 402 |
+| `serve [programId] [--cluster <c>] [--port 4402] [--host 127.0.0.1] [--keypair <path>\|--no-keypair] [--quiet]` | the local gateway; `programId` defaults to the `.zoo/deploy.json` under the current directory (or its `.zoo-out/`). Reads are simulated, writes are signed by the wallet; without a wallet (or with `--no-keypair`) writes answer 402. Without `--cluster`/`OPENZOO_CLUSTER` this command assumes `localnet`, unlike the others |
 | `inspect [dir] [--json]` | the Vercel model (functions, static files, routes, crons) plus the eligibility report |
 | `status <programId> [--cluster <c>] [--json]` | program account, authority, `maxDataLen`, deploy slot, and the on-chain manifest |
 | `help`, `--version` | |
 
-Environment: `OPENZOO_CLUSTER` (default `mainnet`), `OPENZOO_RPC` (mainnet RPC
+Environment: `OPENZOO_CLUSTER` (default `mainnet` for `deploy`/`status`, `localnet` for `serve`), `OPENZOO_RPC` (mainnet RPC
 URL), `OPENZOO_KEYPAIR` / `OPENZOO_WALLET` (signer path), `OPENZOO_DEBUG=1`
 (stack traces). Signer discovery order (`lib/wallet.js`): `--keypair` →
 `OPENZOO_KEYPAIR` → `OPENZOO_WALLET` or `~/.openzoo/wallet.json` (the openzoo
@@ -129,21 +137,38 @@ program log lines when the instruction fails, `404` JSON (or the app's
 
 ## The generated crate
 
-`build` writes a crate that depends on the runtime by path. For the sample app
-above (`pages/api/hello.js` + `app/api/counter/route.js`) it looks like this:
+`build` writes a crate that depends on the runtime by path. For this two-route
+sample —
+
+```js
+// pages/api/hello.js
+export default function handler(req, res) {
+  res.status(200).json({ hello: req.query.name || 'world', n: Number(req.query.n) * 2, greeting: process.env.GREETING })
+}
+// app/api/counter/route.js
+import { kv } from '@vercel/kv'
+export async function POST() { const n = await kv.incr('hits'); return Response.json({ hits: n }) }
+```
+
+— with `GREETING=hi` in `.env.production`, the compiler (`lib/compile/index.js`,
+`transmute()`) emits exactly this; only the ~240-line prelude of helper
+functions between the entrypoint and the routes is elided:
 
 ```toml
-# .zoo-out/.zoo/crate/Cargo.toml
+# .zoo-out/.zoo/crate/Cargo.toml   (crate name = the app directory, underscored)
 [package]
-name = "my-site"
+name = "my_site"
 version = "0.1.0"
 edition = "2021"
+description = "Generated by openzoo-transmute: Vercel Lambdas re-hosted as a Solana program"
+publish = false
 
 [lib]
 crate-type = ["cdylib", "lib"]
 
 [dependencies]
 pinocchio = "0.11.2"
+libm = "0.2"
 zoo-host = { path = "<openzoo-transmute>/runtime/zoo-host" }
 
 [profile.release]
@@ -154,53 +179,70 @@ opt-level = 3
 ```
 
 ```rust
-// .zoo-out/.zoo/crate/src/lib.rs (excerpt)
+// .zoo-out/.zoo/crate/src/lib.rs
+//! Generated by openzoo-transmute — do not edit.
+//! nextjs (nextjs) — 2 route(s), 2 static file(s)
+//! route 0: /api/hello ← api/hello
+//! route 1: /api/counter [POST] ← api/counter
 #![no_std]
+#![allow(unused_mut, unused_variables, unused_assignments, dead_code, unused_parens, unreachable_code, unused_braces, unused_labels, unused_imports, non_snake_case, non_upper_case_globals, unused_unsafe, clippy::all)]
 extern crate alloc;
+use alloc::{format, string::String, vec::Vec};
 use pinocchio::{AccountView, Address, ProgramResult};
-use zoo_host::{Ctx, Val, Route};
+use zoo_host::{Ctx, Route, Val};
+use zoo_host::val as zv;
+use zoo_host::json as zjson;
 
 pinocchio::program_entrypoint!(process_instruction);
 pinocchio::default_allocator!();
 pinocchio::nostd_panic_handler!();
 
-const ENV: &[(&str, &str)] = &[("GREETING", "hi")];        // .env.production, baked in
-const ROUTES: &[Route] = &[route_0, route_1];                // index = manifest.routes[i].index
-
-// pages/api/hello.js:
-//   export default function handler(req, res) {
-//     res.status(200).json({ hello: req.query.name || 'world', n: Number(req.query.n) * 2 })
-//   }
-fn route_0(cx: &mut Ctx) -> Result<(), Val> {
-    let mut o = Val::obj();
-    let q = cx.req_query();
-    let name = { let l = q.get_str("name"); if l.truthy() { l } else { Val::str("world") } };
-    o.set_str("hello", name);
-    o.set_str("n", Val::Num(q.get_str("n").to_num()).mul(&Val::Num(2.0)));
-    cx.res_status(&Val::Num(200.0));
-    cx.res_json(&o);
-    Ok(())
-}
-
-// app/api/counter/route.js:
-//   export async function POST() { const n = await kv.incr('hits'); return Response.json({ hits: n }) }
-fn route_1(cx: &mut Ctx) -> Result<(), Val> {
-    let n = cx.kv_incrby(&Val::str("hits"), &Val::Num(1.0))?;   // `?` = the KV account is missing → discovery
-    let mut o = Val::obj();
-    o.set_str("hits", n);
-    cx.respond_json(&o, &Val::Undef);
-    Ok(())
-}
+/// The Lambda environment table, baked at build time (public on chain).
+const ENV: &[(&str, &str)] = &[("GREETING", "hi")];
+/// Route table: instruction byte 1 indexes it.
+const ROUTES: &[Route] = &[route_0, route_1];
 
 pub fn process_instruction(program_id: &Address, accounts: &mut [AccountView], data: &[u8]) -> ProgramResult {
     zoo_host::dispatch(program_id, accounts, data, ROUTES, ENV)
+}
+
+// … prelude: __zoo_query (req.query + route params), __zoo_resp / __zoo_send (Response objects),
+//    __zoo_cookies, __zoo_num, __zoo_set_headers, … …
+
+// ---- route 0: api/hello (pages/api/hello.js)
+const PARAMS_0: &[(&str, bool)] = &[];
+fn route_0(cx: &mut Ctx) -> Result<(), Val> {
+    let _ = { let __a1 = Val::Num(200.0); cx.res_status(&__a1); Val::Undef };
+    let _ = { let __a2 = { let mut __o3 = Val::obj(); __o3.set_str("hello", { let __x4 = (__zoo_query(cx, PARAMS_0)).get_str("name"); if !__x4.truthy() { Val::str("world") } else { __x4 } }); __o3.set_str("n", ({ let __a: Vec<Val> = alloc::vec![(__zoo_query(cx, PARAMS_0)).get_str("n")]; zv::global_call("Number", &__a)? }).mul(&(Val::Num(2.0)))); __o3.set_str("greeting", { let __a5 = Val::str("GREETING"); cx.env(&__a5) }); __o3 }; cx.res_json(&__a2); Val::Undef };
+    Ok(())
+}
+
+// ---- route 1: api/counter (app/api/counter/route.js)
+const PARAMS_1: &[(&str, bool)] = &[];
+fn route_1(cx: &mut Ctx) -> Result<(), Val> {
+    let __m = cx.req_method();
+    match __m.as_str() {
+        Some("POST") => route_1_post(cx),
+        Some("OPTIONS") => { cx.res_status(&Val::Num(204.0)); cx.res_header(&Val::str("allow"), &Val::str("POST, OPTIONS")); cx.res_end(&Val::Undef); Ok(()) }
+        _ => { cx.res_status(&Val::Num(405.0)); cx.res_header(&Val::str("allow"), &Val::str("POST, OPTIONS")); cx.res_end(&Val::Undef); Ok(()) }
+    }
+}
+fn route_1_post(cx: &mut Ctx) -> Result<(), Val> {
+    let mut v_n: Val = { let __a6 = Val::str("hits"); let __a7 = Val::Num(1.0); cx.kv_incrby(&__a6, &__a7)? };
+    { let __rv = { let __b = { let mut __o8 = Val::obj(); __o8.set_str("hits", v_n.clone()); __o8 }; let __i = Val::Undef; __zoo_resp("json", __b, __i) }; __zoo_send(cx, &__rv)?; }
+    return Ok(());
+    Ok(())
 }
 ```
 
 `Route = fn(&mut Ctx) -> Result<(), Val>`; `Err(v)` is a thrown JS value and
 answers 500 like a crashed Lambda; returning without responding answers 504 like
-a Lambda that never ended its response. The `.so` for this crate is ~190 KB and
-`GET /api/hello` costs ~16.6 k compute units.
+a Lambda that never ended its response. The `?` after `kv_incrby` is the KV
+account-discovery path: a missing account is logged as `ZOOK` and the gateway
+retries with it. Built with `--arch v3` this crate is a 208,336-byte `.so`
+(a 416,717-byte program data account, 2.90 SOL of rent); on a local validator
+`GET /api/hello?name=zoo&n=21` costs 11,067 CU and `POST /api/counter`
+10,634 CU — nowhere near the 400 k limit.
 
 ## Tests
 
@@ -210,9 +252,9 @@ npm install --no-audit --no-fund
 npm test                                   # node --test test/*.test.js
 ```
 
-The unit tests need no chain. The end-to-end tests deploy the sample program
-and drive the gateway against a **local validator**; they skip themselves with a
-reason when either is missing:
+The unit tests need no chain. The end-to-end test in `test/gateway.test.js`
+deploys a pre-built site program and drives the gateway against a **local
+validator**; it skips itself with a reason when either is missing:
 
 ```sh
 # 1. toolchain (once)
@@ -223,14 +265,18 @@ export PATH="$HOME/.local/share/solana/install/active_release/bin:$PATH"
 solana-test-validator --reset
 solana airdrop 100 --url http://127.0.0.1:8899   # ~/.config/solana/id.json
 
-# 3. the sample site program (test validator = SBPF v3; mainnet = v0)
-cd <sample-site>; cargo build-sbf --arch v3      # → target/deploy/sample_site.so
+# 3. a site program with route 0 = /api/hello (pages style) and route 1 =
+#    /api/counter (POST, kv key "hits") — e.g. the two-route sample below
+#    (test validator = SBPF v3; mainnet = v0):
+openzoo-transmute build <sample> --arch v3       # → <sample>/.zoo-out/.zoo/deploy/<name>.so
+#    then point the SAMPLE_SO constant in test/gateway.test.js at that .so
+#    (it is a fixed path today; no sample crate ships with the package yet)
 
 # 4. run
 OPENZOO_TEST_RPC=http://127.0.0.1:8899 npm test
 ```
 
-`test/gateway.test.js` looks for the sample `.so` and a validator at
+`test/gateway.test.js` looks for the `.so` at `SAMPLE_SO` and a validator at
 `OPENZOO_TEST_RPC` (default `http://127.0.0.1:8899`); `test/build.test.js`
 probes `localnet` for real rent numbers and falls back to the 6.96 SOL/MB rule.
 The runtime crate also builds on the host (`cd runtime/zoo-host && cargo build`;
@@ -244,7 +290,7 @@ bin/openzoo-transmute.js     the executable (→ lib/cli.js run())
 lib/cli.js                   build · deploy · serve · inspect · status
 lib/vercel.js                the Vercel deployment model (Build Output API v3 reader / synthesizer)
 lib/eligibility.js           what can run on chain, with reasons
-lib/compile/                 JS → Rust (parse.js: acorn + TS stripping; lowering onto zoo_host)
+lib/compile/                 JS → Rust: parse.js (acorn + TS stripping) → ir.js (lowering) → rust.js (printer, crate skeleton, prelude)
 lib/build.js                 crate + manifest + cargo build-sbf + cost sheet
 lib/deploy.js                deploy / upgrade + assets + manifest
 lib/gateway.js               the local HTTP front (routes, static, 402/413 seams, explorer)

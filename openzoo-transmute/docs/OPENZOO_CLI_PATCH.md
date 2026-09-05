@@ -8,6 +8,15 @@ to the exit code, sets `process.exitCode` when non-zero and never calls
 
 Two files change.
 
+**Status.** openzoo's `transmute-cli` branch carries hunk 1 (`bin/openzoo.js`,
+byte-identical to the diff below) and nothing else. Hunk 2 waits for
+`openzoo-transmute` to be published: `npm view openzoo-transmute` is a 404
+today, so both the `"openzoo-transmute": "^0.1.0"` dependency and the
+`npx --yes openzoo-transmute@latest` fallback fail on a fresh machine. Until
+then, install the package from its path so the `import('openzoo-transmute/lib/cli.js')`
+branch resolves: `npm install /path/to/leCore/openzoo-transmute` inside the
+openzoo checkout (or `npm link` in that directory, then `npm link openzoo-transmute`).
+
 ## 1. `bin/openzoo.js`
 
 ```diff
@@ -74,6 +83,9 @@ further arguments is rewritten to `help` so it prints this package's usage.
 ## 2. `package.json`
 
 ```diff
+--- a/package.json
++++ b/package.json
+@@ -21,9 +21,10 @@
    "dependencies": {
      "@modelcontextprotocol/sdk": "^1.12.0",
      "@solana/spl-token": "^0.4.14",
@@ -91,7 +103,7 @@ further arguments is rewritten to `help` so it prints this package's usage.
 depend on `@solana/web3.js ^1.98.4`, so one copy is installed. Until the
 dependency is pinned, the `catch` branch above shells out to
 `npx --yes openzoo-transmute@latest …`, so `npx openzoo deploy` works on a
-fresh machine either way.
+fresh machine either way — once the package is on npm (see *Status* above).
 
 ## The wallet
 
@@ -114,7 +126,7 @@ the rent sheet). The mainnet RPC default is the one the openzoo proxy uses
 ## Checking the patch
 
 ```sh
-npm install                                 # pulls openzoo-transmute
+npm install                                 # pulls openzoo-transmute (or: npm install /path/to/leCore/openzoo-transmute)
 node bin/openzoo.js help | grep -A1 'openzoo build'
 node bin/openzoo.js transmute               # prints openzoo-transmute's usage
 node bin/openzoo.js inspect ./my-app        # Vercel model + eligibility, no chain access

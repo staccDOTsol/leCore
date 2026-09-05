@@ -144,7 +144,7 @@ Rust calls these `Ctx` methods (`runtime/zoo-host/src/ctx.rs`) instead:
 | `req.query` | parsed search params; Vercel turns a repeated key (`?a=1&a=2`) into an array | `req_query()` (`val::parse_query`): URL-decoded string values, **last value wins** for a repeated key |
 | `req.headers[name]` | lowercase names | `req_headers()`, `req_header(&name)` → string or `null` |
 | `req.body` | parsed by `content-type`: `application/json` → object, `application/x-www-form-urlencoded` → object, otherwise string; empty → `undefined` | `req_body()` (no content type: tries JSON, falls back to the string) |
-| `req.cookies` | parsed `cookie` header | read `req_header("cookie")`; `next/headers` `cookies()` is ineligible for now |
+| `req.cookies` | parsed `cookie` header | `req.cookies.<name>` compiles to a generated cookie-parsing helper over `req_header("cookie")`; `next/headers` `cookies()` is ineligible for now |
 | `res.status(code)` | set status, chainable | `res_status(&code)` (100–999) |
 | `res.json(obj)` | `application/json; charset=utf-8` | `res_json(&v)` |
 | `res.send(body)` | string / object / Buffer | `res_send(&v)`: string → `text/html; charset=utf-8` unless set; object/array/number/bool → json; `null`/`undefined` → empty |
@@ -157,8 +157,10 @@ App-router (`app/**/route.ts`) handlers get the fetch-style pair instead:
 | app router / `next/server` | `Ctx` |
 |---|---|
 | `new URL(request.url)` | `req_full_url()` — origin is the synthetic `https://zoo.sol`, only path + search are real |
-| `request.nextUrl.searchParams.get(k)` | `req_query_get(&k)` → string or `null` |
-| `request.headers.get(k)` | `req_header(&k)` |
+| `request.nextUrl.searchParams.get(k)` (also `has`, `getAll`, `entries`, `keys`, `values`, `toString`) | `req_query_get(&k)` → string or `null`; the rest are lowered over `req_query()` |
+| `request.headers.get(k)` / `.has(k)` | `req_header(&k)` |
+| `request.cookies.get(k)` / `.has(k)` / `.getAll()` | the same generated cookie helper |
+| `{ params }` (second argument), `params.id` | the route's dynamic segments, delivered by the gateway as `x-zoo-param-<name>` request headers (`PARAMS_N` in the generated route); a name that is not a segment of the route is a warning and reads `undefined` |
 | `await request.text()` / `.json()` | `req_text()` / `req_json()` (throws `SyntaxError` on a malformed body, like fetch) |
 | `Response.json(body, init)` / `NextResponse.json` | `respond_json(&body, &init)` — `init.status`, `init.headers` applied |
 | `new Response(body, init)` / `new NextResponse` | `respond(&body, &init)` — default `text/plain; charset=utf-8` |
@@ -253,7 +255,7 @@ changes what one Lambda instance may do:
 | status | 100–999 | `u16` | `res_status` |
 | clock | seconds (`Clock.unix_timestamp`), `Date.now()` rounds to 1000 ms | sysvar | `now_ms` |
 
-### The code subset (`lib/eligibility.js`, `lib/compile/parse.js`)
+### The code subset (`lib/eligibility.js`, `lib/compile/parse.js`, `lib/compile/ir.js`)
 
 A handler is eligible when everything it does can be expressed in the
 `zoo-host` subset: pure computation over JS values, the bridge surface, `@vercel/kv`,
@@ -266,10 +268,11 @@ carries `file:line`.
 | no filesystem / process | `fs`, `path`, `os`, `child_process`, `process.*` beyond `process.env`, `require()` |
 | no time or randomness beyond the clock | `setTimeout`/`setInterval`/`setImmediate`/`queueMicrotask`, `performance`, `crypto`; `Math.random` is not in the accepted `Math.*` set (`MATH_FUNCS`) — validators must agree on the result |
 | imports | only `@vercel/kv` (`kv`, `createClient`), `next/server` (`NextResponse`), and the `next` / `@vercel/node` **types**; `next/headers`, `next/cache`, `next/navigation`, `@vercel/edge`, `@vercel/functions` are refused with a reason; local `./helper` imports are not transmuted yet (inline them) |
-| handler shape (`lib/compile/parse.js::readModule`) | `export default (req, res)`, `export function GET/POST/…`, `module.exports = fn`; higher-order wrappers (`withAuth(handler)`) are refused: export the plain handler |
+| handler shape (`lib/compile/parse.js::readModule`) | `export default (req, res)`, `export function GET/POST/…`, `module.exports = fn`, and `export const config = { runtime: 'edge' }` with a web-style `(request) => Response` default export; in an `app/**/route` file the default export is *not* a handler (export the methods). Higher-order wrappers (`withAuth(handler)`) are refused (`resolveHandlerNode`): export the plain handler |
 | values | `undefined null boolean number string array object`; numbers are `f64` (`BigInt` refused); no `Map`/`Set`/`Symbol`/typed arrays/`Buffer`/`RegExp`/`Intl`; no classes, generators, `eval`, `Proxy` |
-| built-ins | strings: `toUpperCase toLowerCase trim* includes startsWith endsWith indexOf split slice substring substr charAt charCodeAt replace replaceAll repeat padStart padEnd concat at`; arrays: `push pop shift unshift join splice reverse flat flatMap map filter find findIndex some every forEach reduce sort`; `toFixed`, `hasOwnProperty`; `Math.*` (floor ceil round trunc abs sqrt pow sign log log2 log10 exp sin cos tan atan2 min max hypot + constants); `Number String Boolean isNaN isFinite parseInt parseFloat encodeURI(Component) decodeURI(Component)`; `JSON.parse/stringify` |
-| callbacks | `map/filter/find/findIndex/some/every/forEach/reduce/flatMap/sort` take an inline arrow or function; **a callback may not assign to a variable of the enclosing function** (`findAssignmentTo` / `freeVars` in `lib/compile/parse.js`) — accumulate with `reduce` or push into an array instead |
+| control flow | `if`/ternary, `for` / `for…of` / `for…in` / `while` / `do`, `switch`, `try/catch/finally`, labeled `break`/`continue` (not across a callback boundary), template literals, destructuring, `?.` and `??`, `typeof`; module-scope `const`s and helper functions. Refused: `with`, `this`, `arguments`, `instanceof`, tagged templates, dynamic `import()`, spread arguments, `obj[name]()` computed method calls, `?.()` |
+| built-ins | strings: `toUpperCase toLowerCase trim* includes startsWith endsWith indexOf split slice substring substr charAt charCodeAt replace replaceAll repeat padStart padEnd concat at toString`; arrays: `push pop shift unshift join splice reverse flat flatMap map filter find findIndex some every forEach reduce sort`, `Array.isArray`, `Array.from(x)`, `Array.of`; `toFixed`, `hasOwnProperty`; `Object.keys values entries assign fromEntries hasOwn` (`freeze`/`seal` are no-ops); `Math.*` (floor ceil round trunc abs sqrt pow sign log log2 log10 exp sin cos tan atan2 min max hypot + constants); `Number String Boolean isNaN isFinite parseInt parseFloat encodeURI(Component) decodeURI(Component)`, `Number.isInteger/isNaN/isFinite/isSafeInteger` + constants; `JSON.parse/stringify`; `Date.now()`, `new Date().toISOString()/getTime()`; `console.log/warn/error` → a program log line. Refused with a reason: any other method (`.match`, `.localeCompare`, …), `String.fromCharCode` and every `String.*` static, `new Date(value)`, `Array.from(x, fn)`, `new Array(n)`, `structuredClone`, `atob`/`btoa` |
+| callbacks and local functions | `map/filter/find/findIndex/some/every/forEach/reduce/flatMap/sort` take an inline arrow/function or a function declared by name; an inline callback may read **and assign** the enclosing function's variables (`let total = 0; xs.forEach(x => { total += x })` compiles to a Rust closure). A *named* local function that captures a variable is a copied closure, so one that **mutates** a captured variable (`let n = 0; function bump() { n++ }`) is refused (`findMutation` / `freeVars` in `lib/compile/ir.js`, `parse.js`) — return the value instead. Functions are not first-class values otherwise (no storing them in objects, no passing them except as these callbacks) |
 | `async` / `await` | accepted and erased: `await kv.get(k)` is a synchronous account read |
 | `kv.*` | `get set incr incrby decr decrby del exists`; anything else (`hget`, `lpush`, `expire`, pipelines) is ineligible |
 | function metadata | `middleware`, `supportsResponseStreaming`, `prerender`, non-Node runtimes → ineligible; `crons` and `maxDuration > 60` → warnings |

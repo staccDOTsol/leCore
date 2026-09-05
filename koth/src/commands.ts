@@ -89,7 +89,8 @@ export class Commands {
   static parse(text: string): { cmd: string; args: string[] } | null {
     const cb = text.match(/^cmd:(\w+)$/) ?? text.match(/^(paid|cancel|addr):([A-Za-z0-9_-]+)$/);
     if (cb) return cb[2] ? { cmd: cb[1], args: [cb[2]] } : { cmd: cb[1], args: [] };
-    const cleaned = text.replace(/@\w+/g, ' ').replace(/\s+/g, ' ').trim();
+    // drop mentions, then anything before the first word (the ".@bot king" convention, quotes, dashes) -- a leading slash survives
+    const cleaned = text.replace(/@\w+/g, ' ').replace(/\s+/g, ' ').trim().replace(/^[^A-Za-z/]+/, '');
     const m = cleaned.match(/^\/?(king|hall|fee|entry|shill|paid|cancel|help|start|challenge)\b(?:@\w+)?\s*(.*)$/i);
     if (!m) return null;
     const raw = m[1].toLowerCase();

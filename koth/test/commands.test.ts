@@ -33,6 +33,17 @@ function setup(entry: FakeEntry | null) {
   return { hill, commands };
 }
 
+describe('parse', async () => {
+  const { Commands } = await import('../src/commands.js');
+  it('reads the command through mentions, the ".@bot" convention and leading punctuation', () => {
+    expect(Commands.parse('.@openzoobot king')).toEqual({ cmd: 'king', args: [] });
+    expect(Commands.parse('@openzoobot shill So111 the chain is sol')).toEqual({ cmd: 'shill', args: ['So111', 'the', 'chain', 'is', 'sol'] });
+    expect(Commands.parse('/fee@openzoobotbot')).toEqual({ cmd: 'fee', args: [] });
+    expect(Commands.parse('"paid q1"')).toEqual({ cmd: 'paid', args: ['q1"'] });
+    expect(Commands.parse('gm @openzoobot')).toBeNull();
+  });
+});
+
 describe('command parsing', () => {
   it('accepts slashes, bot mentions and bare words', () => {
     expect(Commands.parse('/king')).toEqual({ cmd: 'king', args: [] });

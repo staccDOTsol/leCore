@@ -52,12 +52,13 @@ describe('telegram surface', () => {
     ]);
     const tg = new TelegramSurface(commands, { token: 'T', chatId: '-100', fetchImpl: f });
     expect(await tg.pollOnce(0)).toBe(1);
+    expect([...tg.chats]).toEqual(['-100', '42']);
     expect(seen[0]).toMatchObject({ surface: 'telegram', author: '@alice', authorId: 'tg:7', text: 'king' });
     const photo = calls.find((c) => c.method === 'sendPhoto')!;
     expect(photo.body).toMatchObject({ chat_id: 42, photo: 'https://img/king.png', parse_mode: 'HTML', reply_to_message_id: 5 });
     expect(photo.body.caption).toBe('<b>KING</b> <x>');
     expect((photo.body.reply_markup as { inline_keyboard: unknown[][] }).inline_keyboard[0][0]).toEqual({ text: 'Hall', callback_data: 'cmd:hall' });
-    expect(calls[0].body).toMatchObject({ offset: 0, allowed_updates: ['message', 'callback_query'] });
+    expect(calls[0].body).toMatchObject({ offset: 0, allowed_updates: ['message', 'callback_query', 'my_chat_member'] });
 
     expect(await tg.pollOnce(0)).toBe(1);
     expect(calls.find((c) => c.method === 'answerCallbackQuery')?.body).toEqual({ callback_query_id: 'cb1' });
@@ -71,9 +72,26 @@ describe('telegram surface', () => {
     const sends = calls.filter((c) => c.method === 'sendMessage');
     expect(sends.find((c) => c.body.text === 'step 1')?.body.chat_id).toBe(7);
     expect(sends.find((c) => c.body.text === 'won')?.body.chat_id).toBe(7);
-    const ann = sends.find((c) => c.body.text === 'NEW KING')!;
-    expect(ann.body.chat_id).toBe('-100');
-    expect((ann.body.reply_markup as { inline_keyboard: unknown[][] }).inline_keyboard[0][0]).toEqual({ text: 'Challenge', callback_data: 'cmd:challenge' });
+    // the takeover is announced to every known chat except the DM it happened in
+    const anns = sends.filter((c) => c.body.text === 'NEW KING');
+    expect(anns.map((c) => c.body.chat_id).sort()).toEqual(['-100', '42']);
+    expect((anns[0].body.reply_markup as { inline_keyboard: unknown[][] }).inline_keyboard[0][0]).toEqual({ text: 'Challenge', callback_data: 'cmd:challenge' });
+  });
+
+  it('remembers chats it is added to, forgets ones it leaves, and registers its command menu', async () => {
+    const { f, calls } = fakeApi([
+      [{ update_id: 9, my_chat_member: { chat: { id: -555, type: 'supergroup', title: 'Shillers' }, new_chat_member: { status: 'member' } } }],
+      [{ update_id: 10, my_chat_member: { chat: { id: -555, type: 'supergroup', title: 'Shillers' }, new_chat_member: { status: 'kicked' } } }],
+    ]);
+    const tg = new TelegramSurface(commands, { token: 'T', fetchImpl: f });
+    await tg.start();
+    expect(calls.find((c) => c.method === 'setMyCommands')?.body).toMatchObject({ commands: expect.arrayContaining([expect.objectContaining({ command: 'shill' })]) });
+    await tg.pollOnce(0);
+    expect([...tg.chats]).toEqual(['-555']);
+    await tg.broadcast('hello everyone');
+    expect(calls.filter((c) => c.method === 'sendMessage').map((c) => c.body.chat_id)).toEqual(['-555']);
+    await tg.pollOnce(0);
+    expect(tg.chats.size).toBe(0);
   });
 
   it('falls back to plain text when Telegram rejects the HTML', async () => {

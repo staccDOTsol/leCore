@@ -93,8 +93,8 @@ export async function main(): Promise<void> {
 
   const surfaces: { broadcast(text: string, image?: string | null): Promise<void> }[] = [];
   if (cfg.telegram.token) {
-    const tg = new TelegramSurface(commands, { token: cfg.telegram.token, chatId: cfg.telegram.chatId, log });
-    surfaces.push(tg); void tg.poll(); log('telegram: polling');
+    const tg = new TelegramSurface(commands, { token: cfg.telegram.token, chatId: cfg.telegram.chatId, dataDir: cfg.dataDir, log });
+    surfaces.push(tg); await tg.start(); void tg.poll(); log('telegram: polling');
   }
   if (cfg.discord.token) {
     const dc = new DiscordSurface(commands, { token: cfg.discord.token, channelId: cfg.discord.channelId, log });

@@ -74,9 +74,11 @@ scripts/          create-config, launch-master, read-metadata, update-metadata, 
 
 Telegram is the first surface. Two values from BotFather / your group, and the bot is live:
 
-1. `@BotFather` → `/newbot` → `TELEGRAM_BOT_TOKEN`. Turn privacy mode OFF (`/setprivacy`) so it sees group messages.
-2. Add the bot to the group; `TELEGRAM_CHAT_ID` is the group's id (a negative number; `/getid`-style bots or the
-   `getUpdates` JSON show it). Takeovers and the master shillbot's cadence posts go there.
+1. `@BotFather` → `/newbot` → `TELEGRAM_BOT_TOKEN`. Turn privacy mode OFF (`/setprivacy`) so it sees bare words
+   like `king` in groups (slash commands and @mentions work either way).
+2. Add the bot to any group. It answers commands in every chat it is in, remembers each chat it is added to, and
+   posts takeovers and the master shillbot's cadence posts to all of them. `TELEGRAM_CHAT_ID` is optional: a home
+   group to post to from the first boot, before anyone has added it anywhere.
 
 ```bash
 cd koth && npm ci

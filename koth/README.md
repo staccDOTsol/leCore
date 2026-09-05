@@ -114,9 +114,9 @@ Keys, from the app on developer.x.com with user authentication set to **Read and
 access token as the bot account): `X_API_KEY`, `X_API_SECRET`, `X_ACCESS_TOKEN`, `X_ACCESS_SECRET`. `X_BEARER_TOKEN` and
 `X_BOT_USER_ID` are optional. `X_MAX_CHARS` defaults to 4000 (Premium); set 280 on a plain account. `X_POLL_SECONDS` paces the mention poll (429s are honoured).
 
-X forbids crypto addresses in posts for an app's first 7 days (403) and allows one cashtag per post, so on X addresses are shortened
-(`Hgtd…A9ru`) and the reply links the page that carries them with copy buttons: `/q/<quote-id>` for a quote, `/king` for the king
-and master mints. Set `X_RAW_ADDRESSES=1` once the app is old enough to post them inline.
+X refuses posts with an unbroken crypto address for an app's first 7 days (403) and allows one cashtag per post, so on X every
+address is written in groups of five characters (`HgtdK CcDUK N8rZN …`) and the reply links the page with copy buttons:
+`/q/<quote-id>` for a quote, `/king` for the king, master and fee-payer addresses. `X_RAW_ADDRESSES=1` posts them unbroken.
 
 ### Deploy (fly.io)
 

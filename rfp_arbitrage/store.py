@@ -40,6 +40,9 @@ CREATE TABLE IF NOT EXISTS talent (
     rating REAL, team_size INTEGER, raw TEXT, quality_score REAL, price_score REAL,
     last_seen TEXT DEFAULT CURRENT_TIMESTAMP
 );
+CREATE TABLE IF NOT EXISTS contexts (
+    opportunity_key TEXT PRIMARY KEY, context_id TEXT, chars INTEGER, backend TEXT, created TEXT DEFAULT CURRENT_TIMESTAMP
+);
 CREATE TABLE IF NOT EXISTS matches (
     opportunity_key TEXT, talent_keys TEXT, payload TEXT, score REAL,
     created TEXT DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY (opportunity_key, talent_keys)
@@ -220,6 +223,16 @@ class Store:
     def matches(self, limit: int = 50) -> list[Match]:
         rows = self.conn.execute("SELECT payload FROM matches ORDER BY score DESC LIMIT ?", (limit,))
         return [Match(**json.loads(r["payload"])) for r in rows]
+
+    # -- bound contexts (openzoo X-HRR-Context per solicitation) ----------------------
+    def context(self, key: str, backend: str) -> str | None:
+        r = self.conn.execute("SELECT context_id, chars FROM contexts WHERE opportunity_key=? AND backend=?", (key, backend)).fetchone()
+        return r["context_id"] if r else None
+
+    def put_context(self, key: str, context_id: str, chars: int, backend: str) -> None:
+        with self.tx() as c:
+            c.execute("INSERT OR REPLACE INTO contexts (opportunity_key, context_id, chars, backend) VALUES (?,?,?,?)",
+                      (key, context_id, chars, backend))
 
     # -- stats ---------------------------------------------------------------------
     def stats(self) -> dict[str, Any]:

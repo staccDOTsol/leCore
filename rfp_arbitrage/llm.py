@@ -97,13 +97,48 @@ class LLM:
         return f"{self.provider}:{self.model}"
 
     # -- public --------------------------------------------------------------------
-    def json(self, system: str, user: str, schema: dict[str, Any], max_tokens: int = 4000) -> dict[str, Any]:
+    @property
+    def can_bind(self) -> bool:
+        return self.provider != "anthropic"
+
+    def bind(self, corpus: str, context_id: str | None = None) -> str:
+        """openzoo: bind a document ONCE (free) and get its own context id. Every later
+        question goes with X-HRR-Context and a small body, so the proxy never auto-spills
+        the document and never mixes it with another one."""
+        body: dict[str, Any] = {"corpus": corpus}
+        if context_id:
+            body["context_id"] = context_id
+        url = self.url.rsplit("/chat/completions", 1)[0] + "/hrr/bind"
+        req = urllib.request.Request(url, data=json.dumps(body).encode("utf-8"),
+                                     headers={"Content-Type": "application/json"}, method="POST")
+        if self.api_key:
+            req.add_header("Authorization", "Bearer " + self.api_key)
+        for k, v in self.extra_headers.items():
+            req.add_header(k, v)
+        try:
+            with urllib.request.urlopen(req, timeout=self.timeout) as r:
+                data = json.loads(r.read().decode("utf-8"))
+        except urllib.error.HTTPError as e:
+            raise LLMError(f"bind -> HTTP {e.code} {e.read().decode('utf-8', 'replace')[:300]}") from None
+        except Exception as e:  # noqa: BLE001
+            raise LLMError(f"bind failed: {type(e).__name__}: {e}") from None
+        ctx = data.get("context_id")
+        if not ctx:
+            raise LLMError(f"bind returned no context_id: {str(data)[:200]}")
+        return str(ctx)
+
+    def json(self, system: str, user: str, schema: dict[str, Any], max_tokens: int = 4000,
+             context_id: str | None = None, top_k: int | None = None) -> dict[str, Any]:
         if self.over_budget():
             raise LLMError(f"LLM budget exhausted: ${self.spent_usd:.2f} of ${self.budget_usd:.2f} (RFP_LLM_BUDGET_USD)")
         self.calls += 1
         if self.provider == "anthropic":
             return self._anthropic_json(system, user, schema, max_tokens)
-        return self._openai_json(system, user, schema, max_tokens)
+        headers = {}
+        if context_id:
+            headers["X-HRR-Context"] = context_id
+            headers["x-hrr-top-k"] = str(top_k or 24)
+        return self._openai_json(system, user, schema, max_tokens, headers)
 
     def available(self) -> str | None:
         """None when the back end answers, else a one-line reason."""
@@ -135,12 +170,12 @@ class LLM:
             return f"{self.provider} at {self.url or 'api.anthropic.com'} unreachable: {type(e).__name__}: {e}"
 
     # -- openzoo / OpenAI-compatible -----------------------------------------------
-    def _post(self, body: dict[str, Any]) -> dict[str, Any]:
+    def _post(self, body: dict[str, Any], headers: dict[str, str] | None = None) -> dict[str, Any]:
         req = urllib.request.Request(self.url, data=json.dumps(body).encode("utf-8"),
                                      headers={"Content-Type": "application/json"}, method="POST")
         if self.api_key:
             req.add_header("Authorization", "Bearer " + self.api_key)
-        for k, v in self.extra_headers.items():
+        for k, v in {**self.extra_headers, **(headers or {})}.items():
             req.add_header(k, v)
         try:
             with urllib.request.urlopen(req, timeout=self.timeout) as r:
@@ -155,19 +190,20 @@ class LLM:
         except Exception as e:  # noqa: BLE001
             raise LLMError(f"could not reach {self.url}: {type(e).__name__}: {e}") from None
 
-    def _openai_json(self, system: str, user: str, schema: dict[str, Any], max_tokens: int) -> dict[str, Any]:
+    def _openai_json(self, system: str, user: str, schema: dict[str, Any], max_tokens: int,
+                     headers: dict[str, str] | None = None) -> dict[str, Any]:
         sys_msg = system + "\n\nRespond with ONE JSON object and nothing else. It must validate against this JSON Schema:\n" + json.dumps(schema)
         body: dict[str, Any] = {"model": self.model, "temperature": 0,
                                 "messages": [{"role": "system", "content": sys_msg}, {"role": "user", "content": user}],
-                                "max_tokens": max_tokens,
+                                "max_tokens": max_tokens, "disableStats": True,
                                 "response_format": {"type": "json_object"}}
         try:
-            data = self._post(body)
+            data = self._post(body, headers)
         except LLMError as e:
             if "400" not in str(e):
                 raise
             body.pop("response_format", None)      # proxy/model without JSON mode
-            data = self._post(body)
+            data = self._post(body, headers)
         try:
             text = data["choices"][0]["message"]["content"]
         except (KeyError, IndexError, TypeError):

@@ -74,14 +74,21 @@ def heuristic_scope(opp: Opportunity, text: str) -> dict[str, Any]:
             "basis": "heuristic"}
 
 
-def estimate_scope(opp: Opportunity, text: str, llm: LLM | None) -> dict[str, Any]:
+def estimate_scope(opp: Opportunity, text: str, llm: LLM | None, context_id: str | None = None) -> dict[str, Any]:
     if llm is None or not text.strip():
         return heuristic_scope(opp, text)
-    body = text if len(text) <= 60_000 else text[:45_000] + "\n...\n" + text[-15_000:]
-    user = (f"title: {opp.title}\nbuyer: {opp.buyer}\ncurrency: {opp.currency}\nnotice type: {opp.notice_type}\n"
-            f"codes: naics={opp.naics} unspsc={opp.unspsc} psc={opp.psc}\n\nTEXT:\n{body}")
+    head = (f"title: {opp.title}\nbuyer: {opp.buyer}\ncurrency: {opp.currency}\nnotice type: {opp.notice_type}\n"
+            f"codes: naics={opp.naics} unspsc={opp.unspsc} psc={opp.psc}\n\n")
+    if context_id and len(text) > 9_000:
+        user = head + ("The complete solicitation is bound as your context. Recall the scope of work, deliverables, "
+                       "period of performance, evaluation criteria and any budget, estimated value, ceiling or NTE "
+                       "figure before answering. Title and codes above are the only text in this message; everything "
+                       "else is in the bound context.")
+    else:
+        body = text if len(text) <= 60_000 else text[:45_000] + "\n...\n" + text[-15_000:]
+        user = head + "TEXT:\n" + body
     try:
-        d = llm.json(SCOPE_SYSTEM, user, SCOPE_SCHEMA, max_tokens=2500)
+        d = llm.json(SCOPE_SYSTEM, user, SCOPE_SCHEMA, max_tokens=2500, context_id=context_id, top_k=24)
     except LLMError as e:
         h = heuristic_scope(opp, text)
         h["assumptions"].append(f"LLM unavailable: {e}")
@@ -111,9 +118,9 @@ def to_usd(v: float | None, currency: str) -> float | None:
 
 
 def price(opp: Opportunity, text: str, llm: LLM | None, benchmark: dict[str, Any] | None = None,
-          cfg: Settings | None = None) -> dict[str, Any]:
+          cfg: Settings | None = None, context_id: str | None = None) -> dict[str, Any]:
     cfg = cfg or _settings()
-    scope = estimate_scope(opp, text, llm)
+    scope = estimate_scope(opp, text, llm, context_id)
     ask, basis = None, "unknown"
     if opp.estimated_value:
         ask, basis = to_usd(opp.estimated_value, opp.currency), "stated:notice"

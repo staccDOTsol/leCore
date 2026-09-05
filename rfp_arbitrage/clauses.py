@@ -295,21 +295,42 @@ def _user_prompt(opp: Opportunity, text: str, excerpts: list[Excerpt], full: boo
             f"each. If none of them addresses a topic, that topic is 'silent'.\n\nEXCERPTS:\n" + body)
 
 
-def analyze(opp: Opportunity, text: str, llm: LLM | None, full_threshold: int = 40_000) -> ClauseVerdict:
+SMALL_BODY = 9_000     # chars: under openzoo's spill threshold with room for the system prompt + schema
+
+
+def ensure_context(store, llm: LLM, key: str, text: str) -> str | None:
+    """Bind the solicitation once per backend and remember its context id."""
+    if llm is None or not llm.can_bind or not text.strip():
+        return None
+    ctx = store.context(key, llm.name)
+    if ctx:
+        return ctx
+    ctx = llm.bind(text)
+    store.put_context(key, ctx, len(text), llm.name)
+    return ctx
+
+
+def analyze(opp: Opportunity, text: str, llm: LLM | None, full_threshold: int = SMALL_BODY,
+            context_id: str | None = None) -> ClauseVerdict:
     key = opp.key
     heur = heuristic_verdict(key, text)
     if llm is None or not text.strip():
         return heur
     full = len(text) <= full_threshold
-    excerpts = [] if full else prescreen(text)
-    if not full and not excerpts:
+    excerpts = [] if full else prescreen(text, max_chars=SMALL_BODY if context_id else 36_000)
+    if not full and not excerpts and not context_id:
         # long document, nothing matched any topic: it is silent, and the model would only see noise
         heur.rationale = "no passage in the document mentions delegation, personnel, AI, residency or clearances"
         heur.confidence = 0.6
         heur.method = f"prescreen+{llm.name}"
         return heur
+    user = _user_prompt(opp, text, excerpts, full)
+    if context_id and not full:
+        user += ("\n\nThe COMPLETE solicitation is bound as your context: recall every passage about subcontracting, "
+                 "assignment, teaming, key personnel, artificial intelligence / automated tools, data residency, "
+                 "security clearance, citizenship and on-site requirements before answering.")
     try:
-        data = llm.json(SYSTEM_PROMPT, _user_prompt(opp, text, excerpts, full), VERDICT_SCHEMA, max_tokens=3000)
+        data = llm.json(SYSTEM_PROMPT, user, VERDICT_SCHEMA, max_tokens=3000, context_id=context_id, top_k=24)
     except LLMError as e:
         heur.other_blockers.append(f"LLM unavailable ({e}); heuristic verdict only")
         return heur

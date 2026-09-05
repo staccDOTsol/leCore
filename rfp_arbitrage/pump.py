@@ -140,7 +140,15 @@ class Pump:
                     continue
                 self._gate_claimed.add(o.key)
             try:
-                v = analyze(o, st.full_text(o.key), self.llm)
+                text = st.full_text(o.key)
+                ctx = None
+                if self.llm is not None:
+                    from .clauses import ensure_context
+                    try:
+                        ctx = ensure_context(st, self.llm, o.key, text)
+                    except Exception as e:  # noqa: BLE001
+                        self.log(f"[pump:gate] bind failed for {o.key}: {str(e)[:120]}")
+                v = analyze(o, text, self.llm, context_id=ctx)
                 st.put_verdict(v)
                 n += 1
                 with self._lock:
@@ -162,8 +170,9 @@ class Pump:
         cache: dict[str, dict] = {}
         for o in opps:
             bench = idx.benchmark(o)
+            ctx = st.context(o.key, self.llm.name) if self.llm is not None else None
             if bench.get("n", 0) >= 8:
-                st.put_pricing(o.key, price(o, st.full_text(o.key), self.llm, bench, self.cfg))
+                st.put_pricing(o.key, price(o, st.full_text(o.key), self.llm, bench, self.cfg, context_id=ctx))
                 with self._lock:
                     self.counts["priced"] += 1
                 continue
@@ -176,7 +185,7 @@ class Pump:
                     except Exception as e:  # noqa: BLE001
                         cache[k] = {"n": 0, "error": str(e)[:100]}
                 bench = cache[k]
-            st.put_pricing(o.key, price(o, st.full_text(o.key), self.llm, bench, self.cfg))
+            st.put_pricing(o.key, price(o, st.full_text(o.key), self.llm, bench, self.cfg, context_id=ctx))
             with self._lock:
                 self.counts["priced"] += 1
         return len(opps)

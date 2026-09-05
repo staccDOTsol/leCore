@@ -50,8 +50,13 @@ CREATE TABLE IF NOT EXISTS matches (
 class Store:
     def __init__(self, path: str | Path):
         self.path = Path(path)
-        self.conn = sqlite3.connect(str(self.path))
+        self.conn = sqlite3.connect(str(self.path), timeout=60.0, check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
+        try:
+            self.conn.execute("PRAGMA journal_mode=WAL")      # concurrent readers + one writer, no blocking reads
+            self.conn.execute("PRAGMA busy_timeout=60000")
+        except sqlite3.DatabaseError:
+            pass
         self.conn.executescript(SCHEMA)
 
     def close(self) -> None:
@@ -124,7 +129,7 @@ class Store:
 
     def documents(self, key: str) -> list[dict[str, Any]]:
         return [dict(r) for r in self.conn.execute(
-            "SELECT * FROM documents WHERE opportunity_key=? ORDER BY chars DESC", (key,))]
+            "SELECT * FROM documents WHERE opportunity_key=? AND kind != 'mark' ORDER BY chars DESC", (key,))]
 
     def has_document(self, key: str, url: str) -> bool:
         return self.conn.execute("SELECT 1 FROM documents WHERE opportunity_key=? AND url=?",
@@ -227,7 +232,7 @@ class Store:
             "by_source": by_source,
             "by_jurisdiction_tier": by_tier,
             "intellectual": one("SELECT COUNT(*) FROM opportunities WHERE intellectual_score >= 0.5"),
-            "documents": one("SELECT COUNT(*) FROM documents"),
+            "documents": one("SELECT COUNT(*) FROM documents WHERE kind != 'mark'"),
             "verdicts": one("SELECT COUNT(*) FROM verdicts"),
             "viable": one("SELECT COUNT(*) FROM verdicts WHERE viable=1"),
             "priced": one("SELECT COUNT(*) FROM pricing"),

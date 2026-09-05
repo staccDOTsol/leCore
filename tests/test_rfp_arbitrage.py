@@ -1,6 +1,7 @@
 """rfp_arbitrage -- the RFP indexer / legal gate / talent matcher. Network-free: sources are
 exercised through their converters on fixture rows, the LLM through a fake JSON back end."""
 import json
+import time
 import os
 import sqlite3
 import sys
@@ -346,3 +347,35 @@ def test_cli_smoke(tmp_path):
     assert main(["--db", db, "sources"]) == 0
     st = Store(db)
     assert st.stats()["talent"] == 10 and all(q >= 0 for q, p in st.talent_scores().values())
+
+
+def test_pump_streams_cumulatively(tmp_path, monkeypatch):
+    """Rows landing while the pump runs get fetched, gated, priced and reported without restarts."""
+    from rfp_arbitrage.pump import Pump, FETCHED_MARK
+    import rfp_arbitrage.attachments as att
+
+    db = tmp_path / "p.sqlite3"
+    st = Store(db)
+    st.upsert_talent(list(load_talent(FIX, "upwork")))
+    o1 = _opp("t:1", "Custom software development and data dashboard", "Build a Django app. Estimated value $240,000. " + PERMIT_SUB, naics=["541511"])
+    st.upsert_opportunities([o1]); c = classify(o1.title, o1.description); st.set_intellectual(o1.key, c.score, c.reason)
+    # no network: attachments stage records the sentinel only
+    monkeypatch.setattr(att.Fetcher, "urls_for", lambda self, opp: [])
+    logs = []
+    pump = Pump(db, threshold=0.5, interval=0.2, benchmark=False, out_dir=tmp_path / "out", log=logs.append)
+    # land a second row mid-run from another connection
+    def lander():
+        time.sleep(0.15)
+        st2 = Store(db)
+        o2 = _opp("t:2", "Grant writing services", "Write grant applications. Budget $40,000. " + PROHIBIT_SUB)
+        st2.upsert_opportunities([o2]); c2 = classify(o2.title, o2.description); st2.set_intellectual(o2.key, c2.score, c2.reason); st2.close()
+    threading.Thread(target=lander, daemon=True).start()
+    counts = pump.run(watch=False)
+    st3 = Store(db)
+    assert st3.has_document("t:1", FETCHED_MARK) and st3.has_document("t:2", FETCHED_MARK)
+    vs = st3.verdicts()
+    assert vs["t:1"].arbitrage_viable and not vs["t:2"].arbitrage_viable
+    assert st3.pricing("t:1") and st3.pricing("t:2") is None          # blocked rows are not priced
+    assert counts["matched"] >= 1 and (tmp_path / "out" / "shortlist.md").exists() and (tmp_path / "out" / "gate.md").exists()
+    assert "t:2" not in " ".join(m.opportunity_key for m in st3.matches())
+    assert st3.stats()["documents"] == 0                              # sentinels are not documents

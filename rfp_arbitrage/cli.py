@@ -273,6 +273,26 @@ def cmd_report(args) -> int:
     return 0
 
 
+def cmd_pump(args) -> int:
+    """fetch + gate + price + match/report as concurrent workers, cumulative, while a crawl lands rows."""
+    from .pump import Pump
+    cfg = settings()
+    llm = _llm(args)
+    if args.talent:
+        from .talent.csv_source import load
+        st = Store(args.db or cfg.db_path)
+        st.upsert_talent(list(load(args.talent)))
+        from .talent.scoring import score_quality, score_price
+        for t in st.talent():
+            st.set_talent_scores(t.key, score_quality(t)[0], score_price(t)[0])
+        st.close()
+    pump = Pump(args.db or cfg.db_path, threshold=args.threshold, interval=args.interval, batch=args.batch, llm=llm,
+                max_docs=args.max_docs, benchmark=not args.no_benchmark, out_dir=args.out_dir, report_limit=args.limit, cfg=cfg)
+    counts = pump.run(watch=args.watch)
+    print(f"[pump] finished: {json.dumps(counts)}")
+    return 0
+
+
 def cmd_stats(args) -> int:
     print(json.dumps(_store(args).stats(), indent=2))
     return 0
@@ -348,6 +368,14 @@ def build_parser() -> argparse.ArgumentParser:
 
     s = sub.add_parser("report", help="markdown dossier"); s.set_defaults(fn=cmd_report)
     s.add_argument("--kind", choices=["matches", "gate"], default="matches"); s.add_argument("--limit", type=int, default=25); s.add_argument("--out")
+
+    s = sub.add_parser("pump", help="fetch+gate+price+match+report concurrently and cumulatively (streaming)"); s.set_defaults(fn=cmd_pump)
+    llm_opts(s); s.add_argument("--threshold", type=float, default=0.6); s.add_argument("--interval", type=float, default=30.0)
+    s.add_argument("--batch", type=int, default=25); s.add_argument("--max-docs", type=int, default=6)
+    s.add_argument("--no-benchmark", action="store_true"); s.add_argument("--out-dir", default="rfp_out")
+    s.add_argument("--limit", type=int, default=40, help="opportunities in shortlist.md")
+    s.add_argument("--talent", help="CSV/JSON roster to (re)load before pumping")
+    s.add_argument("--watch", action="store_true", help="never exit; keep pumping as crawls land rows")
 
     s = sub.add_parser("stats"); s.set_defaults(fn=cmd_stats)
 

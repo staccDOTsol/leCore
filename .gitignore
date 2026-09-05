@@ -82,3 +82,4 @@ rfp_arbitrage.sqlite3
 *.sqlite3-journal
 .rfp_cache/
 .env
+rfp_out/

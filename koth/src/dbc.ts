@@ -14,8 +14,9 @@
 import { Connection, Keypair, PublicKey, sendAndConfirmTransaction } from '@solana/web3.js';
 import { TOKEN_2022_PROGRAM_ID, TOKEN_PROGRAM_ID, getMint } from '@solana/spl-token';
 import {
-  ActivationType, BaseFeeMode, CollectFeeMode, DynamicBondingCurveClient, MigrationFeeOption,
+  ActivationType, BaseFeeMode, CollectFeeMode, DynamicBondingCurveClient, METAPLEX_PROGRAM_ID, MigrationFeeOption,
   MigrationOption, TokenAuthorityOption, TokenDecimal, TokenType, buildCurve, deriveDbcPoolAddress,
+  deriveDbcPoolAuthority, deriveDbcTokenVaultAddress, deriveMintMetadata, getTokenProgram,
   type ConfigParameters, type PoolConfig, type VirtualPool,
 } from '@meteora-ag/dynamic-bonding-curve-sdk';
 import { assertMetadataLimits, type MetadataFields } from './metadata.js';
@@ -147,6 +148,11 @@ export async function createMasterConfig(
 /**
  * Step 2: mint the master token and open its curve. `poolCreator` (default: payer) is the wallet
  * that receives metadata update authority under CreatorUpdateAuthority -- keep that key.
+ *
+ * Built by hand rather than with `client.creator.createPool`: the SDK (1.5.x) hardcodes the classic
+ * SPL Token program as `token_quote_program`, which fails with IncorrectProgramId when the quote
+ * mint is Token-2022 ($TOKEN is). The on-chain IDL leaves that account free, so we pass the program
+ * that matches the config's `quoteTokenFlag`, exactly as the SDK's swap path already does.
  */
 export async function launchMasterToken(
   connection: Connection, payer: Keypair, config: PublicKey, fields: MetadataFields,
@@ -154,19 +160,37 @@ export async function launchMasterToken(
 ): Promise<{ baseMint: PublicKey; pool: PublicKey; signature: string }> {
   assertMetadataLimits(fields);
   const client = dbcClient(connection);
+  const configState = await client.state.getPoolConfig(config);
+  if (!configState) throw new Error(`DBC config ${config.toBase58()} not found`);
+  const quoteMint = configState.quoteMint;
+  const tokenQuoteProgram = getTokenProgram(configState.quoteTokenFlag);
   const baseMint = opts.baseMint ?? Keypair.generate();
   const poolCreator = opts.poolCreator ?? payer;
-  const tx = await client.creator.createPool({
-    ...fields,
-    payer: payer.publicKey,
-    poolCreator: poolCreator.publicKey,
+  const pool = deriveDbcPoolAddress(quoteMint, baseMint.publicKey, config);
+  const accounts = {
+    pool,
     config,
+    payer: payer.publicKey,
+    creator: poolCreator.publicKey,
     baseMint: baseMint.publicKey,
-  });
+    poolAuthority: deriveDbcPoolAuthority(),
+    baseVault: deriveDbcTokenVaultAddress(pool, baseMint.publicKey),
+    quoteVault: deriveDbcTokenVaultAddress(pool, quoteMint),
+    quoteMint,
+    tokenQuoteProgram,
+  };
+  const methods = client.creator.program.methods;
+  const tx = configState.tokenType === TokenType.SPLToken
+    ? await methods.initializeVirtualPoolWithSplToken(fields).accountsPartial({
+        ...accounts, mintMetadata: deriveMintMetadata(baseMint.publicKey),
+        metadataProgram: METAPLEX_PROGRAM_ID, tokenProgram: TOKEN_PROGRAM_ID,
+      }).transaction()
+    : await methods.initializeVirtualPoolWithToken2022(fields).accountsPartial({
+        ...accounts, tokenProgram: TOKEN_2022_PROGRAM_ID,
+      }).transaction();
   const signers = [payer, baseMint];
   if (!poolCreator.publicKey.equals(payer.publicKey)) signers.push(poolCreator);
   const signature = await sendAndConfirmTransaction(connection, tx, signers, { commitment: 'confirmed' });
-  const pool = deriveDbcPoolAddress(opts.quoteMint ?? ZOO_TOKEN_MINT, baseMint.publicKey, config);
   return { baseMint: baseMint.publicKey, pool, signature };
 }
 

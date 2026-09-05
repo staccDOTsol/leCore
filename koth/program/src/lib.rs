@@ -36,7 +36,7 @@ program_entrypoint!(process_instruction);
 default_allocator!();
 nostd_panic_handler!();
 
-pinocchio_pubkey::declare_id!("EWhj4iLpFxnD4w2ULdK1dgsbbGJ9s7L281rpSXgLGUmG");
+pinocchio_pubkey::declare_id!("EcyiSadFf9VL7K1RdBh536ruJuxdfSouMpm4MmhKygwL");
 
 // ------------------------------------------------------------------------------------------ errors
 

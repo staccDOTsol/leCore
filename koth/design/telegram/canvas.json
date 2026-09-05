@@ -1,20 +1,116 @@
 {
   "artboards": [
-    { "file": "Main.dc.html", "title": "1 · Start", "x": 0, "y": 0, "w": 390, "h": 844 },
-    { "file": "King.dc.html", "title": "2 · Who is king", "x": 480, "y": 0, "w": 390, "h": 844 },
-    { "file": "Quote.dc.html", "title": "3 · Shill = quote", "x": 960, "y": 0, "w": 390, "h": 844 },
-    { "file": "Battle.dc.html", "title": "4 · Paid = settle + battle", "x": 1440, "y": 0, "w": 390, "h": 844 },
-    { "file": "Takeover.dc.html", "title": "5 · Takeover (group)", "x": 1920, "y": 0, "w": 390, "h": 844 },
-    { "file": "Cadence.dc.html", "title": "6 · Master shillbot cadence", "x": 2400, "y": 0, "w": 390, "h": 844 },
-    { "file": "Hall.dc.html", "title": "7 · Hall of fame", "x": 2880, "y": 0, "w": 390, "h": 844 },
-    { "file": "Card.dc.html", "title": "The card (photo the bot sends)", "x": 0, "y": 1040, "w": 600, "h": 840 },
-    { "file": "CardAlt.dc.html", "title": "Alt direction: arcade sticker (low-fi)", "x": 700, "y": 1040, "w": 600, "h": 840 }
+    {
+      "file": "Main.dc.html",
+      "title": "1 \u00b7 Start",
+      "x": 0,
+      "y": 0,
+      "w": 390,
+      "h": 844
+    },
+    {
+      "file": "King.dc.html",
+      "title": "2 \u00b7 Who is king",
+      "x": 480,
+      "y": 0,
+      "w": 390,
+      "h": 844
+    },
+    {
+      "file": "Quote.dc.html",
+      "title": "3 \u00b7 Shill = quote",
+      "x": 960,
+      "y": 0,
+      "w": 390,
+      "h": 844
+    },
+    {
+      "file": "Battle.dc.html",
+      "title": "4 \u00b7 Paid = settle + battle",
+      "x": 1440,
+      "y": 0,
+      "w": 390,
+      "h": 844
+    },
+    {
+      "file": "Takeover.dc.html",
+      "title": "5 \u00b7 Takeover (group)",
+      "x": 1920,
+      "y": 0,
+      "w": 390,
+      "h": 844
+    },
+    {
+      "file": "Cadence.dc.html",
+      "title": "6 \u00b7 Master shillbot cadence",
+      "x": 2400,
+      "y": 0,
+      "w": 390,
+      "h": 844
+    },
+    {
+      "file": "Hall.dc.html",
+      "title": "7 \u00b7 Hall of fame",
+      "x": 2880,
+      "y": 0,
+      "w": 390,
+      "h": 844
+    },
+    {
+      "file": "Card.dc.html",
+      "title": "The card (photo the bot sends)",
+      "x": 0,
+      "y": 1040,
+      "w": 600,
+      "h": 840
+    },
+    {
+      "file": "CardAlt.dc.html",
+      "title": "Alt direction: arcade sticker (low-fi)",
+      "x": 700,
+      "y": 1040,
+      "w": 600,
+      "h": 840
+    }
   ],
   "annotations": [
-    { "id": "flow", "x": 0, "y": -170, "w": 420, "text": "The whole game as a Telegram conversation. DM or group, same commands: /start, king, shill <mint> <pitch>, paid <id>, hall, fee. Buttons under messages are Telegram inline keyboards (they send the command for you)." },
-    { "id": "quote-note", "x": 960, "y": -130, "w": 380, "text": "One-time deposit address per attempt. Amount = stake (0.25 SOL worth x1.01 per takeover) + inference estimate, +5%, in the player's own coin. Address is copyable; the key is deleted after the sweep." },
-    { "id": "battle-note", "x": 1440, "y": -130, "w": 380, "text": "Settlement steps arrive as one message that edits itself as each step lands. The verdict shows both sides' scores from the arbiter; the card image is only sent for the king (steps 2 and 5)." },
-    { "id": "card-note", "x": 0, "y": 960, "w": 520, "text": "The card is the photo attached to 'king' and takeover posts. Element and rarity are tweaks up top; the art is the leCore-rendered creature grown from the coin's numbers. Sample values throughout." }
+    {
+      "id": "flow",
+      "x": 0,
+      "y": -170,
+      "w": 420,
+      "text": "The whole game as a Telegram conversation. DM or group, same commands: /start, king, shill <mint> <pitch>, paid <id>, hall, fee. Buttons under messages are Telegram inline keyboards (they send the command for you)."
+    },
+    {
+      "id": "quote-note",
+      "x": 960,
+      "y": -130,
+      "w": 380,
+      "text": "One-time deposit address per attempt. Amount = the stake (grows 1% per takeover) + inference estimate, +5%, in the player's own coin. Address is copyable; the key is deleted after the sweep."
+    },
+    {
+      "id": "battle-note",
+      "x": 1440,
+      "y": -130,
+      "w": 380,
+      "text": "Settlement steps arrive as one message that edits itself as each step lands. The verdict shows both sides' scores from the arbiter; the card image is only sent for the king (screens 2 and 5)."
+    },
+    {
+      "id": "card-note",
+      "x": 0,
+      "y": 960,
+      "w": 520,
+      "text": "The card is the photo attached to 'king' and takeover posts. Element and rarity are tweaks up top; the art is the leCore-rendered creature grown from the coin's numbers. Sample values throughout."
+    },
+    {
+      "id": "alt-note",
+      "x": 700,
+      "y": 960,
+      "w": 520,
+      "text": "Alternate direction, low-fi: an arcade sticker. Loud in a feed, prints well, but reads less like a trading card and loses the on-chain seriousness of the dark card."
+    }
   ],
-  "launch": { "view": "canvas" }
+  "launch": {
+    "view": "canvas"
+  }
 }

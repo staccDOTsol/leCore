@@ -96,9 +96,12 @@ NEGATIVE = [
     (r"\bsecurity system|\bcamera(s)? (install|system)|\bcctv|\baccess control (system|install)|\balarm|\bfire (alarm|suppression|sprinkler)", 0.5),
     (r"\bmaintenance (and repair|services)|\brepair(s)? (and|&) maintenance|\binspection services|\belevator|\bgenerator", 0.5),
     (r"\binstall(ation|ing|ed)?\b(?! of software)|\bpiping|\bwiring|\bretrofit|\bcommissioning", 0.7),
-    (r"\bsubscription|\blicen[cs]e (renewal|purchase|fees?)|\brenewal of|\bcredits\b|\bseats?\b|\bcopies of|\bmaintenance agreement|\bsupport agreement", 0.7),
+    (r"\bsubscription|\blicen[cs]e (renewal|purchase|fees?)|\brenewal of|\bcredits\b|\bseats?\b|\bcopies of|\bmaintenance agreement|\bsupport agreement|"
+     r"\bhardware and software (maintenance|support)|\bsoftware (maintenance|support|licen[cs]e|renewal|upgrade)\b|\bwarranty\b|\bextended support|\bvendor support|"
+     r"\bsole source\b.{0,40}\b(subscription|licen[cs]e|maintenance|renewal|database)|\bbrand name\b|\bpart numbers?\b|\bmodel numbers?\b|\bquantity\b", 0.7),
     (r"\bwallpaper|\bcarpet|\bflooring|\bpaint\b|\bwindows?\b|\bdoors?\b|\bfencing|\blighting fixtures", 0.8),
-    (r"\b(workstation|computer|gpu|laptop|tablet)s?\b(?!.{0,20}(services|design|programming|consult|science))", 0.5),
+    (r"\b(workstation|computer|gpu|laptop|tablet|monitor|scanner|drone|sensor|instrument|analyzer|detector|simulator)s?\b(?!.{0,25}(services|design|programming|consult|science|development|integration|implementation|study|analysis))", 0.5),
+    (r"\b(purchase|procure|acquisition|acquire|supply|furnish|deliver(y)?) of (a |an |the |new |replacement )?(\w+ ){0,3}(system|equipment|unit|device|software|hardware|licen[cs]e|subscription|tool|kit|vehicle|machine)s?\b", 0.7),
     (r"\bwater (treatment|main|meter)|\bwastewater|\bsewer|\bstormwater|\bdredg|\bwell drilling|\bhydrant", 0.6),
     (r"\bsheriff|\bcorrection(al|s)? (food|medical)|\binmate|\buniform", 0.4),
 ]

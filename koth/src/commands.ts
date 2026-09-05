@@ -144,9 +144,11 @@ export class Commands {
   async handle(ctx: Ctx): Promise<Reply | null> {
     const r = await this.handleInner(ctx);
     if (!r) return null;
+    // a held pot pays itself out on the winner's next message once a wallet is known (skip when this message was the wallet itself)
+    const owedLine = /^\/?wallet\b/i.test(ctx.text.replace(/@\w+/g, '').trim()) ? null : await this.settleOwed(ctx);
     const pot = await this.d.hill.potUsd();
     const inner = r.rich;
-    return { ...r, rich: (f) => [inner(f), '', this.potLine(f, pot), this.howtoLine(f, ctx.surface)].filter((l, i) => i < 2 || l).join('\n') };
+    return { ...r, rich: (f) => [inner(f), owedLine ? '' : null, owedLine ? owedLine(f) : null, '', this.potLine(f, pot), this.howtoLine(f, ctx.surface)].filter((l, i) => l !== null && (i < 2 || l)).join('\n') };
   }
 
   private async handleInner(ctx: Ctx): Promise<Reply | null> {
@@ -341,12 +343,31 @@ export class Commands {
     if (!owed) return { rich: (f) => `payout wallet set: ${f.code(addr)}. win the hill and the pot lands there.`, buttons: [[BTN.challenge], [BTN.king]] };
     const paid = await this.sendPot(ctx.authorId, addr);
     return {
-      rich: (f) => [
-        `payout wallet set: ${f.code(addr)}.`,
-        paid.length ? `${f.b(`your pot from reign ${owed.reign} (~$${owed.potUsd.toFixed(2)}) is on its way:`)}\n${paid.map((x) => `LP ${f.code(x.lpMint)} × ${x.amount} · ${f.link('tx', this.d.explorer(x.signature))}`).join('\n')}` : f.muted('the vault holds nothing to send right now.'),
-      ].join('\n'),
+      rich: (f) => [`payout wallet set: ${f.code(addr)}.`, this.paidLine(f, owed, paid)].join('\n'),
       buttons: [[BTN.king, BTN.hall]],
     };
+  }
+
+  private paidLine(f: Fmt, owed: Owed, paid: { lpMint: string; amount: string; signature: string }[]): string {
+    return paid.length
+      ? `${f.b(`your pot from reign ${owed.reign} (~$${owed.potUsd.toFixed(2)}) is on its way:`)}\n${paid.map((x) => `LP ${f.code(x.lpMint)} × ${x.amount} · ${f.link('tx', this.d.explorer(x.signature))}`).join('\n')}`
+      : f.muted('the vault holds nothing to send right now.');
+  }
+
+  /**
+   * A pot held for this player (won before a wallet was known, or a payout that failed) is paid on
+   * their next message once a wallet is on file, whatever they said. Failures keep it held.
+   */
+  private async settleOwed(ctx: Ctx): Promise<Rich | null> {
+    const owed = this.owed[ctx.authorId], wallet = this.wallets[ctx.authorId];
+    if (!owed || !wallet || !this.d.entry) return null;
+    try {
+      const paid = await this.sendPot(ctx.authorId, wallet);
+      return (f) => this.paidLine(f, owed, paid);
+    } catch (e) {
+      this.log(`held pot for ${ctx.author} still unpaid: ${e instanceof Error ? e.message : e}`);
+      return null;
+    }
   }
 
   /** Half of every LP position in the vault -> the wallet. Clears what was owed. */

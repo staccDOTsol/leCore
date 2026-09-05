@@ -145,3 +145,29 @@ describe('commands over the hill', () => {
     expect(html((await commands.handle({ surface: 'x', author: '@c', authorId: 'x:1', text: `shill ${A} <b>hi</b> there friends` }))!.rich)).not.toMatch(/<b>hi/);
   });
 });
+
+describe('held pots pay out retroactively', () => {
+  it('a payout that failed at win time is sent on the winner\'s next message once a wallet is on file', async () => {
+    const entry = new FakeEntry();
+    let fail = true;
+    (entry as unknown as { awardHalf: (w: unknown) => Promise<unknown[]> }).awardHalf = async () => {
+      if (fail) throw new Error('rpc down');
+      return [{ lpMint: 'LP1', amount: '5', signature: 'award-late' }];
+    };
+    (entry as unknown as { potUsd: () => Promise<number> }).potUsd = async () => 20;
+    const { commands } = setup(entry);
+    const ctx = { surface: 'telegram' as const, author: '@zed', authorId: 'tg:9', text: '' };
+    const t = async (text: string) => { const r = await commands.handle({ ...ctx, text }); return r ? plain(r.rich) : ''; };
+    expect(await t('wallet WzMaL78srutrF6CsxEkWuhMaDF5HZA6jNRaEPengqpb')).toMatch(/payout wallet set/);
+    await t(`shill ${A} sol is the chain the chain is sol`);
+    entry.paid.add('q1');
+    const won = await t('paid q1');
+    expect(won).toMatch(/takes the empty hill/);
+    expect(won).not.toMatch(/on its way/);                 // the award failed: held
+    fail = false;
+    const later = await t('king');                          // any message, once the chain is back
+    expect(later).toMatch(/pot from reign 1 .* is on its way/);
+    expect(later).toMatch(/award-late/);
+    expect(await t('hall')).not.toMatch(/on its way/);      // paid once
+  });
+});

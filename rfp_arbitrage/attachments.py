@@ -6,6 +6,7 @@ Anything else is recorded with an error so the gate can say "unverified" instead
 from __future__ import annotations
 
 import io
+import logging
 import re
 import zipfile
 from typing import Iterator
@@ -17,7 +18,8 @@ from .store import Store
 
 MAX_BYTES = 40 * 1024 * 1024
 MAX_CHARS = 400_000
-MAX_PDF_PAGES = 120          # pdfminer is ~0.3 s/page; terms live in the first hundred pages of any RFP
+MAX_PDF_PAGES = 120
+logging.getLogger("pdfminer").setLevel(logging.ERROR)   # "should not allow text extraction" warnings on every DRM'd PDF          # pdfminer is ~0.3 s/page; terms live in the first hundred pages of any RFP
 
 
 def _kind(url: str, content_type: str, head: bytes) -> str:

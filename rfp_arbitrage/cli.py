@@ -294,6 +294,14 @@ def cmd_pump(args) -> int:
     return 0
 
 
+def cmd_ingest(args) -> int:
+    """re-crawl on a schedule; pair with `pump --watch` in another shell."""
+    from .ingest import loop
+    loop(fast_every=args.fast_every * 3600, slow_every=args.slow_every * 3600, sam_every=args.sam_every * 3600,
+         sam_days=args.sam_days, max_pages=args.max_pages, discover=not args.no_discover, watch=args.watch)
+    return 0
+
+
 def cmd_stats(args) -> int:
     print(json.dumps(_store(args).stats(), indent=2))
     return 0
@@ -378,6 +386,13 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--talent", help="CSV/JSON roster to (re)load before pumping")
     s.add_argument("--fetch-workers", type=int, default=4, help="parallel attachment fetchers")
     s.add_argument("--watch", action="store_true", help="never exit; keep pumping as crawls land rows")
+
+    s = sub.add_parser("ingest", help="re-crawl all sources on a schedule (pair with pump --watch)"); s.set_defaults(fn=cmd_ingest)
+    s.add_argument("--fast-every", type=float, default=2.0, help="hours between CanadaBuys/SEAO/Socrata crawls")
+    s.add_argument("--slow-every", type=float, default=4.0, help="hours between MERX/BidNet crawls")
+    s.add_argument("--sam-every", type=float, default=24.0, help="hours between SAM.gov crawls (public key: 10 req/day)")
+    s.add_argument("--sam-days", type=int, default=7); s.add_argument("--max-pages", type=int, default=40)
+    s.add_argument("--no-discover", action="store_true"); s.add_argument("--watch", action="store_true", help="loop forever")
 
     s = sub.add_parser("stats"); s.set_defaults(fn=cmd_stats)
 

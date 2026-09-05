@@ -18,7 +18,9 @@
     "init-play": "tsx scripts/init-play.ts",
     "build-program": "cargo build-sbf --manifest-path program/Cargo.toml",
     "test-program": "cargo test --manifest-path program/Cargo.toml --lib",
-    "preflight": "tsx scripts/preflight.ts"
+    "preflight": "tsx scripts/preflight.ts",
+    "program-keys": "sh program/prepare-keys.sh",
+    "deploy-program": "solana program deploy program/target/deploy/koth_play.so --program-id program/keys/koth_play-keypair.json"
   },
   "engines": {
     "node": ">=20"

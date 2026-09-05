@@ -87,8 +87,9 @@ npm run launch-master -- "Master Shill" SHILL https://your.host/koth/metadata/ge
 npm run read-metadata           # shows updateAuthority == your wallet, mutable == true
 npm run update-metadata -- "KING BONK" KBONK https://your.host/koth/metadata/1.json   # the whole point, by hand
 
-npm run build-program           # program/target/deploy/koth_play.so  (cargo build-sbf; keys/ is gitignored)
-solana program deploy program/target/deploy/koth_play.so --program-id program/keys/koth_play-keypair.json
+npm run program-keys            # your own program keypair (gitignored) + stamps its id into declare_id!
+npm run build-program           # program/target/deploy/koth_play.so  (cargo build-sbf)
+npm run deploy-program          # ~0.25 SOL rent for a 32 KB program; put the printed id in KOTH_PLAY_PROGRAM_ID
 npm run init-play               # config pda: master mint + Raydium CPMM program
 
 npm run bot                     # Telegram / Discord / X, whichever have credentials, + metadata server on :8787
@@ -114,8 +115,8 @@ LEOS) and then `src/bot.ts`. `/data` also holds the hill ledger, quotes, hosted 
 `KOTH_PUBLIC_URL` at the app's https url so the on-chain `uri` resolves. Keep it to ONE machine (`--ha=false`): the
 bot long-polls Telegram and owns the ledger.
 
-`declare_id!` in `program/src/lib.rs` is `EWhj4iLpFxnD4w2ULdK1dgsbbGJ9s7L281rpSXgLGUmG`; deploying with a different
-keypair means changing that line and rebuilding.
+`npm run program-keys` generates `program/keys/koth_play-keypair.json` if it is missing and rewrites `declare_id!` in
+`program/src/lib.rs` to match, so build and deploy always agree. Keep that file: it is the program's address.
 
 ## Tests
 

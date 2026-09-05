@@ -72,7 +72,9 @@ POSITIVE = [
     (r"\btraining (program|development|course|curriculum)|\bcurriculum|\be-?learning|\binstructional design", 0.45),
     (r"\bgis\b|\bmapping\b|\bremote sensing|\bmodel(l)?ing\b|\bsimulation", 0.35),
     (r"\barchitectur(e|al) (design|services)|\bengineering (design|study|services|analysis)|\bdesign services", 0.35),
-    (r"\bit (services|support|consult)|\bcloud|\bcybersecurity|\bsecurity assessment|\bpenetration test|\bsaas\b|\berp\b|\bcrm\b", 0.5),
+    (r"\bit (services|support|consult)|\bcloud|\bcybersecurity|\bsecurity assessment|\bpenetration test|\bsaas\b|\berp\b|\bcrm\b|"
+     r"\bimplementation (services|of|and)|\bsystem (implementation|integration|configuration|development|design|modernization)|"
+     r"\b(learning|content|records|document|asset|case) management system (implementation|services|design|development)|\blms\b|\bsystems? integrat", 0.5),
     (r"\bactuar|\baudit(ing)?\b|\baccounting|\bbookkeeping|\bfinancial (analysis|advis|model)|\btax\b", 0.45),
     (r"\blegal (services|counsel|research)|\bcounsel\b|\bpolicy (development|analysis|research)|\bregulatory", 0.45),
     (r"\bsurvey (design|research)|\bmarket research|\bcommunity engagement|\bpublic (consultation|engagement)|\bfacilitat", 0.4),

@@ -32,7 +32,7 @@ By default it binds to **127.0.0.1** (local only). `--token X` requires `Authori
 | GET | `/tools` | — | the tool manifest: every public faculty as `{name, description, params}` (drive it with `/invoke`) |
 | POST | `/invoke` | `{"name":"...","args":{...}}` | run one faculty on this node's mind and return its result as JSON (public faculties only) |
 | GET | `/doors` | — | the MCP doors `POST /door` can run: `holographic_mcp`'s curated tools as `{name, description, inputSchema}` |
-| POST | `/door` | `{"name":"...","arguments":{...}[,"tenant_id":"..."]}` | run one MCP door in-process over this node's mind: `{ok, name, content, isError, _meta:{lecore.cost, lecore.receipt}}` (unknown door -> 404; `tenant_id` picks the memory partition) |
+| POST | `/door` | `{"name":"...","arguments":{...}[,"tenant_id":"..."]}` | run one MCP door in-process over this node's mind: `{ok, name, content, isError, _meta:{lecore.cost, lecore.receipt}}` (unknown door -> 404; `tenant_id` picks the memory partition -- corpus/study/memory/memo are per tenant, the mind-backed `zoo_*`/`wisdom_*` doors share the one mind unless their own `user=` is passed) |
 | POST | `/sql` | `{"sql":"..."}` | run SQL: `CREATE TABLE` / `INSERT` / `SELECT` / `UPDATE` / `DELETE` / `JOIN` / `DROP TABLE` |
 | POST | `/graphql` | `{"query":"{...}"[, "objects":[...]]}` | resolve a GraphQL query over nested documents |
 | POST | `/documents` | `{"objects":[...]}` | set the stored document set GraphQL queries run against |

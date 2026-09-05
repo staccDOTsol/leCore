@@ -313,7 +313,13 @@ class Service:
         ok. An unknown door is a 404 {error} and never builds the adapter; a malformed body is a 400.
         tenant_id (top level, or inside arguments -- the gateway's convention) selects the partition and
         is STRIPPED before the call: the doors' handlers take explicit keyword arguments, and a stray
-        tenant_id reached corpus_ask as `unexpected keyword argument` (measured) before this line."""
+        tenant_id reached corpus_ask as `unexpected keyword argument` (measured) before this line.
+        WHAT THE PARTITION COVERS: corpus_*/study*/memory_* and the tool memo are per tenant (a handle bound
+        in one tenant is `unknown handle` in another -- pinned). The mind-backed doors are NOT: zoo_* and
+        wisdom_* run on the one shared mind, so a zoo_teach or wisdom_record in tenant A is served to tenant
+        B's zoo_ask / wisdom_ask (measured: A taught 'PURPLE-ELEPHANT-77', B's taught_only ask returned it
+        verbatim, via reflex-exact) unless the door's own user= argument is passed -- which the gateway
+        does not. A deployer who needs mind-level isolation must pass user= or run one front per tenant."""
         import time
         payload = payload or {}
         name = payload.get("name", "")

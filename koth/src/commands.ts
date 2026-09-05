@@ -156,7 +156,7 @@ export class Commands {
     if (!p) return null;
     try {
       switch (p.cmd) {
-        case 'pot': return { rich: (f) => `${f.b('THE POT')}: half of every LP position in the vault, sent to the winner's wallet. ${this.walletLine(ctx, f)}`, buttons: [[BTN.challenge], [BTN.king, BTN.fee]] };
+        case 'pot': return { rich: (f) => `${f.b('THE POT')}: half of every LP position in the vault, sent to the winner's wallet as Raydium LP tokens (one per <coin>/MASTER pool). ${this.portfolioLine(f)} ${this.walletLine(ctx, f)}`, buttons: [[BTN.challenge], [BTN.king, BTN.fee]] };
         case 'wallet': return await this.wallet(ctx, p.args);
         case 'king': return this.king();
         case 'hall': return this.hall();
@@ -340,7 +340,7 @@ export class Commands {
     if (!isPubkey(addr)) return { rich: (f) => `${f.code(addr)} is not a Solana address.` };
     this.wallets[ctx.authorId] = addr; this.save();
     const owed = this.owed[ctx.authorId];
-    if (!owed) return { rich: (f) => `payout wallet set: ${f.code(addr)}. win the hill and the pot lands there.`, buttons: [[BTN.challenge], [BTN.king]] };
+    if (!owed) return { rich: (f) => `payout wallet set: ${f.code(addr)}. win the hill and the pot lands there as Raydium LP tokens. ${this.portfolioLine(f)}`, buttons: [[BTN.challenge], [BTN.king]] };
     const paid = await this.sendPot(ctx.authorId, addr);
     return {
       rich: (f) => [`payout wallet set: ${f.code(addr)}.`, this.paidLine(f, owed, paid)].join('\n'),
@@ -350,8 +350,13 @@ export class Commands {
 
   private paidLine(f: Fmt, owed: Owed, paid: { lpMint: string; amount: string; signature: string }[]): string {
     return paid.length
-      ? `${f.b(`your pot from reign ${owed.reign} (~$${owed.potUsd.toFixed(2)}) is on its way:`)}\n${paid.map((x) => `LP ${f.code(x.lpMint)} × ${x.amount} · ${f.link('tx', this.d.explorer(x.signature))}`).join('\n')}`
+      ? `${f.b(`your pot from reign ${owed.reign} (~$${owed.potUsd.toFixed(2)}) is on its way:`)}\n${paid.map((x) => `LP ${f.code(x.lpMint)} × ${x.amount} · ${f.link('tx', this.d.explorer(x.signature))}`).join('\n')}\n${this.portfolioLine(f)}`
       : f.muted('the vault holds nothing to send right now.');
+  }
+
+  /** Where a winner actually sees the pot: it is LP, not a coin balance, so wallets show nothing until they look here. */
+  private portfolioLine(f: Fmt): string {
+    return `${f.b('it is Raydium LP, not a coin')}: your wallet will not show a balance. See it at ${f.link('raydium.io/portfolio', 'https://raydium.io/portfolio/')} under Standard positions, where you can withdraw it as both coins.`;
   }
 
   /**
@@ -397,7 +402,7 @@ export class Commands {
     const won = out.record.result === 'won';
     const potLines = (f: Fmt): string => {
       if (!won) return f.muted(`your bid stays in the vault: it is part of the pot for whoever takes the hill next.`);
-      const head = `${f.b(`🏆 YOU WIN THE POT ≈ $${(out.potUsd ?? 0).toFixed(2)}`)}: half of every LP position in the vault.`;
+      const head = `${f.b(`🏆 YOU WIN THE POT ≈ $${(out.potUsd ?? 0).toFixed(2)}`)}: half of every LP position in the vault, as Raydium LP tokens. ${this.portfolioLine(f)}`;
       if (!payout) return head;
       if (payout.paid.length) return `${head}\n${payout.paid.map((x) => `LP ${f.code(x.lpMint)} × ${x.amount} · ${f.link('tx', this.d.explorer(x.signature))}`).join('\n')}\n${f.muted(`sent to ${payout.wallet}. remove the liquidity on Raydium to cash out each pair.`)}`;
       if (payout.error) return `${head}\n${f.b('held for you')}: the transfer failed (${f.esc(payout.error.slice(0, 120))}). say ${f.code('wallet <address>')} again to retry.`;

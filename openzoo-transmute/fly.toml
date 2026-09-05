@@ -1,4 +1,4 @@
-# openzoo-transmute hub — https://openzoo-sites.fly.dev/s/<programId>
+# openzoo-transmute hub — https://sites.openzoo.fun/s/<programId>
 app = "openzoo-sites"
 primary_region = "iad"
 
@@ -7,7 +7,7 @@ primary_region = "iad"
 
 [env]
   OPENZOO_CLUSTER = "mainnet"
-  OPENZOO_HUB_URL = "https://openzoo-sites.fly.dev"
+  OPENZOO_HUB_URL = "https://sites.openzoo.fun"
   PORT = "8080"
 
 [http_service]

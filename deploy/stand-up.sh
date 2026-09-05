@@ -24,4 +24,8 @@ curl -sS https://x402-tokens.fly.dev/v1/lecore/doors | head -c 200; echo
 echo "== 3. openzoo-sites (the hub)"
 ( cd openzoo-transmute && flyctl apps create openzoo-sites --org personal 2>/dev/null || true; flyctl deploy --remote-only -a openzoo-sites )
 curl -sS https://openzoo-sites.fly.dev/.hub/health; echo
-echo "hub: https://openzoo-sites.fly.dev/.hub  — a site lives at /s/<programId> once you run: npx openzoo deploy . --cluster mainnet --yes"
+echo "== 4. sites.openzoo.fun → the hub (DNS on Vercel, cert on Fly)"
+npx vercel dns add openzoo.fun sites CNAME openzoo-sites.fly.dev || true
+flyctl certs add sites.openzoo.fun -a openzoo-sites || true
+flyctl certs show sites.openzoo.fun -a openzoo-sites || true
+echo "hub: https://sites.openzoo.fun/.hub  — a site lives at /s/<programId> once you run: npx openzoo deploy . --cluster mainnet --yes"

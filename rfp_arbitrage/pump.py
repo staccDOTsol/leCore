@@ -31,8 +31,10 @@ class Pump:
     def __init__(self, db: str | Path, threshold: float = 0.6, interval: float = 30.0, batch: int = 25,
                  llm=None, max_docs: int = 6, benchmark: bool = True, out_dir: str | Path = ".",
                  report_limit: int = 40, log: Callable[[str], None] = print, cfg: Settings | None = None,
-                 fetch_workers: int = 4, llm_factory: Callable[[], Any] | None = None):
+                 fetch_workers: int = 4, llm_factory: Callable[[], Any] | None = None, gate_workers: int = 4):
         self.db = str(db)
+        self.gate_workers = max(1, gate_workers)
+        self._gate_claimed: set[str] = set()      # keys an LLM read is in flight for (one process, many threads)
         self.llm_factory = llm_factory      # re-tried every round while the LLM is unavailable (unfunded wallet, proxy down)
         self.fetch_workers = max(1, fetch_workers)
         self.threshold = threshold
@@ -47,7 +49,8 @@ class Pump:
         self.cfg = cfg or _settings()
         self.stop = threading.Event()
         self.counts = {"fetched": 0, "gated": 0, "priced": 0, "matched": 0, "rounds": 0}
-        self._idle = {"gate": 0, "price": 0, **{f"fetch{i}": 0 for i in range(max(1, fetch_workers))}}
+        self._idle = {"price": 0, **{f"gate{i}": 0 for i in range(max(1, gate_workers))},
+                      **{f"fetch{i}": 0 for i in range(max(1, fetch_workers))}}
         self._lock = threading.Lock()
 
     # -- queues ----------------------------------------------------------------------
@@ -69,7 +72,7 @@ class Pump:
             f"SELECT o.* FROM opportunities o LEFT JOIN pricing p ON p.opportunity_key=o.key "
             f"WHERE o.intellectual_score >= ? AND (o.deadline='' OR o.deadline >= date('now')) AND o.key IN "
             f"(SELECT DISTINCT opportunity_key FROM documents) AND {cond} "
-            f"ORDER BY COALESCE(p.ask_value, 0) DESC, o.posted DESC LIMIT ?", (self.threshold, self.batch)).fetchall()
+            f"ORDER BY COALESCE(p.ask_value, 0) DESC, o.posted DESC LIMIT ?", (self.threshold, self.batch * self.gate_workers)).fetchall()
         return [Opportunity.from_row(dict(r)) for r in rows]
 
     def pending_price(self, st: Store) -> list[Opportunity]:
@@ -130,13 +133,22 @@ class Pump:
 
     def step_gate(self, st: Store) -> int:
         from .clauses import analyze
-        opps = self.pending_gate(st)
-        for o in opps:
-            v = analyze(o, st.full_text(o.key), self.llm)
-            st.put_verdict(v)
+        n = 0
+        for o in self.pending_gate(st):
             with self._lock:
-                self.counts["gated"] += 1
-        return len(opps)
+                if o.key in self._gate_claimed:
+                    continue
+                self._gate_claimed.add(o.key)
+            try:
+                v = analyze(o, st.full_text(o.key), self.llm)
+                st.put_verdict(v)
+                n += 1
+                with self._lock:
+                    self.counts["gated"] += 1
+            finally:
+                with self._lock:
+                    self._gate_claimed.discard(o.key)
+        return n
 
     def step_price(self, st: Store) -> int:
         from .pricing import price
@@ -212,7 +224,8 @@ class Pump:
 
     # -- run -------------------------------------------------------------------------
     def run(self, watch: bool = False) -> dict:
-        jobs = [("gate", self.step_gate), ("price", self.step_price)] + [(f"fetch{i}", self.step_fetch) for i in range(self.fetch_workers)]
+        jobs = [("price", self.step_price)] + [(f"gate{i}", self.step_gate) for i in range(self.gate_workers)] + \
+               [(f"fetch{i}", self.step_fetch) for i in range(self.fetch_workers)]
         threads = [threading.Thread(target=self._loop, args=(n, f), name=n, daemon=True) for n, f in jobs]
         for t in threads:
             t.start()

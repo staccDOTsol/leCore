@@ -34,6 +34,10 @@ export type KothConfig = {
   entrySol: number;
   /** Per-takeover growth of the attempt fee, in percent (1 by directive). */
   entryGrowthPct: number;
+  /** King handicaps, in points of the 0-100 total: an uncontested crown, and erosion per failed challenge with its cap. */
+  uncontestedHandicap: number;
+  erosionPerLoss: number;
+  erosionMax: number;
   model: string;
   playProgramId: PublicKey | null;
   raydiumCpmmProgramId: PublicKey;
@@ -102,6 +106,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): KothConfig {
     publicUrl: (env.KOTH_PUBLIC_URL || 'http://localhost:8787').replace(/\/+$/, ''),
     entrySol: Number(env.KOTH_ENTRY_SOL || 0.05),
     entryGrowthPct: Number(env.KOTH_ENTRY_GROWTH_PCT || 1),
+    uncontestedHandicap: Number(env.KOTH_UNCONTESTED_HANDICAP || 10),
+    erosionPerLoss: Number(env.KOTH_EROSION_PER_LOSS || 3),
+    erosionMax: Number(env.KOTH_EROSION_MAX || 30),
     model: env.KOTH_MODEL || 'openzoo/auto',
     playProgramId: pk(env.KOTH_PLAY_PROGRAM_ID),
     raydiumCpmmProgramId: new PublicKey(env.RAYDIUM_CPMM_PROGRAM_ID || RAYDIUM_CPMM_PROGRAM),

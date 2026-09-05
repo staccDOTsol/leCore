@@ -201,6 +201,7 @@ export class Commands {
         f.muted(`crowned by ${k.author} via ${k.surface} · ${ago(k.crownedAt)}`),
         '',
         `attempt fee ${f.b(`${fee} SOL`)} worth + inference ~$${this.d.hill.inferenceEstimateUsd().toFixed(2)}, +5%`,
+        handicapLine(f, this.d.hill.handicap()),
         f.i(k.pitch.slice(0, 300)),
       ].join('\n'),
       image: k.image, buttons, page: '/king',
@@ -421,4 +422,13 @@ function ago(t: number): string {
   if (m < 60) return `${m}m ago`;
   if (m < 48 * 60) return `${Math.round(m / 60)}h ago`;
   return `${Math.round(m / 1440)}d ago`;
+}
+
+/** What the crown is fighting at right now, for `king`: the number degens are chipping at. */
+function handicapLine(f: Fmt, h: { total: number; erosion: number; uncontested: number; failedDefenses: number }): string {
+  if (h.total <= 0) return f.muted('the crown is contested and unbroken');
+  const parts: string[] = [];
+  if (h.uncontested) parts.push(`${h.uncontested} for taking an empty hill`);
+  if (h.erosion) parts.push(`${h.erosion} of erosion from ${h.failedDefenses} failed challenge${h.failedDefenses === 1 ? '' : 's'}`);
+  return `the king fights at ${f.b(`-${h.total}`)} of 100 (${parts.join(', ')}). every loss chips the hill.`;
 }

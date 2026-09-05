@@ -75,6 +75,7 @@ export async function main(): Promise<void> {
   hill = new Hill({
     judge, chain, uri, entry: entryLike, store: new FileStore(path.join(cfg.dataDir, 'hill.json')),
     image: (card, reign) => image.image(card, reign), baseFeeSol: cfg.entrySol, feeGrowthPct: cfg.entryGrowthPct, log,
+    uncontestedHandicap: cfg.uncontestedHandicap, erosionPerLoss: cfg.erosionPerLoss, erosionMax: cfg.erosionMax,
     potUsd: entry ? () => entry.potUsd() : undefined,   // the pot is what the vault holds on chain, priced live
   });
   const commands = new Commands({ hill, entry, dataDir: cfg.dataDir, masterMint: cfg.masterMint?.toBase58() ?? null, explorer, log });

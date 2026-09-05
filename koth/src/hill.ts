@@ -16,7 +16,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { cardFromMetrics, type Card } from './cards.js';
 import type { ChainLike } from './chain.js';
-import type { Contender, JudgeLike, Remix, Shill, Verdict } from './judge.js';
+import type { Contender, Handicap, JudgeLike, Remix, Shill, Verdict } from './judge.js';
 import type { MetadataFields } from './metadata.js';
 import { sumUsage, type Usage } from './openzoo.js';
 import { buildKingJson, type UriProvider } from './uri.js';
@@ -31,6 +31,8 @@ export type KingRecord = {
   author: string;
   surface: string;
   crownedAt: number;
+  /** True when the hill was empty: an uncontested crown fights at a handicap until it is dethroned. */
+  uncontested: boolean;
   /** What the master token became: the remixed name/symbol and the hosted uri, plus the tx. */
   master: MetadataFields & { signature: string | null };
   remix: Remix | null;
@@ -43,6 +45,8 @@ export type KingRecord = {
 export type ChallengeRecord = {
   id: string;
   at: number;
+  /** The reign this challenge was fought against (0 for an empty hill). */
+  reign: number;
   mint: string;
   author: string;
   surface: string;
@@ -133,6 +137,11 @@ export type HillDeps = {
   feeGrowthPct?: number;
   /** How long the master shillbot's pitch for a reign is reused before it is rewritten. */
   shillTtlMs?: number;
+  /** Points (of the 0-100 total) an uncontested crown fights at until dethroned; ties then go to the challenger. */
+  uncontestedHandicap?: number;
+  /** Points the king loses per failed challenge against it, and the cap. The hill erodes under concerted effort. */
+  erosionPerLoss?: number;
+  erosionMax?: number;
   now?: () => number;
   log?: (line: string) => void;
 };
@@ -153,6 +162,19 @@ export class Hill {
   get hallOfFame(): KingRecord[] { return structuredClone(this.state.hallOfFame); }
   attemptFee(): number { return attemptFeeSol(this.state.takeovers, this.deps.baseFeeSol, this.deps.feeGrowthPct); }
   get baseFeeSol(): number { return this.deps.baseFeeSol ?? BASE_FEE_SOL; }
+
+  /**
+   * What the sitting king carries into the next fight. Erosion is read off the ledger (every lost
+   * challenge against this reign), so it applies at once to a reign already under siege.
+   */
+  handicap(): Handicap {
+    const k = this.state.king;
+    if (!k) return { total: 0, erosion: 0, uncontested: 0, failedDefenses: 0 };
+    const failedDefenses = this.state.challenges.filter((c) => c.result === 'lost' && (c.reign === undefined ? c.at > k.crownedAt : c.reign === k.reign)).length;
+    const erosion = Math.min(this.deps.erosionMax ?? 30, failedDefenses * (this.deps.erosionPerLoss ?? 3));
+    const uncontested = (k.uncontested ?? k.reign === 1) ? (this.deps.uncontestedHandicap ?? 10) : 0;
+    return { total: erosion + uncontested, erosion, uncontested, failedDefenses };
+  }
   /** The pot: half of what the vault holds on chain, in USD (0 when nothing can price it). */
   async potUsd(): Promise<number> {
     try { return Math.round(((await this.deps.potUsd?.()) ?? 0) * 100) / 100; } catch { return 0; }
@@ -204,7 +226,7 @@ export class Hill {
     const id = randomBytes(6).toString('hex');
     const feeSol = opts.prepaid?.feeSol ?? this.attemptFee();
     const rec: ChallengeRecord = {
-      id, at: this.now(), mint: shill.mint, author: shill.author, surface: shill.surface, pitch: shill.pitch, feeSol,
+      id, at: this.now(), reign: this.state.king?.reign ?? 0, mint: shill.mint, author: shill.author, surface: shill.surface, pitch: shill.pitch, feeSol,
       stakeUsd: opts.prepaid?.stakeUsd ?? 0, potUsd: null,
       result: 'error', verdict: null, usage: null, playSignature: null, error: null, challenger: null, incumbent: null,
     };
@@ -234,9 +256,11 @@ export class Hill {
       // 4. the master shillbot speaks for the king, then the arbiter rules
       const ms = await this.masterShill(incumbent);
       if (ms.usage) usages.push(ms.usage);
-      const j = await this.deps.judge.judge(challenger, incumbent, ms.text);
+      const h = this.handicap();
+      const j = await this.deps.judge.judge(challenger, incumbent, ms.text, h);
       usages.push(j.usage);
       rec.verdict = j.verdict;
+      if (h.total > 0) this.log(`[${id}] king fights at -${h.total} (${h.uncontested} uncontested, ${h.erosion} erosion from ${h.failedDefenses} losses): ${j.verdict.scores?.challenger.total} vs ${j.verdict.scores?.incumbent.total} -> ${j.verdict.winner}`);
 
       if (j.verdict.winner === 'challenger') {
         const king = await this.crown(challenger, rec, usages);
@@ -293,7 +317,7 @@ export class Hill {
     if (this.state.king) this.state.hallOfFame.push(this.state.king);
     const king: KingRecord = {
       reign, mint: winner.card.mint, name: winner.card.name, symbol: winner.card.symbol, card: winner.card,
-      pitch: winner.shill.pitch, author: winner.shill.author, surface: winner.shill.surface, crownedAt,
+      pitch: winner.shill.pitch, author: winner.shill.author, surface: winner.shill.surface, crownedAt, uncontested: !this.state.king,
       master: { ...fields, signature: tx.signature || null }, remix: r.remix, image, playSignature: rec.playSignature,
       feeSol: rec.feeSol, usage: usages.length ? sumUsage(usages) : null,
     };

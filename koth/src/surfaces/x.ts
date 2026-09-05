@@ -6,7 +6,7 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import type { Commands } from '../commands.js';
+import { plain, type Commands } from '../commands.js';
 
 export type XCreds = { apiKey: string; apiSecret: string; accessToken: string; accessSecret: string; bearer: string; botUserId: string };
 export type XOpts = { creds: XCreds; dataDir: string; pollMs?: number; log?: (s: string) => void; fetchImpl?: typeof fetch };
@@ -78,7 +78,7 @@ export class XSurface {
         for (const t of await this.mentions()) {
           if (this.state.answered[t.id]) continue;
           const reply = await this.commands.handle({ surface: 'x', author: `@${t.username}`, authorId: `x:${t.author_id}`, text: t.text });
-          if (reply) await this.post(reply.text, t.id);
+          if (reply) await this.post(plain(reply.rich), t.id);
           this.state.answered[t.id] = Date.now();
           this.save();
         }

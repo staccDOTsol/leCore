@@ -84,3 +84,7 @@ koth/data/
 koth/.env
 koth/program/target/
 koth/program/keys/
+
+# design canvases: keep the sources (.dc.html, canvas.json, images), never the assembled 2.5MB page
+koth/design/**/*.html
+!koth/design/**/*.dc.html

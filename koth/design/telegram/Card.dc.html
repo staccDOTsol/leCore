@@ -1,0 +1,55 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;700&display=swap">
+  <style>
+    body { margin: 0; background: #0d0f14; color: #e6e8ec; font-family: "Space Grotesk", system-ui, sans-serif; }
+    a { color: #f2b134; } a:hover { color: #ffd070; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  </style>
+</helmet>
+<div style="width: 600px; height: 840px; box-sizing: border-box; border: 6px solid {{rc}}; border-radius: 28px; background: #0d0f14; padding: 34px; display: flex; flex-direction: column; gap: 0;">
+  <div style="position: relative; width: 520px; height: 360px; border-radius: 16px; background: #151922; overflow: hidden;">
+    <img src="creature.jpg" style="width: 520px; height: 360px; object-fit: cover; display: block;">
+    <div style="position: absolute; left: 0; top: 0; width: 150px; height: 30px; border-radius: 8px; background: {{rc}}; display: flex; align-items: center; justify-content: center; color: #0d0f14; font-size: 14px; font-weight: 700; letter-spacing: 2px;">{{rarityLabel}}</div>
+    <div style="position: absolute; right: 24px; top: 12px; display: flex; flex-direction: column; align-items: center;">
+      <div class="mono" style="font-size: 40px; font-weight: 700; color: #fff; line-height: 1;">63</div>
+      <div class="mono" style="font-size: 14px; color: #cfd3da; letter-spacing: 1px;">POWER</div>
+    </div>
+  </div>
+  <div style="margin-top: 26px; font-size: 34px; font-weight: 700; color: #fff; line-height: 1.1;">Bonk</div>
+  <div class="mono" style="margin-top: 4px; font-size: 20px; font-weight: 600; color: {{el}};">$BONK · {{element}}</div>
+  <div style="margin-top: 14px; display: flex; flex-direction: column; gap: 4px; font-size: 16px; color: #e6e8ec;">
+    <div>• parabolic</div>
+    <div>• well-distributed</div>
+    <div>• hyperactive</div>
+  </div>
+  <div style="margin-top: 22px; display: flex; flex-direction: column; gap: 20px;">
+    <div style="display: flex; align-items: center; gap: 12px;"><div class="mono" style="width: 58px; font-size: 16px; font-weight: 700; color: #cfd3da;">HP</div><div style="flex-grow: 1; height: 24px; border-radius: 6px; background: #1a1d24; overflow: hidden;"><div style="width: 71%; height: 24px; border-radius: 6px; background: {{el}};"></div></div><div class="mono" style="width: 32px; font-size: 16px; font-weight: 700; text-align: right;">71</div></div>
+    <div style="display: flex; align-items: center; gap: 12px;"><div class="mono" style="width: 58px; font-size: 16px; font-weight: 700; color: #cfd3da;">ATK</div><div style="flex-grow: 1; height: 24px; border-radius: 6px; background: #1a1d24; overflow: hidden;"><div style="width: 64%; height: 24px; border-radius: 6px; background: {{el}};"></div></div><div class="mono" style="width: 32px; font-size: 16px; font-weight: 700; text-align: right;">64</div></div>
+    <div style="display: flex; align-items: center; gap: 12px;"><div class="mono" style="width: 58px; font-size: 16px; font-weight: 700; color: #cfd3da;">DEF</div><div style="flex-grow: 1; height: 24px; border-radius: 6px; background: #1a1d24; overflow: hidden;"><div style="width: 58%; height: 24px; border-radius: 6px; background: {{el}};"></div></div><div class="mono" style="width: 32px; font-size: 16px; font-weight: 700; text-align: right;">58</div></div>
+    <div style="display: flex; align-items: center; gap: 12px;"><div class="mono" style="width: 58px; font-size: 16px; font-weight: 700; color: #cfd3da;">SPD</div><div style="flex-grow: 1; height: 24px; border-radius: 6px; background: #1a1d24; overflow: hidden;"><div style="width: 52%; height: 24px; border-radius: 6px; background: {{el}};"></div></div><div class="mono" style="width: 32px; font-size: 16px; font-weight: 700; text-align: right;">52</div></div>
+    <div style="display: flex; align-items: center; gap: 12px;"><div class="mono" style="width: 58px; font-size: 16px; font-weight: 700; color: #cfd3da;">LUCK</div><div style="flex-grow: 1; height: 24px; border-radius: 6px; background: #1a1d24; overflow: hidden;"><div style="width: 61%; height: 24px; border-radius: 6px; background: {{el}};"></div></div><div class="mono" style="width: 32px; font-size: 16px; font-weight: 700; text-align: right;">61</div></div>
+  </div>
+  <div class="mono" style="margin-top: auto; font-size: 14px; color: #cfd3da; letter-spacing: 1px;">KING OF THE HILL · REIGN 7 · seed 9f3a1c02b7e4</div>
+</div>
+</x-dc>
+<script data-dc-script data-props='{"element":{"editor":"enum","options":["fire","water","earth","air","void"],"default":"fire","section":"Card"},"rarity":{"editor":"enum","options":["common","uncommon","rare","epic","legendary"],"default":"legendary","section":"Card"},"$preview":{"width":600,"height":840}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const EL = { fire: '#e0521f', water: '#2666cc', earth: '#7a5c36', air: '#bfc7d6', void: '#3b2450' };
+    const RC = { common: '#9aa0a6', uncommon: '#3ab54a', rare: '#2f80ed', epic: '#9b51e0', legendary: '#f2b134' };
+    const element = this.props.element ?? 'fire';
+    const rarity = this.props.rarity ?? 'legendary';
+    return { element, el: EL[element] ?? EL.fire, rc: RC[rarity] ?? RC.legendary, rarityLabel: rarity.toUpperCase() };
+  }
+}
+</script>
+</body>
+</html>

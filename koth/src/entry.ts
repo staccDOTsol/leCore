@@ -223,7 +223,8 @@ export class Entry implements EntryLike {
   }
 
   /** Step 3: sweep, convert, pool, lock. Resumable: each completed step is recorded on the quote. */
-  async settle(id: string): Promise<Quote> {
+  async settle(id: string, opts: { onStep?: (label: string, sig?: string) => void } = {}): Promise<Quote> {
+    const step = (label: string, sig?: string) => { try { opts.onStep?.(label, sig); } catch { /* observers never break settlement */ } };
     const q = this.loadQuote(id);
     if (!q) throw new Error(`unknown quote ${id}`);
     if (q.status === 'settled') return q;
@@ -264,6 +265,7 @@ export class Entry implements EntryLike {
         fs.rmSync(this.keyPath(id), { force: true });
         this.log(`[quote ${id}] swept ${swept} raw, key deleted, tx ${sig}`);
       }
+      step(`swept ${Number(q.steps.sweptRaw) / 10 ** q.decimals} · key deleted`, q.steps.sweep);
       const swept = BigInt(q.steps.sweptRaw);
       // the shares, from what actually arrived (the buffer means this is >= the quote in the normal case)
       const inferenceShare = q.totalUsd > 0 ? (swept * BigInt(Math.round((q.inferenceUsd / q.totalUsd) * 1e6))) / 1_000_000n : 0n;
@@ -282,6 +284,7 @@ export class Entry implements EntryLike {
         }
         this.saveQuote(q);
       }
+      step(`inference share → ${this.d.inferencePayMint.equals(ZOO_TOKEN_MINT) ? '$TOKEN' : 'the zoo wallet'}`, q.steps.inference === 'skipped' ? undefined : q.steps.inference);
 
       // 3c. half the stake -> master token
       if (!q.steps.swapHalf) {
@@ -290,6 +293,7 @@ export class Entry implements EntryLike {
         this.log(`[quote ${id}] swapped ${half} -> ${r.outAmountRaw} master, tx ${r.signature}`);
       }
       const masterRaw = BigInt(q.steps.masterRaw);
+      step('half → master token on Jupiter', q.steps.swapHalf);
 
       // 3d. the pool: create <token>/MASTER if it is not there, else deposit into it
       if (!q.steps.pool) {
@@ -298,6 +302,7 @@ export class Entry implements EntryLike {
         this.saveQuote(q);
         this.log(`[quote ${id}] pool ${r.poolId.toBase58()} ${r.created ? 'created' : 'deposited'}, lp ${r.lpRaw}, tx ${r.signature}`);
       }
+      step(`pool ${q.steps.poolCreated === 'true' ? 'created' : 'deposited'} on Raydium`, q.steps.pool);
 
       // 3e. the play: LP into the vault, recorded for the player
       if (!q.steps.play) {
@@ -312,6 +317,7 @@ export class Entry implements EntryLike {
         q.steps.play = sig; q.playSignature = sig; this.saveQuote(q);
         this.log(`[quote ${id}] play locked ${lpRaw} LP, tx ${sig}`);
       }
+      step('LP locked in the vault', q.steps.play);
       q.status = 'settled'; this.saveQuote(q);
       return q;
     } catch (e) {

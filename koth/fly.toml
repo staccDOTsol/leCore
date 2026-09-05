@@ -10,6 +10,8 @@ primary_region = "iad"
 [env]
   KOTH_DATA_DIR = "/data"
   KOTH_PORT = "8787"
+  OPENZOO_BASE_URL = "http://127.0.0.1:8402/v1"
+  OPENZOO_WALLET = "/data/openzoo-wallet.json"
 
 [mounts]
   source = "koth_data"

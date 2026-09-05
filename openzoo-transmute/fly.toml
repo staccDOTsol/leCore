@@ -9,6 +9,9 @@ primary_region = "iad"
   OPENZOO_CLUSTER = "mainnet"
   OPENZOO_HUB_URL = "https://sites.openzoo.fun"
   PORT = "8080"
+  # writes: set the secret OPENZOO_HUB_KEYPAIR (JSON byte array) to let visitors POST; bounded by these
+  OPENZOO_HUB_WRITE_BUDGET_SOL = "0.05"
+  OPENZOO_HUB_WRITES_PER_MIN = "3"
 
 [http_service]
   internal_port = 8080

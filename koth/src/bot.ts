@@ -43,7 +43,7 @@ export async function main(): Promise<void> {
   // inference: the zoo, always. A mock only for rehearsal.
   const judge: JudgeLike = process.env.KOTH_MOCK_JUDGE === '1'
     ? new MockJudge()
-    : new Judge(new OpenzooClient({ baseUrl: cfg.openzooBaseUrl, model: cfg.model }));
+    : new Judge(new OpenzooClient({ baseUrl: cfg.openzooBaseUrl, model: cfg.model, log }));
 
   let chain: ChainLike;
   let entry: Entry | null = null;

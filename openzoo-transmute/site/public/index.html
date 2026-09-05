@@ -69,7 +69,7 @@ input{padding:.4rem .6rem;font:inherit;border:1px solid #8884;border-radius:.4re
 <tr><td>Read cost</td><td>metered</td><td>free, unlimited, no account needed</td></tr>
 <tr><td>Write cost</td><td>free</td><td>~0.000005 SOL per transaction + rent for new state; a signer is required (your wallet, a bounded hub signer, or x402 pay-per-write once built)</td></tr>
 <tr><td>Deploy cost</td><td>free tier</td><td>rent up front: ~0.03–0.1 SOL for a small app on the shared <code>zoo-vm</code> runtime (this site: 0.095 SOL); ~1 SOL+ with a dedicated program per site</td></tr>
-<tr><td>Toolchain</td><td>node</td><td>node + Rust + <code>cargo-build-sbf</code> (goes away with the shared runtime)</td></tr>
+<tr><td>Toolchain</td><td>node</td><td>node only on the shared runtime (bytecode, no cargo); node + Rust + <code>cargo-build-sbf</code> for a dedicated program</td></tr>
 <tr><td>Who can take it down</td><td>Vercel, DNS, a card on file</td><td>nobody, if the upgrade authority is burned; any RPC + any gateway serves it</td></tr>
 <tr><td>Verifiability</td><td>trust the platform</td><td>the code and every state change are public and replayable</td></tr>
 <tr><td>Composability</td><td>HTTP APIs</td><td>other programs and wallets can call your routes as instructions</td></tr>

@@ -70,11 +70,17 @@ program/          koth-play (Pinocchio, no_std): Initialize / Play / SetMaster
 scripts/          create-config, launch-master, read-metadata, update-metadata, init-play, challenge, preflight
 ```
 
-## Run it
+## Run it (Telegram first)
+
+Telegram is the first surface. Two values from BotFather / your group, and the bot is live:
+
+1. `@BotFather` → `/newbot` → `TELEGRAM_BOT_TOKEN`. Turn privacy mode OFF (`/setprivacy`) so it sees group messages.
+2. Add the bot to the group; `TELEGRAM_CHAT_ID` is the group's id (a negative number; `/getid`-style bots or the
+   `getUpdates` JSON show it). Takeovers and the master shillbot's cadence posts go there.
 
 ```bash
 cd koth && npm ci
-cp .env.example .env            # fill in: keypair, RPC, bot tokens; openzoo proxy on :8402 (`npx openzoo`)
+cp .env.example .env            # fill in: KOTH_KEYPAIR, SOLANA_RPC_KEY, BIRDEYE_API_KEY, TELEGRAM_*; openzoo proxy on :8402 (`npx openzoo`)
 
 npm run create-config           # 1. DBC config: creator keeps update authority, quoted in $TOKEN, bonds at 100M
 npm run launch-master -- "Master Shill" SHILL https://your.host/koth/metadata/genesis.json
@@ -88,6 +94,23 @@ npm run init-play               # config pda: master mint + Raydium CPMM program
 npm run bot                     # Telegram / Discord / X, whichever have credentials, + metadata server on :8787
 KOTH_DRY_RUN=1 KOTH_MOCK_JUDGE=1 npm run bot      # rehearsal: in-memory master token, free play, no model
 ```
+
+`launch-master` needs no arguments: the genesis identity ("Master Shill" / `SHILL`, uri = `koth/genesis/genesis.json`
+served raw from GitHub) is the placeholder the first king overwrites. Override with `KOTH_MASTER_NAME` /
+`KOTH_MASTER_SYMBOL` / `KOTH_MASTER_URI` or positional args.
+
+### Deploy (fly.io)
+
+```bash
+cd koth && fly launch --copy-config --no-deploy
+fly secrets set KOTH_KEYPAIR=... SOLANA_RPC_KEY=... BIRDEYE_API_KEY=... TELEGRAM_BOT_TOKEN=... TELEGRAM_CHAT_ID=... \
+  KOTH_DBC_CONFIG=... KOTH_MASTER_MINT=... KOTH_PLAY_PROGRAM_ID=... KOTH_PUBLIC_URL=https://koth-bot.fly.dev OPENZOO_BASE_URL=...
+fly deploy
+```
+
+The container runs `src/bot.ts`; `/data` holds the hill ledger, quotes, hosted metadata and card images. Point
+`KOTH_PUBLIC_URL` at the app's https url so the on-chain `uri` resolves. The openzoo proxy must be reachable from the
+container (`OPENZOO_BASE_URL`); running `npx openzoo` as a sidecar or on the same machine is the simplest.
 
 `declare_id!` in `program/src/lib.rs` is `EWhj4iLpFxnD4w2ULdK1dgsbbGJ9s7L281rpSXgLGUmG`; deploying with a different
 keypair means changing that line and rebuilding.

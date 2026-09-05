@@ -35,6 +35,7 @@ describe('rpc', () => {
   it('is mainnet only: key -> helius mainnet, url wins, default public', () => {
     expect(resolveRpcUrl({ SOLANA_RPC_KEY: 'k' })).toBe('https://mainnet.helius-rpc.com/?api-key=k');
     expect(resolveRpcUrl({ solana_rpc_key: 'k' })).toBe('https://mainnet.helius-rpc.com/?api-key=k');
+    expect(resolveRpcUrl({ SOLANA_RPC_KEY: 'https://rpc.example/x?api-key=k' })).toBe('https://rpc.example/x?api-key=k');
     expect(resolveRpcUrl({ SOLANA_RPC_URL: 'https://rpc/{key}', SOLANA_RPC_KEY: 'k' })).toBe('https://rpc/k');
     expect(resolveRpcUrl({})).toBe('https://api.mainnet-beta.solana.com');
   });

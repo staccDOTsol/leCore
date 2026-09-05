@@ -1,0 +1,27 @@
+# fly.io deployment for the bot (same shape openzoo uses). `fly launch --copy-config` then set secrets:
+#   fly secrets set KOTH_KEYPAIR=... SOLANA_RPC_KEY=... BIRDEYE_API_KEY=... TELEGRAM_BOT_TOKEN=... TELEGRAM_CHAT_ID=... \
+#                   KOTH_MASTER_MINT=... KOTH_DBC_CONFIG=... KOTH_PUBLIC_URL=https://<app>.fly.dev OPENZOO_BASE_URL=...
+app = "koth-bot"
+primary_region = "iad"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  KOTH_DATA_DIR = "/data"
+  KOTH_PORT = "8787"
+
+[mounts]
+  source = "koth_data"
+  destination = "/data"
+
+[http_service]
+  internal_port = 8787
+  force_https = true
+  auto_stop_machines = false      # the bot long-polls Telegram; it must stay up
+  auto_start_machines = true
+  min_machines_running = 1
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"

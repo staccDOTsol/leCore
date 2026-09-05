@@ -1,0 +1,16 @@
+{
+  "name": "Master Shill",
+  "symbol": "SHILL",
+  "description": "The crown of King of the Hill. Whoever holds the hill, this token becomes: name, ticker and image rewritten on-chain to the sitting king, remixed by the master shillbot. The hill is empty. Come take it.",
+  "image": "https://raw.githubusercontent.com/staccDOTsol/leCore/claude/shill-token-metadata-onchain-9fhodc/koth/genesis/genesis.svg",
+  "attributes": [
+    { "trait_type": "reign", "value": 0 },
+    { "trait_type": "king", "value": "nobody yet" }
+  ],
+  "properties": {
+    "koth": {
+      "reign": 0,
+      "rules": "shill <mint> <pitch> to a bot; entry 0.25 SOL worth +1% per takeover +inference +5%; half becomes <coin>/MASTER Raydium LP locked forever; win and the metadata is yours"
+    }
+  }
+}

@@ -76,6 +76,7 @@ function pk(v: string | undefined): PublicKey | null {
 export function resolveRpcUrl(env: NodeJS.ProcessEnv = process.env): string {
   const key = env.SOLANA_RPC_KEY || env.solana_rpc_key || '';
   if (env.SOLANA_RPC_URL) return env.SOLANA_RPC_URL.replace('{key}', key);
+  if (/^https?:\/\//i.test(key)) return key;                       // a full endpoint URL stored under the key name
   if (key) return `https://mainnet.helius-rpc.com/?api-key=${key}`;
   return 'https://api.mainnet-beta.solana.com';
 }

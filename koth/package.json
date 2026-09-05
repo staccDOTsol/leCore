@@ -1,0 +1,44 @@
+{
+  "name": "koth",
+  "version": "0.1.0",
+  "private": true,
+  "description": "King of the Hill: a master shill token on Meteora DBC whose on-chain metadata (name/symbol/uri) is rewritten to whoever currently holds the hill.",
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "serve": "tsx src/server.ts",
+    "create-config": "tsx scripts/create-config.ts",
+    "launch-master": "tsx scripts/launch-master.ts",
+    "read-metadata": "tsx scripts/read-metadata.ts",
+    "update-metadata": "tsx scripts/update-metadata.ts",
+    "challenge": "tsx scripts/challenge.ts",
+    "devnet-e2e": "tsx scripts/devnet-e2e.ts",
+    "bot": "tsx src/bot.ts",
+    "init-play": "tsx scripts/init-play.ts",
+    "build-program": "cargo build-sbf --manifest-path program/Cargo.toml",
+    "test-program": "cargo test --manifest-path program/Cargo.toml --lib"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@metaplex-foundation/mpl-token-metadata": "^2.13.0",
+    "@meteora-ag/dynamic-bonding-curve-sdk": "^1.5.11",
+    "@raydium-io/raydium-sdk-v2": "^0.2.63-alpha",
+    "@solana/spl-token": "^0.4.15",
+    "@solana/spl-token-metadata": "^0.1.6",
+    "@solana/web3.js": "^1.98.4",
+    "bn.js": "^5.2.5",
+    "discord.js": "^14.27.0",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@types/bn.js": "^5.2.0",
+    "@types/node": "^22.20.1",
+    "tsx": "^4.23.13",
+    "typescript": "^5.9.3",
+    "vitest": "^3.2.7"
+  }
+}

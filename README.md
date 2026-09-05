@@ -88,6 +88,14 @@ Attach any model with `m.attach_runtime(model_dir)` (automatic source attributio
 opt-out honored) or any `prompt -> text` callable via `m.zoo_attach(fn)` — the
 contract never changes: taught beats model, provenance always visible, vetoes stick.
 
+## King of the Hill (the shill game)
+
+[`koth/`](koth/README.md) is a game built on this engine's creature renderer: people shill their token to
+knock the current king off the hill, every token's on-chain metrics become a monster-rancher card, and the
+winner's identity is written into the **master shill token's on-chain metadata** (Meteora DBC, creator keeps
+update authority). Entry is permanent Raydium CPMM liquidity locked in a Pinocchio program; all inference runs
+through openzoo. No website: it lives in Telegram, Discord and on X.
+
 ## What is this?
 
 Most software uses a *different* tool for every job: a database for memory, a mesh for 3-D, a solver for physics, a neural net for perception. They don't share much, so gluing them together is most of the work.

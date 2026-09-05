@@ -1,0 +1,46 @@
+# King of the Hill (koth/): the TypeScript game + the Pinocchio play program. Runs only when koth/ changes,
+# so the Python engine's CI budget is untouched.
+name: koth
+
+on:
+  push:
+    paths: ["koth/**", ".github/workflows/koth.yml"]
+  pull_request:
+    paths: ["koth/**", ".github/workflows/koth.yml"]
+
+concurrency:
+  group: koth-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  typescript:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults: { run: { working-directory: koth } }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm, cache-dependency-path: koth/package-lock.json }
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+
+  program:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults: { run: { working-directory: koth/program } }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with: { workspaces: koth/program }
+      # native tests: the pure validation logic (Raydium PoolState offsets, instruction decoding, layouts)
+      - run: cargo test --lib
+      # the SBF build proves the program compiles for the chain; the artifact is what gets deployed
+      - name: Install Solana CLI
+        run: |
+          sh -c "$(curl -sSfL https://release.anza.xyz/stable/install)"
+          echo "$HOME/.local/share/solana/install/active_release/bin" >> "$GITHUB_PATH"
+      - run: cargo build-sbf
+      - uses: actions/upload-artifact@v4
+        with: { name: koth_play.so, path: koth/program/target/deploy/koth_play.so }

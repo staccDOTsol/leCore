@@ -76,3 +76,11 @@ docs/UNICRON_REMAINING.md
 galvatron.npz
 galvatron_profile.npz
 hrnn_debug.json
+
+# --- koth (King of the Hill): the node package, its runtime data, program build outputs, secrets ---
+koth/node_modules/
+koth/dist/
+koth/data/
+koth/.env
+koth/program/target/
+koth/program/keys/

@@ -1,0 +1,21 @@
+[package]
+name = "koth-play"
+version = "0.1.0"
+edition = "2021"
+description = "King of the Hill play vault: locks Raydium CPMM LP whose pair contains the master shill token"
+license = "MIT"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+name = "koth_play"
+
+[dependencies]
+pinocchio = "0.9"
+pinocchio-pubkey = "0.3"
+pinocchio-system = "0.3"
+pinocchio-token = "0.4"
+
+[profile.release]
+overflow-checks = true
+lto = "fat"
+codegen-units = 1

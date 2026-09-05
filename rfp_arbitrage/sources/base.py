@@ -15,6 +15,21 @@ from ..config import Settings, settings as _settings
 from ..models import Opportunity
 
 
+def _retry_after_seconds(value: str | None, default: float = 15.0) -> float:
+    """Retry-After is either delta-seconds or an HTTP-date (SAM.gov sends the latter)."""
+    if not value:
+        return default
+    try:
+        return max(0.0, float(value))
+    except ValueError:
+        pass
+    try:
+        from email.utils import parsedate_to_datetime
+        return max(0.0, (parsedate_to_datetime(value) - datetime.now(timezone.utc)).total_seconds())
+    except (TypeError, ValueError):
+        return default
+
+
 class Http:
     """requests.Session with a user agent, a delay between calls, retries, and a byte cache
     keyed on URL+body so re-running a crawl during development does not re-hit a portal."""
@@ -45,11 +60,20 @@ class Http:
         p = self._cache_path(full, None)
         if self.cache and p.exists() and time.time() - p.stat().st_mtime < max_age:
             return p.read_bytes()
+        timeout = kw.pop("timeout", 60)
         for attempt in range(4):
             self._throttle()
             try:
-                r = self.s.get(full, timeout=kw.pop("timeout", 60), **kw)
-                if r.status_code in (429, 500, 502, 503, 504):
+                r = self.s.get(full, timeout=timeout, **kw)
+                if r.status_code == 429:
+                    # honour Retry-After (capped); a quota that will not reset within the cap is
+                    # reported as such instead of being retried into a longer ban
+                    wait = _retry_after_seconds(r.headers.get("Retry-After"))
+                    if wait > 120 or attempt == 3:
+                        raise IOError(f"HTTP 429 rate limited by {full.split('?')[0]} (retry after {wait:.0f}s)")
+                    time.sleep(wait)
+                    continue
+                if r.status_code in (500, 502, 503, 504):
                     raise IOError(f"HTTP {r.status_code}")
                 r.raise_for_status()
                 break

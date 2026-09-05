@@ -20,6 +20,11 @@ from ..models import Opportunity, Jurisdiction, Tier
 
 DISCOVERY = "https://api.us.socrata.com/api/catalog/v1"
 
+
+def _today() -> str:
+    from datetime import date
+    return date.today().isoformat()
+
 # domain, dataset id, label, jurisdiction, tier, region, column roles
 CURATED: list[dict[str, Any]] = [
     {"domain": "data.lacity.org", "id": "hf3r-utnq", "label": "City of Los Angeles RAMP open bids",
@@ -126,6 +131,11 @@ class Socrata(Source):
         status = str(g("status") or "").lower()
         if status and re.search(r"award|clos|cancel|archiv|terminated|expired", status):
             return None
+        deadline = norm_date(g("deadline"))
+        # a solicitation without a future deadline is closed, or the dataset is an award/history
+        # table that discovery mistook for a bid board -- either way it is not an opportunity
+        if not deadline or deadline[:10] < _today():
+            return None
         sid = str(g("id") or "") or re.sub(r"\W+", "-", title.lower())[:60]
         url = g("url")
         if isinstance(url, dict):
@@ -135,7 +145,7 @@ class Socrata(Source):
             url=str(url or f"https://{ds['domain']}/d/{ds['id']}"),
             jurisdiction=Jurisdiction(ds["jurisdiction"]), tier=Tier(ds["tier"]),
             buyer=str(g("buyer") or ds.get("buyer") or ""), region=ds.get("region", ""),
-            posted=norm_date(g("posted")), deadline=norm_date(g("deadline")),
+            posted=norm_date(g("posted")), deadline=deadline,
             notice_type=str(g("type") or ""), description=strip_html(str(g("description") or "")),
             unspsc=[str(g("unspsc"))] if g("unspsc") else [], estimated_value=parse_money(g("value")),
             currency="CAD" if ds["jurisdiction"] == "CA" else "USD",

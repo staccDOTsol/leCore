@@ -7,8 +7,12 @@ Notes:    postedFrom/postedTo are MM/dd/yyyy and the window must be <= 1 year; `
           solicitation, r=sources sought, s=special notice); the description field is a
           URL to a second endpoint (noticedesc) that returns the HTML body; resourceLinks
           are attachment download URLs (they 303 to S3 and need the api_key too).
-Rate:     non-federal keys get 10 requests/day on the description endpoint at the lowest
-          tier -- so descriptions are fetched lazily for the intellectual subset only."""
+Rate:     A NON-FEDERAL api.data.gov key gets 10 REQUESTS PER DAY across these endpoints
+          (search pages, noticedesc, attachment downloads all count; the limit resets at
+          00:00 UTC and a 429 carries Retry-After as an HTTP date). So: one search page holds
+          1,000 notices -- keep `days` small, let the HTTP cache serve repeats, and fetch
+          descriptions/attachments only for the intellectual subset. A federal or
+          system-account key raises this to 1,000+/day."""
 from __future__ import annotations
 
 from datetime import date, timedelta

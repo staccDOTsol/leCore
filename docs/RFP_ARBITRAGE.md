@@ -35,7 +35,7 @@ The store is a single SQLite file (`--db` or `$RFP_DB`); every verb is resumable
 
 | source | reach | mechanism |
 |---|---|---|
-| `sam_gov` | US federal, every agency | Opportunities API v2 (key), notice bodies via `noticedesc`, attachments via resource links |
+| `sam_gov` | US federal, every agency | Opportunities API v2 (key), notice bodies via `noticedesc`, attachments via resource links. **A public (non-federal) key allows 10 requests/day, reset 00:00 UTC** -- one search page is 1,000 notices, so crawl small windows and fetch documents for the shortlist only |
 | `canadabuys` | Canada federal (all) + provinces/municipalities/MASH bodies publishing through CanadaBuys | daily open-data CSV (open + new notices) |
 | `seao_quebec` | Québec province + every Québec municipality / school service centre / health network / crown corp | OCDS weekly JSON on Données Québec |
 | `merx` | Canada: provincial portals hosted on MERX (MB, NS, NB, PEI, NL...), hundreds of municipalities, private | Scrapy spider (`spiders/mets_spider.py`), public detail pages |

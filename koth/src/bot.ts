@@ -13,7 +13,7 @@ import { FileImageProvider } from './assets.js';
 import { MasterChain, MemoryChain, type ChainLike } from './chain.js';
 import { Commands } from './commands.js';
 import { loadConfig, loadKeypair } from './config.js';
-import { Entry } from './entry.js';
+import { Entry, type Quote } from './entry.js';
 import { FileStore, FreeEntry, Hill, type EntryLike } from './hill.js';
 import { Judge, MockJudge, type JudgeLike } from './judge.js';
 import { OpenzooClient } from './openzoo.js';
@@ -43,7 +43,7 @@ export async function main(): Promise<void> {
   // inference: the zoo, always. A mock only for rehearsal.
   const judge: JudgeLike = process.env.KOTH_MOCK_JUDGE === '1'
     ? new MockJudge()
-    : new Judge(new OpenzooClient({ baseUrl: cfg.openzooBaseUrl, model: cfg.model }));
+    : new Judge(new OpenzooClient({ baseUrl: cfg.openzooBaseUrl, model: cfg.model, log }));
 
   let chain: ChainLike;
   let entry: Entry | null = null;
@@ -60,7 +60,7 @@ export async function main(): Promise<void> {
       // the hill is built below; the entry reads its inference estimate lazily through this closure
       entry = new Entry({
         connection, operator, masterMint: cfg.masterMint, playProgramId: cfg.playProgramId, cpmmProgramId: cfg.raydiumCpmmProgramId,
-        dataDir: cfg.dataDir, zooWallet: cfg.zooWallet, inferencePayMint: cfg.inferencePayMint,
+        dataDir: cfg.dataDir, zooWallet: cfg.zooWallet, inferencePayMint: cfg.inferencePayMint, jupiterApiKey: cfg.jupiterApiKey || undefined,
         estimateInferenceUsd: () => hill?.inferenceEstimateUsd() ?? 0.05, log,
       });
       entryLike = entry;
@@ -74,8 +74,8 @@ export async function main(): Promise<void> {
   let hill: Hill | undefined;
   hill = new Hill({
     judge, chain, uri, entry: entryLike, store: new FileStore(path.join(cfg.dataDir, 'hill.json')),
-    image: (card, reign) => image.image(card, reign), baseFeeSol: cfg.entrySol, feeGrowthPct: cfg.entryGrowthPct,
-    erosionPerLoss: cfg.erosionPerLoss, erosionMax: cfg.erosionMax, uncontestedHandicap: cfg.uncontestedHandicap, log,
+    image: (card, reign) => image.image(card, reign), baseFeeSol: cfg.entrySol, feeGrowthPct: cfg.entryGrowthPct, log,
+    potUsd: entry ? () => entry.potUsd() : undefined,   // the pot is what the vault holds on chain, priced live
   });
   const commands = new Commands({ hill, entry, dataDir: cfg.dataDir, masterMint: cfg.masterMint?.toBase58() ?? null, explorer, log });
 
@@ -83,6 +83,20 @@ export async function main(): Promise<void> {
   const port = Number(process.env.KOTH_PORT || 8787);
   http.createServer((req, res) => {
     const url = new URL(req.url ?? '/', 'http://x');
+    if (url.pathname === '/' || url.pathname === '/king') {
+      // the link-preview page: X / Telegram / Discord unfurl it into the king's card (og:image must be a bitmap)
+      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'public, max-age=60' });
+      res.end(kingPage(hill?.king ?? null, cfg.publicUrl, cfg.dataDir, cfg.masterMint?.toBase58() ?? null, entry?.feePayer ?? null));
+      return;
+    }
+    const q = url.pathname.match(/^\/q\/([A-Za-z0-9_-]{4,40})$/);
+    if (q) {
+      const file = path.join(cfg.dataDir, 'quotes', `${q[1]}.json`);
+      if (!fs.existsSync(file)) { res.writeHead(404, { 'content-type': 'text/plain' }); res.end('no such quote'); return; }
+      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
+      res.end(quotePage(JSON.parse(fs.readFileSync(file, 'utf8')) as Quote));
+      return;
+    }
     const m = url.pathname.match(/^\/(metadata|assets)\/([A-Za-z0-9_.-]+)$/);
     if (!m) { res.writeHead(404); res.end(); return; }
     const file = path.join(cfg.dataDir, m[1], m[2]);
@@ -101,9 +115,12 @@ export async function main(): Promise<void> {
     const dc = new DiscordSurface(commands, { token: cfg.discord.token, channelId: cfg.discord.channelId, log });
     surfaces.push(dc); await dc.start();
   }
-  if (cfg.x.bearer && cfg.x.apiKey && cfg.x.botUserId) {
-    const x = new XSurface(commands, { creds: cfg.x, dataDir: cfg.dataDir, log });
-    surfaces.push({ broadcast: (t) => x.post(t).then(() => undefined) }); void x.poll(); log('x: polling mentions');
+  if (cfg.x.apiKey && cfg.x.apiSecret && cfg.x.accessToken && cfg.x.accessSecret) {
+    const x = new XSurface(commands, {
+      creds: { ...cfg.x }, dataDir: cfg.dataDir, log, publicUrl: cfg.publicUrl, rawAddresses: process.env.X_RAW_ADDRESSES === '1',
+      maxChars: Number(process.env.X_MAX_CHARS || 4000), pollMs: Number(process.env.X_POLL_SECONDS || 90) * 1000,
+    });
+    if (await x.start()) { surfaces.push(x); void x.poll(); log('x: polling mentions'); }
   }
   if (!surfaces.length) log('no surface credentials set: only the metadata server is running');
 
@@ -121,6 +138,51 @@ export async function main(): Promise<void> {
   };
   setInterval(() => void cadence(), everyMs).unref();
   if (process.env.KOTH_SHILL_ON_START === '1') void cadence();
+}
+
+/** Minimal HTML whose Open Graph / Twitter Card tags point at the king's PNG, so a link to the game unfurls as the card. */
+const escHtml = (s: string) => s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c] as string));
+
+/** One value with a copy button; the page's script wires the buttons. */
+function copyRow(label: string, value: string): string {
+  return `<div class="row"><div class="lbl">${escHtml(label)}</div><code>${escHtml(value)}</code><button data-copy="${escHtml(value)}">copy</button></div>`;
+}
+const PAGE_STYLE = 'body{margin:0;background:#0d0f14;color:#e6e8ec;font:16px system-ui;display:grid;place-items:center;min-height:100vh}main{max-width:640px;padding:24px;width:100%;box-sizing:border-box}h1{font-size:22px}.row{display:grid;grid-template-columns:1fr auto;gap:6px 10px;align-items:center;margin:14px 0}.lbl{grid-column:1/-1;opacity:.7;font-size:13px}code{font:15px ui-monospace,monospace;word-break:break-all;background:#151922;padding:10px;border-radius:8px}button{background:#2f80ed;color:#fff;border:0;border-radius:8px;padding:10px 14px;font:600 14px system-ui;cursor:pointer}button.ok{background:#3ab54a}.muted{opacity:.7}';
+const COPY_SCRIPT = `<script>for(const b of document.querySelectorAll('[data-copy]'))b.onclick=async()=>{try{await navigator.clipboard.writeText(b.dataset.copy);b.textContent='copied';b.classList.add('ok');setTimeout(()=>{b.textContent='copy';b.classList.remove('ok')},1500)}catch{prompt('copy:',b.dataset.copy)}}</script>`;
+
+/** A quote, with the deposit address and amount as copyable fields: what the X reply links to (it cannot carry the address itself). */
+export function quotePage(q: Quote): string {
+  const left = Math.max(0, q.expiresAt - Date.now());
+  const status = q.status === 'pending' ? (left ? `expires in ${Math.ceil(left / 60_000)} min` : 'expired') : q.status;
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>KOTH quote ${escHtml(q.id)}</title><meta name="robots" content="noindex"><meta name="viewport" content="width=device-width,initial-scale=1"><style>${PAGE_STYLE}</style></head>` +
+    `<body><main><h1>QUOTE ${escHtml(q.id)} · ${escHtml(q.player)}</h1><p class="muted">${escHtml(status)} · one-time address, never reused, deleted after sweep</p>` +
+    copyRow('send exactly this amount', String(q.amountUi)) + copyRow('of this token (mint)', q.mint) + copyRow('to this one-time address', q.depositAddress) +
+    `<p>${escHtml(`${q.playFeeSol} SOL stake ≈ $${q.playFeeUsd.toFixed(2)} + inference ≈ $${q.inferenceUsd.toFixed(2)} · +${q.bufferPct}%`)}</p>` +
+    `<p>then tell the bot <code>paid ${escHtml(q.id)}</code>. Half becomes liquidity for your coin/MASTER, locked for good.</p></main>${COPY_SCRIPT}</body></html>`;
+}
+
+export function kingPage(k: { name: string; symbol: string; image?: string | null; reign: number; pitch?: string; mint?: string } | null, publicUrl: string, dataDir: string, masterMint: string | null = null, feePayer: string | null = null): string {
+  const esc = escHtml;
+  const base = publicUrl.replace(/\/+$/, '');
+  let image = k?.image ?? null;
+  if (image?.endsWith('.svg')) {   // crawlers ignore SVG; use the PNG the provider writes beside it when it exists
+    const png = image.replace(/\.svg$/, '.png');
+    if (fs.existsSync(path.join(dataDir, 'assets', path.basename(png)))) image = png;
+  }
+  const title = k ? `${k.name} ($${k.symbol}) is KING OF THE HILL · reign ${k.reign}` : 'KING OF THE HILL · the hill is empty';
+  const desc = k ? (k.pitch ?? '').slice(0, 200) || 'Shill your coin. Beat the king. The master token becomes yours.' : 'First to pay takes it. Shill your coin to the bot.';
+  const og = [
+    ['og:type', 'website'], ['og:title', title], ['og:description', desc], ['og:url', `${base}/king`],
+    ...(image ? [['og:image', image], ['twitter:card', 'summary_large_image'], ['twitter:image', image]] : [['twitter:card', 'summary']]),
+    ['twitter:title', title], ['twitter:description', desc],
+  ].map(([p, c]) => `<meta property="${p}" name="${p}" content="${esc(c)}">`).join('\n');
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>${esc(title)}</title>\n${og}\n<meta name="viewport" content="width=device-width,initial-scale=1"><style>${PAGE_STYLE}</style></head>` +
+    `<body><main style="text-align:center">` +
+    (image ? `<img src="${esc(image)}" alt="${esc(title)}" style="max-width:100%;border-radius:16px">` : '') +
+    `<h1>${esc(title)}</h1><p>${esc(desc)}</p>` +
+    (k?.mint ? copyRow("the king's coin (mint)", k.mint) : '') + (masterMint ? copyRow('the master token (mint)', masterMint) : '') +
+    (feePayer ? copyRow('the fee payer: send SOL here when the bot asks (Raydium pool creation fee)', feePayer) : '') +
+    `<p class="muted">Say <code>king</code> to the bot on Telegram or mention it on X.</p></main>${COPY_SCRIPT}</body></html>`;
 }
 
 const isMain = process.argv[1] && path.resolve(process.argv[1]) === path.resolve(new URL(import.meta.url).pathname);

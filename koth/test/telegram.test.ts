@@ -85,7 +85,10 @@ describe('telegram surface', () => {
     ]);
     const tg = new TelegramSurface(commands, { token: 'T', fetchImpl: f });
     await tg.start();
-    expect(calls.find((c) => c.method === 'setMyCommands')?.body).toMatchObject({ commands: expect.arrayContaining([expect.objectContaining({ command: 'shill' })]) });
+    const menus = calls.filter((c) => c.method === 'setMyCommands');
+    expect(menus.map((c) => (c.body.scope as { type: string }).type)).toEqual(['default', 'all_private_chats', 'all_group_chats', 'all_chat_administrators']);
+    for (const m of menus) expect(m.body).toMatchObject({ commands: expect.arrayContaining([expect.objectContaining({ command: 'shill' }), expect.objectContaining({ command: 'wallet' })]) });
+    expect(calls.some((c) => c.method === 'setMyShortDescription')).toBe(true);
     await tg.pollOnce(0);
     expect([...tg.chats]).toEqual(['-555']);
     await tg.broadcast('hello everyone');

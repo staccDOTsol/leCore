@@ -73,8 +73,29 @@ export interface ImageProvider {
 }
 
 /**
- * Writes `<dir>/assets/<reign>.svg` (and a leCore PNG when `python` is on) and returns its public url.
- * The PNG path shells out to koth/render_asset.py with the card as JSON; any failure falls back to SVG.
+ * Rasterize an SVG to PNG with resvg (pure wasm/napi, no browser). Telegram's sendPhoto, X's media
+ * upload and every link-preview crawler want a bitmap, not an SVG. Resolves null when the optional
+ * dependency is missing, so the SVG path still works without it. Generic font families map to
+ * DejaVu, which the container installs (fonts-dejavu-core).
+ */
+export async function svgToPng(svg: string, opts: { width?: number } = {}): Promise<Buffer | null> {
+  try {
+    const { Resvg } = await import('@resvg/resvg-js');
+    const r = new Resvg(svg, {
+      ...(opts.width ? { fitTo: { mode: 'width', value: opts.width } } : {}),
+      font: { loadSystemFonts: true, defaultFontFamily: 'DejaVu Sans', sansSerifFamily: 'DejaVu Sans', monospaceFamily: 'DejaVu Sans Mono' },
+    });
+    return Buffer.from(r.render().asPng());
+  } catch (e) {
+    if (process.env.KOTH_DEBUG) console.error(`svgToPng: ${e instanceof Error ? e.message : e}`);
+    return null;
+  }
+}
+
+/**
+ * Writes `<dir>/assets/<reign>.svg`, then a PNG beside it (leCore's creature when `python` is on,
+ * else the card rasterized with resvg) and returns the PNG's public url; the SVG url only when no
+ * rasterizer is available.
  */
 export class FileImageProvider implements ImageProvider {
   constructor(private dir: string, private publicUrl: string, private opts: { python?: boolean; pythonBin?: string; timeoutMs?: number } = {}) {}
@@ -83,11 +104,12 @@ export class FileImageProvider implements ImageProvider {
     const assets = path.join(this.dir, 'assets');
     fs.mkdirSync(assets, { recursive: true });
     const base = this.publicUrl.replace(/\/+$/, '');
-    if (this.opts.python) {
-      const png = path.join(assets, `${reign}.png`);
-      if (await renderCreaturePng(card, png, this.opts)) return `${base}/assets/${reign}.png`;
-    }
-    fs.writeFileSync(path.join(assets, `${reign}.svg`), cardSvg(card));
+    const png = path.join(assets, `${reign}.png`);
+    if (this.opts.python && await renderCreaturePng(card, png, this.opts)) return `${base}/assets/${reign}.png`;
+    const svg = cardSvg(card);
+    fs.writeFileSync(path.join(assets, `${reign}.svg`), svg);
+    const bytes = await svgToPng(svg);
+    if (bytes) { fs.writeFileSync(png, bytes); return `${base}/assets/${reign}.png`; }
     return `${base}/assets/${reign}.svg`;
   }
 }

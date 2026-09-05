@@ -19,6 +19,12 @@ export type OpenzooOptions = {
   contextId?: string;
   timeoutMs?: number;
   fetchImpl?: typeof fetch;
+  /** Models to try after `model` fails; default `openzoo/auto`. */
+  fallbacks?: string[];
+  /** Tries per model on transient failures; default 4 (1s, 2s, 4s backoff). */
+  attempts?: number;
+  log?: (s: string) => void;
+  sleep?: (ms: number) => Promise<void>;
 };
 
 export type ChatMessage = { role: 'system' | 'user' | 'assistant'; content: string };
@@ -83,26 +89,80 @@ export function extractJson(text: string): unknown {
   return JSON.parse(body.slice(start, end + 1));
 }
 
+/** Errors worth another try: the zoo or a door behind it hiccupped, or a payment door refused (402 upstream). */
+export function isTransient(status: number): boolean {
+  return status === 402 || status === 408 || status === 409 || status === 425 || status === 429 || status >= 500;
+}
+
+/**
+ * The gateway's "x402 door for <model> failed": it shopped every upstream door for that model and none
+ * could be paid. That is deterministic for the model and, worse, the gateway settles our payment
+ * before it finds out -- so retrying the same model only pays again for the same failure. Move on.
+ */
+export function isDoorFailure(message: string): boolean {
+  return /x402 door for .+ failed|no door quoted/i.test(message);
+}
+
+/**
+ * Where a completion goes when the configured model's doors cannot be paid: the auto router, then
+ * one strong model per provider, so a dead door on one side of the zoo does not decide a fight.
+ */
+export const DEFAULT_FALLBACKS = ['openzoo/auto', 'anthropic/claude-sonnet-5', 'openai/gpt-5.6-auto', 'google/gemini-3.6-flash', 'x-ai/grok-4.6', 'deepseek/deepseek-v4-pro'];
+
 export class OpenzooClient {
   readonly baseUrl: string;
   readonly model: string;
+  /** Models to fall through to when `model` keeps failing; `openzoo/auto` lets the zoo route around a dead door. */
+  readonly fallbacks: string[];
   private apiKey: string;
   private contextId: string;
   private timeoutMs: number;
+  private attempts: number;
   private f: typeof fetch;
+  private log: (s: string) => void;
+  private sleep: (ms: number) => Promise<void>;
 
   constructor(opts: OpenzooOptions = {}) {
     this.baseUrl = (opts.baseUrl ?? process.env.OPENZOO_BASE_URL ?? 'http://localhost:8402/v1').replace(/\/+$/, '');
     this.apiKey = opts.apiKey ?? process.env.OPENZOO_API_KEY ?? 'sk-openzoo';
     this.model = opts.model ?? process.env.KOTH_MODEL ?? 'openzoo/auto';
+    const fb = opts.fallbacks ?? (process.env.KOTH_MODEL_FALLBACKS ?? DEFAULT_FALLBACKS.join(',')).split(',').map((m) => m.trim()).filter(Boolean);
+    this.fallbacks = fb.filter((m) => m !== this.model);
     this.contextId = opts.contextId ?? process.env.OPENZOO_CONTEXT ?? '';
     this.timeoutMs = opts.timeoutMs ?? Number(process.env.OPENZOO_TIMEOUT_MS ?? 420_000);
+    this.attempts = opts.attempts ?? Number(process.env.OPENZOO_ATTEMPTS ?? 3);
     this.f = opts.fetchImpl ?? fetch;
+    this.log = opts.log ?? (() => {});
+    this.sleep = opts.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
   }
 
+  /**
+   * One completion, however many tries it takes: `attempts` per model with backoff on transient
+   * failures (5xx, 429, a 402 from a payment door, a dropped connection), then the same on each
+   * fallback model. Only a definitive answer (2xx) or a non-transient refusal ends it early.
+   */
   async chat(messages: ChatMessage[], opts: { maxTokens?: number; temperature?: number; json?: boolean } = {}): Promise<ChatResult> {
+    let last: Error = new Error('openzoo: no attempt made');
+    for (const model of [this.model, ...this.fallbacks]) {
+      for (let i = 1; i <= this.attempts; i++) {
+        try {
+          return await this.once(model, messages, opts);
+        } catch (e) {
+          last = e instanceof Error ? e : new Error(String(e));
+          const status = (e as { status?: number }).status ?? 0;
+          const transient = !isDoorFailure(last.message) && (status === 0 || isTransient(status));
+          this.log(`openzoo ${model} attempt ${i}/${this.attempts} failed${transient ? '' : ' (not retrying this model)'}: ${last.message.slice(0, 200)}`);
+          if (!transient) break;
+          if (i < this.attempts) await this.sleep(Math.min(15_000, 1000 * 2 ** (i - 1)));
+        }
+      }
+    }
+    throw last;
+  }
+
+  private async once(model: string, messages: ChatMessage[], opts: { maxTokens?: number; temperature?: number; json?: boolean }): Promise<ChatResult> {
     const body: Record<string, unknown> = {
-      model: this.model, messages, max_tokens: opts.maxTokens ?? 1200, stream: false,
+      model, messages, max_tokens: opts.maxTokens ?? 1200, stream: false,
     };
     if (opts.temperature !== undefined) body.temperature = opts.temperature;
     if (opts.json) body.response_format = { type: 'json_object' };
@@ -117,13 +177,14 @@ export class OpenzooClient {
       signal: AbortSignal.timeout(this.timeoutMs),
     });
     const json = (await res.json().catch(() => ({}))) as Record<string, unknown>;
-    if (!res.ok) throw new Error(`openzoo ${res.status}: ${JSON.stringify(json).slice(0, 300)}`);
+    if (!res.ok) throw Object.assign(new Error(`openzoo ${res.status}: ${JSON.stringify(json).slice(0, 300)}`), { status: res.status });
     const choices = (json.choices ?? []) as { message?: { content?: unknown } }[];
     const content = choices[0]?.message?.content;
     const text = typeof content === 'string' ? content
       : Array.isArray(content) ? content.map((c) => (c && typeof c === 'object' && 'text' in c ? String((c as { text: unknown }).text) : '')).join('')
       : '';
-    return { text: text.trim(), usage: receiptOf(json, this.model), raw: json };
+    if (!text.trim()) throw Object.assign(new Error(`openzoo: empty reply from ${model}`), { status: 502 });
+    return { text: text.trim(), usage: receiptOf(json, model), raw: json };
   }
 
   /** Ask for JSON matching `schema`; retries once with the validation error quoted back. */

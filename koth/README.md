@@ -14,13 +14,17 @@ by the AI. Lose it and you're in the hall of fame.
 3. `paid <quote-id>` — your coin's **real numbers** (liquidity, volume, holders, chart) become a monster card.
    The master shillbot shills the sitting king. The AI judge scores both pitches. Cards are context; the
    pitch wins.
-4. **Win:** the master token's metadata is rewritten on-chain to your coin. Your name on the crown.
-   **Lose:** the king stays. Your entry stays too.
+4. **Win:** the master token's metadata is rewritten on-chain to your coin. Your name on the crown. **And you take
+   the pot: half of every LP position in the vault**, sent to the wallet you named with `wallet <address>`.
+   **Lose:** the king stays. Your entry stays in the vault, in the pot for whoever takes the hill next.
+
+Every reply from the bot ends with the pot in dollars, read from chain: half the value of every LP position the
+vault holds (each position's share of its pool's reserves, priced on the non-master side).
 
 Where the money goes: half your entry is swapped into the master token, paired with your coin in a Raydium
-pool `<yourcoin>/MASTER`, and the LP is locked in a vault with **no withdraw instruction**. Every attempt is
-permanent liquidity for the crown, paired with your coin. Nobody can pull it, including us. The AI's cut goes
-to openzoo in `$TOKEN`. No website: it lives in Telegram, Discord and on X.
+pool `<yourcoin>/MASTER`, and the LP goes into the vault. The vault is the pot: there is no withdraw, LP leaves
+it only through `Award`, which the game's operator key uses to hand a winner half of everything in it. The other
+half keeps stacking. The AI's cut goes to openzoo in `$TOKEN`. No website: it lives in Telegram, Discord and on X.
 
 There is no website. The game exists as the bots (Telegram, Discord, an automated X account) and as
 three things on Solana:
@@ -28,7 +32,7 @@ three things on Solana:
 | thing | where | why it is this |
 |---|---|---|
 | the master shill token | Meteora **Dynamic Bonding Curve**, quoted in `$TOKEN` (`EVUL…pump`, Token-2022), bonds at **100M** | DBC's config has `tokenAuthorityOption = CreatorUpdateAuthority`: the program creates the metadata as **mutable** and hands the update authority to the pool creator inside `initialize_virtual_pool` (`TokenAuthorityOption::get_update_authority` in the program). So the launcher wallet can rewrite `name` / `symbol` / `uri` on chain, from day one, with a plain Metaplex `UpdateMetadataAccountV2` (or Token-2022 `UpdateField`). |
-| the play vault | `koth/program` — a **Pinocchio** program | A *play* is Raydium CPMM LP deposited into a program PDA, accepted only when the pool pairs the master token with something. No withdraw instruction: every attempt is permanent liquidity for `<token>/MASTER`. |
+| the play vault | `koth/program` — a **Pinocchio** program | A *play* is Raydium CPMM LP deposited into a program PDA, accepted only when the pool pairs the master token with something. No withdraw: LP leaves only through `Award`, admin-signed, half of a position at a time, to a winner. The vault is the pot. |
 | inference | **openzoo** (openzoo.fun) | Every model call — the judge, the master shillbot, the metadata remix — goes through the zoo's OpenAI-compatible, x402-paid gateway. The receipt (routed model, USD billed) is on the ledger. |
 
 ## The loop
@@ -56,7 +60,7 @@ src/dbc.ts        Meteora DBC: config (creator keeps metadata authority; quote =
 src/metadata.ts   read + rewrite name/symbol/uri (Metaplex and Token-2022), byte-limit clamps
 src/metrics.ts    Birdeye (key) / DexScreener (keyless) / RPC facts -> TokenMetrics
 src/cards.ts      metrics -> deterministic card + creature spec
-src/assets.ts     SVG card, and the leCore PNG bridge (render_asset.py)
+src/assets.ts     SVG card, resvg rasterizer (PNG for Telegram / X / link previews), and the leCore PNG bridge (render_asset.py)
 src/openzoo.ts    the inference lane: chat completions + receipts (x402.billedUsd)
 src/judge.ts      master shillbot, arbiter (typed verdict), metadata remix
 src/hill.ts       the state machine: fee schedule, challenge, crown, hall of fame (JSON store)
@@ -64,9 +68,9 @@ src/uri.ts        hosting for the uri JSON: files served by the bot, or Pinata
 src/entry.ts      throwaway quotes, deposit detection, sweep, Jupiter half-swap, CPMM pool, lock
 src/play.ts       client for the play program (PDAs, instructions, decoders, pool discovery, proofs)
 src/commands.ts   king / hall / fee / shill / paid / help
-src/surfaces/     telegram.ts (Bot API long-poll), discord.ts (discord.js), x.ts (openzoo-xbot shape)
+src/surfaces/     telegram.ts (Bot API long-poll), discord.ts (discord.js), x.ts (mentions -> threads + media, the Telegram mirror)
 src/bot.ts        the runner: surfaces + the /metadata + /assets static server + the shill cadence
-program/          koth-play (Pinocchio, no_std): Initialize / Play / SetMaster
+program/          koth-play (Pinocchio, no_std): Initialize / Play / SetMaster / Award (the pot, admin-signed)
 scripts/          create-config, launch-master, read-metadata, update-metadata, init-play, challenge, preflight
 ```
 
@@ -101,6 +105,22 @@ KOTH_DRY_RUN=1 KOTH_MOCK_JUDGE=1 npm run bot      # rehearsal: in-memory master 
 `launch-master` needs no arguments: the genesis identity ("Master Shill" / `SHILL`, uri = `koth/genesis/genesis.json`
 served raw from GitHub) is the placeholder the first king overwrites. Override with `KOTH_MASTER_NAME` /
 `KOTH_MASTER_SYMBOL` / `KOTH_MASTER_URI` or positional args.
+
+### X (the mirror of Telegram)
+
+Same game, X's shape: mentions are the commands (`@openzoobot king`, `@openzoobot shill <mint> <pitch>`, `@openzoobot paid <quote-id>`),
+every reply is the same message Telegram gets, threaded when it is longer than one post, with the king's card attached as native
+media (the SVG card is rasterized to PNG with resvg). Takeovers and the master shillbot's cadence posts are standalone posts with
+the card. X cannot edit a post, so a settlement is one "SETTLING…" reply that the outcome threads under. `/king` on the bot's
+public url is a link-preview page (Open Graph + Twitter Card pointing at the PNG), so a link to the game unfurls as the card.
+
+Keys, from the app on developer.x.com with user authentication set to **Read and Write** (set that first, then generate the
+access token as the bot account): `X_API_KEY`, `X_API_SECRET`, `X_ACCESS_TOKEN`, `X_ACCESS_SECRET`. `X_BEARER_TOKEN` and
+`X_BOT_USER_ID` are optional. `X_MAX_CHARS` defaults to 4000 (Premium); set 280 on a plain account. `X_POLL_SECONDS` paces the mention poll (429s are honoured).
+
+X refuses posts with an unbroken crypto address for an app's first 7 days (403) and allows one cashtag per post, so on X every
+address is written in groups of five characters (`HgtdK CcDUK N8rZN …`) and the reply links the page with copy buttons:
+`/q/<quote-id>` for a quote, `/king` for the king, master and fee-payer addresses. `X_RAW_ADDRESSES=1` posts them unbroken.
 
 ### Deploy (fly.io)
 

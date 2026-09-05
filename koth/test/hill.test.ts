@@ -75,6 +75,26 @@ describe('hill', () => {
     expect(won.record.usage?.usd).toBeGreaterThan(0);
   });
 
+  it('the pot is read from chain when someone wins: recorded on the challenge and in the awards ledger', async () => {
+    let onChain = 0;                                                   // what half the vault is worth right now, per the chain
+    const chain = new MemoryChain({ name: 'Master Shill', symbol: 'SHILL', uri: 'https://x/genesis.json' }, profiles);
+    const h = new Hill({ judge: new MockJudge('power'), chain, uri: new MemoryUriProvider(), entry: new CountingEntry(), store: new MemoryStore(), potUsd: async () => onChain });
+    expect(await h.potUsd()).toBe(0);
+    onChain = 5;
+    const first = await h.challenge({ mint: B, pitch: 'beta', author: 'p1', surface: 'telegram' }, { prepaid: { playSignature: 's1', feeSol: 0.05, stakeUsd: 10 } });
+    expect(first.potUsd).toBe(5);                                      // the empty-hill winner takes half of what is there
+    onChain = 7.5;
+    const lost = await h.challenge({ mint: B, pitch: 'beta again', author: 'p2', surface: 'x' }, { prepaid: { playSignature: 's2', feeSol: 0.05, stakeUsd: 10 } });
+    expect(lost.record.result).toBe('lost'); expect(lost.potUsd).toBeNull();
+    onChain = 12.5;
+    const won = await h.challenge({ mint: C, pitch: 'gamma', author: 'p3', surface: 'x' }, { prepaid: { playSignature: 's3', feeSol: 0.0505, stakeUsd: 10 } });
+    expect(won.record.result).toBe('won'); expect(won.potUsd).toBe(12.5);
+    expect(h.snapshot.awards.map((a) => [a.author, a.potUsd])).toEqual([['p1', 5], ['p3', 12.5]]);
+    // a pricing failure never breaks a reply: the pot reads 0
+    const broken = new Hill({ judge: new MockJudge('power'), chain, uri: new MemoryUriProvider(), entry: new CountingEntry(), store: new MemoryStore(), potUsd: async () => { throw new Error('rpc down'); } });
+    expect(await broken.potUsd()).toBe(0);
+  });
+
   it('reuses the master shillbot pitch within its ttl and rewrites it after', async () => {
     let t = 1_000_000;
     const { h } = hill({ now: () => t });
@@ -107,43 +127,5 @@ describe('hill', () => {
     expect(a.king?.reign).toBe(1);
     expect(b.king?.reign).toBe(2);
     expect(h.snapshot.takeovers).toBe(2);
-  });
-});
-
-describe('handicap: uncontested crowns and erosion', () => {
-  const D = 'D'.repeat(32);
-  const strong = { ...profiles, [D]: { name: 'Delta', symbol: 'DELTA', liquidityUsd: 4e7, marketCapUsd: 4e9, fdvUsd: 4e9, volume24hUsd: 8e7, buys24h: 8000, sells24h: 4000, holders: 90000, top10Share: 0.12 } };
-  function siege(opts: { erosionPerLoss?: number; erosionMax?: number; uncontestedHandicap?: number } = {}) {
-    const chain = new MemoryChain({ name: 'Master Shill', symbol: 'SHILL', uri: 'u' }, strong);
-    const h = new Hill({ judge: new MockJudge('power'), chain, uri: new MemoryUriProvider(), entry: new CountingEntry(), store: new MemoryStore(), ...opts });
-    return h;
-  }
-  it('an uncontested first king fights at a handicap and loses ties', async () => {
-    const h = siege();
-    await h.challenge({ mint: C, pitch: 'gamma first', author: 'p', surface: 'cli' });     // empty hill: uncontested
-    expect(h.king?.uncontested).toBe(true);
-    expect(h.handicap()).toEqual({ total: 15, erosion: 0, uncontested: 15, failedDefenses: 0 });
-    // Delta ties Gamma on power (77 each): a contested king keeps ties, an uncontested one loses them
-    const out = await h.challenge({ mint: D, pitch: 'delta', author: 'q', surface: 'cli' });
-    expect(out.record.verdict?.winner).toBe('challenger');
-    expect(out.oneLiner).toMatch(/takes the hill on points/);
-    expect(h.king?.uncontested).toBe(false);
-    expect(h.handicap().uncontested).toBe(0);
-  });
-  it('every failed challenge erodes the king until someone breaks through, capped', async () => {
-    const h = siege({ uncontestedHandicap: 0, erosionPerLoss: 35, erosionMax: 100 });
-    await h.challenge({ mint: C, pitch: 'gamma', author: 'p', surface: 'cli' });
-    for (let i = 0; i < 2; i++) {
-      const r = await h.challenge({ mint: B, pitch: 'beta tries', author: 'b', surface: 'cli' });
-      expect(r.record.result).toBe('lost');
-    }
-    expect(h.handicap()).toEqual({ total: 70, erosion: 70, uncontested: 0, failedDefenses: 2 });
-    const r = await h.challenge({ mint: B, pitch: 'beta again', author: 'b', surface: 'cli' });
-    expect(r.record.result).toBe('lost');
-    expect(h.handicap().erosion).toBe(100);
-    // Gamma totals 4*77 = 308, minus 100 of erosion = 208; Beta (4*26) still loses; Alpha (4*59 = 236) breaks through
-    const win = await h.challenge({ mint: A, pitch: 'alpha breaks the siege', author: 'a', surface: 'cli' });
-    expect(win.record.result).toBe('won');
-    expect(h.handicap().failedDefenses).toBe(0);
   });
 });

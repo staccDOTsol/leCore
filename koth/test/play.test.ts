@@ -3,7 +3,7 @@ import { Keypair, PublicKey, SystemProgram } from '@solana/web3.js';
 import { TOKEN_PROGRAM_ID } from '@solana/spl-token';
 import {
   CONFIG_LEN, PLAY_LEN, RAYDIUM_POOL_STATE_DISC, RAYDIUM_POOL_STATE_LEN, configPda, decodeConfig, decodePlay, decodePoolState,
-  encodePlayData, initializeIx, playIx, playPda, setMasterIx, shillSide, vaultLpAta, vaultPda,
+  awardIx, encodeAwardData, encodePlayData, initializeIx, playIx, playPda, setMasterIx, shillSide, vaultLpAta, vaultPda,
 } from '../src/play.js';
 
 const programId = new PublicKey('EWhj4iLpFxnD4w2ULdK1dgsbbGJ9s7L281rpSXgLGUmG');
@@ -65,6 +65,13 @@ describe('instructions', () => {
     expect(keys).toEqual([operator, player, configPda(programId)[0], pool, lp, src, vaultLpAta(programId, lp), playPda(programId, pool, player)[0], vaultPda(programId)[0], TOKEN_PROGRAM_ID, SystemProgram.programId].map((k) => k.toBase58()));
     expect(ix.keys[0].isSigner).toBe(true); expect(ix.keys[1].isSigner).toBe(false);
     expect(ix.keys[5].isWritable).toBe(true); expect(ix.keys[6].isWritable).toBe(true); expect(ix.keys[7].isWritable).toBe(true);
+
+    // Award: tag 3, admin signs, vault ata -> destination, signed for by the vault pda
+    expect(encodeAwardData(9n)[0]).toBe(3); expect(encodeAwardData(9n).readBigUInt64LE(1)).toBe(9n);
+    const dst = pk(14);
+    const aw = awardIx({ programId, admin, lpMint: lp, destination: dst, amount: 9n });
+    expect(aw.keys.map((k) => k.pubkey.toBase58())).toEqual([admin, configPda(programId)[0], lp, vaultLpAta(programId, lp), dst, vaultPda(programId)[0], TOKEN_PROGRAM_ID].map((k) => k.toBase58()));
+    expect(aw.keys[0].isSigner).toBe(true); expect(aw.keys[3].isWritable).toBe(true); expect(aw.keys[4].isWritable).toBe(true);
   });
   it('derives pdas from the program seeds', () => {
     expect(PublicKey.isOnCurve(vaultPda(programId)[0].toBytes())).toBe(false);

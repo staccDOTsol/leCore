@@ -14,7 +14,7 @@
  * Settlement is idempotent per quote: every step records what it did, so a crash mid-way can be
  * resumed with `settle(quoteId)` again without double-spending.
  */
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import BN from 'bn.js';
@@ -31,7 +31,7 @@ import {
 } from '@raydium-io/raydium-sdk-v2';
 import { NATIVE_SOL_MINT, ZOO_TOKEN_MINT } from './dbc.js';
 import type { EntryLike } from './hill.js';
-import { createVaultLpAtaIx, decodePoolState, playIx } from './play.js';
+import { awardIx, createVaultLpAtaIx, decodePoolState, findCpmmPoolsWithMaster, playIx, vaultPda } from './play.js';
 
 export const USDC_MINT = new PublicKey('EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v');
 export { ZOO_TOKEN_MINT };
@@ -67,6 +67,44 @@ export type Quote = {
 
 export type Prices = { solUsd: number; tokenUsd: number; decimals: number };
 
+/**
+ * Read a balance until it rises above `before`. A confirmed transaction is not always visible on the
+ * next read from a load-balanced RPC; reading once right after `sendAndConfirm` once recorded 0 LP
+ * for a pool that had just been created, and the vault then refused to lock 0.
+ */
+export async function waitForIncrease(read: () => Promise<bigint>, before: bigint, opts: { attempts?: number; delayMs?: number; sleep?: (ms: number) => Promise<void> } = {}): Promise<bigint> {
+  const attempts = opts.attempts ?? 12, delayMs = opts.delayMs ?? 1500;
+  const sleep = opts.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
+  let last = before;
+  for (let i = 0; i < attempts; i++) {
+    last = await read().catch(() => before);
+    if (last > before) return last;
+    await sleep(delayMs);
+  }
+  throw new Error(`the LP tokens have not shown up yet (${last} of at least ${before + 1n}); the pool transaction is recorded, say paid again in a minute`);
+}
+
+/** Rent for the accounts a CPMM pool creates (vaults, lp mint, observation state), on top of Raydium's creation fee. */
+export const POOL_RENT_SOL = 0.03;
+/** The least we ever ask for, so a top-up covers a few pools and the fees around them. */
+export const MIN_TOPUP_SOL = 0.1;
+
+/**
+ * The operator (the fee payer) cannot afford to create the <coin>/MASTER pool: Raydium charges a
+ * creation fee in SOL. Everything settled so far is kept; `paid <quote-id>` again after a top-up
+ * resumes at the pool step.
+ */
+export class NeedsSolError extends Error {
+  readonly topUpSol: number;
+  constructor(readonly feePayer: string, readonly haveSol: number, readonly needSol: number, readonly poolFeeSol: number) {
+    const shortfall = Math.max(0, needSol - haveSol);
+    const topUpSol = Math.max(MIN_TOPUP_SOL, Math.ceil(shortfall * 100) / 100);
+    super(`Raydium charges ${poolFeeSol} SOL to create the pool and the fee payer ${feePayer} has ${haveSol.toFixed(4)} SOL (needs ~${needSol.toFixed(2)}). Send it ${topUpSol} SOL and say paid again.`);
+    this.name = 'NeedsSolError';
+    this.topUpSol = topUpSol;
+  }
+}
+
 /** Jupiter price v3: usd per token for any tradable mint, in one call. */
 export async function jupiterPrices(mint: string, baseUrl = 'https://lite-api.jup.ag', f: typeof fetch = fetch): Promise<Prices> {
   const sol = NATIVE_SOL_MINT.toBase58();
@@ -88,6 +126,42 @@ export function computeQuote(a: { playFeeSol: number; inferenceUsd: number; solU
   return { playFeeUsd, inferenceUsd: a.inferenceUsd, bufferPct, totalUsd, amountUi: Number(amountRaw) / 10 ** a.decimals, amountRaw: amountRaw.toString() };
 }
 
+export type VaultPosition = { lpMint: string; pool: string | null; lp: string; share: number; usd: number; priced: boolean };
+const POT_CACHE_MS = 60_000;
+
+/**
+ * A ONE-TIME SIGNER FOR ANYTHING THAT TOUCHES SOL.
+ *
+ * The operator's canonical wrapped-SOL account is squatted: the address every wallet and router
+ * derives for it is owned by someone else, so any swap that wraps or unwraps SOL "for the user"
+ * fails with `Token account … is owned by … instead of the user`. So the operator never wraps.
+ * A fresh keypair is funded with the lamports plus a fee cushion, it is the swap's user (its
+ * wrapped-SOL account is brand new and its own), the output is delivered to whoever it was for,
+ * and whatever SOL is left is swept back. The keypair is used once and forgotten.
+ */
+export type SolRunner = { keypair: Keypair; sweep: () => Promise<void> };
+export const SOL_FEE_CUSHION = 8_000_000n;   // rent for a wrapped-SOL account + priority fees + the sweep
+
+export async function spawnSolRunner(connection: Connection, operator: Keypair, lamports: bigint, log?: (s: string) => void): Promise<SolRunner> {
+  const keypair = Keypair.generate();
+  const fund = new Transaction().add(SystemProgram.transfer({ fromPubkey: operator.publicKey, toPubkey: keypair.publicKey, lamports: lamports + SOL_FEE_CUSHION }));
+  await sendAndConfirmTransaction(connection, fund, [operator], { commitment: 'confirmed' });
+  log?.(`sol runner ${keypair.publicKey.toBase58()} funded with ${lamports + SOL_FEE_CUSHION} lamports`);
+  return {
+    keypair,
+    sweep: async () => {
+      const bal = BigInt(await connection.getBalance(keypair.publicKey, 'confirmed'));
+      const back = bal - 5_000n;
+      if (back <= 0n) return;
+      const tx = new Transaction().add(SystemProgram.transfer({ fromPubkey: keypair.publicKey, toPubkey: operator.publicKey, lamports: back }));
+      await sendAndConfirmTransaction(connection, tx, [keypair], { commitment: 'confirmed' });
+      log?.(`sol runner ${keypair.publicKey.toBase58()} swept ${back} lamports back`);
+    },
+  };
+}
+
+const involvesSol = (a: { inputMint: PublicKey; outputMint: PublicKey }) => a.inputMint.equals(NATIVE_SOL_MINT) || a.outputMint.equals(NATIVE_SOL_MINT);
+
 export interface Swapper {
   /** Swap `amountRaw` of `inputMint` into `outputMint`; output lands in `destination`'s ATA (or the operator's). */
   swap(a: { inputMint: PublicKey; outputMint: PublicKey; amountRaw: bigint; destinationOwner?: PublicKey }): Promise<{ signature: string; outAmountRaw: bigint }>;
@@ -95,8 +169,20 @@ export interface Swapper {
 
 /** Jupiter swap API (lite-api needs no key; api.jup.ag takes one). */
 export class JupiterSwapper implements Swapper {
-  constructor(private connection: Connection, private operator: Keypair, private opts: { baseUrl?: string; apiKey?: string; slippageBps?: number; fetchImpl?: typeof fetch } = {}) {}
+  constructor(private connection: Connection, private operator: Keypair, private opts: { baseUrl?: string; apiKey?: string; slippageBps?: number; fetchImpl?: typeof fetch; solRunner?: (lamports: bigint) => Promise<SolRunner>; log?: (s: string) => void } = {}) {}
+
   async swap(a: { inputMint: PublicKey; outputMint: PublicKey; amountRaw: bigint; destinationOwner?: PublicKey }): Promise<{ signature: string; outAmountRaw: bigint }> {
+    if (!involvesSol(a)) return this.swapAs(this.operator, a);
+    // SOL on either side: a one-time signer wraps and unwraps with its own fresh account (see spawnSolRunner)
+    const runner = await (this.opts.solRunner ?? ((l) => spawnSolRunner(this.connection, this.operator, l, this.opts.log)))(a.inputMint.equals(NATIVE_SOL_MINT) ? a.amountRaw : 0n);
+    try {
+      return await this.swapAs(runner.keypair, { ...a, destinationOwner: a.outputMint.equals(NATIVE_SOL_MINT) ? undefined : (a.destinationOwner ?? this.operator.publicKey) });
+    } finally {
+      await runner.sweep().catch((e) => this.opts.log?.(`sol runner sweep failed: ${e instanceof Error ? e.message : e}`));
+    }
+  }
+
+  private async swapAs(user: Keypair, a: { inputMint: PublicKey; outputMint: PublicKey; amountRaw: bigint; destinationOwner?: PublicKey }): Promise<{ signature: string; outAmountRaw: bigint }> {
     const base = (this.opts.baseUrl ?? (this.opts.apiKey ? 'https://api.jup.ag' : 'https://lite-api.jup.ag')).replace(/\/+$/, '');
     const f = this.opts.fetchImpl ?? fetch;
     const headers: Record<string, string> = { 'content-type': 'application/json', ...(this.opts.apiKey ? { 'x-api-key': this.opts.apiKey } : {}) };
@@ -108,23 +194,107 @@ export class JupiterSwapper implements Swapper {
     const qr = await f(q, { headers, signal: AbortSignal.timeout(20_000) });
     const quote = (await qr.json()) as Record<string, unknown>;
     if (!qr.ok || !quote.outAmount) throw new Error(`jupiter quote failed: ${JSON.stringify(quote).slice(0, 200)}`);
+    // wrapAndUnwrapSol is only ever true for a one-time signer; the operator's own wrapped-SOL account is never used
     const body: Record<string, unknown> = {
-      quoteResponse: quote, userPublicKey: this.operator.publicKey.toBase58(), wrapAndUnwrapSol: true,
+      quoteResponse: quote, userPublicKey: user.publicKey.toBase58(), wrapAndUnwrapSol: !user.publicKey.equals(this.operator.publicKey),
       dynamicComputeUnitLimit: true, prioritizationFeeLamports: 'auto',
     };
-    if (a.destinationOwner) {
+    if (a.destinationOwner && !a.outputMint.equals(NATIVE_SOL_MINT)) {
       const outProgram = await tokenProgramFor(this.connection, a.outputMint);
-      body.destinationTokenAccount = getAssociatedTokenAddressSync(a.outputMint, a.destinationOwner, true, outProgram).toBase58();
+      const dst = getAssociatedTokenAddressSync(a.outputMint, a.destinationOwner, true, outProgram);
+      if (!user.publicKey.equals(a.destinationOwner)) {
+        // Jupiter delivers into an existing account only: make sure it is there (the operator pays the rent)
+        const mk = new Transaction().add(createAssociatedTokenAccountIdempotentInstruction(this.operator.publicKey, dst, a.destinationOwner, a.outputMint, outProgram));
+        await sendAndConfirmTransaction(this.connection, mk, [this.operator], { commitment: 'confirmed' });
+      }
+      body.destinationTokenAccount = dst.toBase58();
     }
     const sr = await f(`${base}/swap/v1/swap`, { method: 'POST', headers, body: JSON.stringify(body), signal: AbortSignal.timeout(30_000) });
     const s = (await sr.json()) as { swapTransaction?: string; error?: string };
     if (!sr.ok || !s.swapTransaction) throw new Error(`jupiter swap failed: ${s.error ?? sr.status}`);
     const tx = VersionedTransaction.deserialize(Buffer.from(s.swapTransaction, 'base64'));
-    tx.sign([this.operator]);
+    tx.sign([user]);
     const signature = await this.connection.sendRawTransaction(tx.serialize(), { skipPreflight: false, maxRetries: 3 });
     const latest = await this.connection.getLatestBlockhash('confirmed');
     await this.connection.confirmTransaction({ signature, ...latest }, 'confirmed');
     return { signature, outAmountRaw: BigInt(String(quote.outAmount)) };
+  }
+}
+
+/**
+ * Jupiter Ultra: one `order` (a signed-by-us transaction routed across Jupiter's routers, dflow
+ * included, which is what reaches a Meteora DBC curve quoted in $TOKEN) and one `execute`. Ultra
+ * has no destination account, so a swap for someone else lands in the operator's wallet and is
+ * forwarded. When Ultra cannot build an order the classic swap API is tried.
+ */
+export class UltraSwapper implements Swapper {
+  constructor(
+    private connection: Connection, private operator: Keypair,
+    private opts: { apiKey: string; baseUrl?: string; fetchImpl?: typeof fetch; fallback?: Swapper; log?: (s: string) => void; solRunner?: (lamports: bigint) => Promise<SolRunner> },
+  ) {}
+
+  async swap(a: { inputMint: PublicKey; outputMint: PublicKey; amountRaw: bigint; destinationOwner?: PublicKey }): Promise<{ signature: string; outAmountRaw: bigint }> {
+    try {
+      return await this.ultra(a);
+    } catch (e) {
+      if (!this.opts.fallback) throw e;
+      this.opts.log?.(`jupiter ultra: ${e instanceof Error ? e.message : e}; trying the swap api`);
+      return this.opts.fallback.swap(a);
+    }
+  }
+
+  private async ultra(a: { inputMint: PublicKey; outputMint: PublicKey; amountRaw: bigint; destinationOwner?: PublicKey }): Promise<{ signature: string; outAmountRaw: bigint }> {
+    if (!involvesSol(a)) return this.ultraAs(this.operator, a);
+    // SOL on either side: a one-time taker (see spawnSolRunner); its output is forwarded, its leftover SOL swept back
+    const runner = await (this.opts.solRunner ?? ((l) => spawnSolRunner(this.connection, this.operator, l, this.opts.log)))(a.inputMint.equals(NATIVE_SOL_MINT) ? a.amountRaw : 0n);
+    try {
+      return await this.ultraAs(runner.keypair, { ...a, destinationOwner: a.destinationOwner ?? this.operator.publicKey });
+    } finally {
+      await runner.sweep().catch((e) => this.opts.log?.(`sol runner sweep failed: ${e instanceof Error ? e.message : e}`));
+    }
+  }
+
+  private async ultraAs(taker: Keypair, a: { inputMint: PublicKey; outputMint: PublicKey; amountRaw: bigint; destinationOwner?: PublicKey }): Promise<{ signature: string; outAmountRaw: bigint }> {
+    const base = (this.opts.baseUrl ?? 'https://api.jup.ag').replace(/\/+$/, '');
+    const f = this.opts.fetchImpl ?? fetch;
+    const headers = { 'content-type': 'application/json', 'x-api-key': this.opts.apiKey };
+    const u = new URL(`${base}/ultra/v1/order`);
+    u.searchParams.set('inputMint', a.inputMint.toBase58());
+    u.searchParams.set('outputMint', a.outputMint.toBase58());
+    u.searchParams.set('amount', a.amountRaw.toString());
+    u.searchParams.set('taker', taker.publicKey.toBase58());
+    const or = await f(u, { headers, signal: AbortSignal.timeout(20_000) });
+    const order = (await or.json().catch(() => ({}))) as { transaction?: string | null; requestId?: string; outAmount?: string; router?: string; errorMessage?: string; error?: string };
+    if (!or.ok || !order.transaction || !order.requestId) throw new Error(`order: ${order.errorMessage ?? order.error ?? or.status}`);
+    const tx = VersionedTransaction.deserialize(Buffer.from(order.transaction, 'base64'));
+    tx.sign([taker]);
+    const er = await f(`${base}/ultra/v1/execute`, {
+      method: 'POST', headers, signal: AbortSignal.timeout(60_000),
+      body: JSON.stringify({ signedTransaction: Buffer.from(tx.serialize()).toString('base64'), requestId: order.requestId }),
+    });
+    const ex = (await er.json().catch(() => ({}))) as { status?: string; signature?: string; outputAmountResult?: string; error?: string; code?: number };
+    if (!er.ok || ex.status !== 'Success' || !ex.signature) throw new Error(`execute: ${ex.error ?? ex.code ?? er.status}`);
+    const outAmountRaw = BigInt(ex.outputAmountResult ?? order.outAmount ?? '0');
+    this.opts.log?.(`jupiter ultra via ${order.router ?? '?'}: ${a.amountRaw} ${a.inputMint.toBase58().slice(0, 6)} -> ${outAmountRaw} ${a.outputMint.toBase58().slice(0, 6)}, tx ${ex.signature}`);
+    // SOL out lands as lamports on the taker and the runner's sweep carries it home; tokens are forwarded
+    if (a.destinationOwner && !a.destinationOwner.equals(taker.publicKey) && outAmountRaw > 0n && !a.outputMint.equals(NATIVE_SOL_MINT)) {
+      await this.forward(taker, a.outputMint, outAmountRaw, a.destinationOwner);
+    }
+    return { signature: ex.signature, outAmountRaw };
+  }
+
+  /** Ultra always pays the taker: move the output on to whoever it was for. The operator pays the rent for the destination account. */
+  private async forward(from: Keypair, mint: PublicKey, amount: bigint, to: PublicKey): Promise<string> {
+    const program = await tokenProgramFor(this.connection, mint);
+    const decimals = (await getMint(this.connection, mint, 'confirmed', program)).decimals;
+    const src = getAssociatedTokenAddressSync(mint, from.publicKey, false, program);
+    const dst = getAssociatedTokenAddressSync(mint, to, true, program);
+    const tx = new Transaction().add(
+      createAssociatedTokenAccountIdempotentInstruction(this.operator.publicKey, dst, to, mint, program),
+      createTransferCheckedInstruction(src, mint, dst, from.publicKey, amount, decimals, [], program),
+    );
+    const signers = from.publicKey.equals(this.operator.publicKey) ? [this.operator] : [this.operator, from];
+    return sendAndConfirmTransaction(this.connection, tx, signers, { commitment: 'confirmed' });
   }
 }
 
@@ -149,6 +319,8 @@ export type EntryDeps = {
   /** From the ledger: what an attempt has been costing in inference. */
   estimateInferenceUsd: () => number;
   swapper?: Swapper;
+  /** With a key, swaps go through Jupiter Ultra (the swap api as fallback); without, the keyless swap api. */
+  jupiterApiKey?: string;
   prices?: (mint: string) => Promise<Prices>;
   slippageBps?: number;
   log?: (line: string) => void;
@@ -160,7 +332,8 @@ export class Entry implements EntryLike {
   private prices: (mint: string) => Promise<Prices>;
   private raydium: Promise<Raydium> | null = null;
   constructor(private d: EntryDeps) {
-    this.swapper = d.swapper ?? new JupiterSwapper(d.connection, d.operator, { slippageBps: d.slippageBps });
+    const classic = new JupiterSwapper(d.connection, d.operator, { apiKey: d.jupiterApiKey, slippageBps: d.slippageBps, log: d.log });
+    this.swapper = d.swapper ?? (d.jupiterApiKey ? new UltraSwapper(d.connection, d.operator, { apiKey: d.jupiterApiKey, fallback: classic, log: d.log }) : classic);
     this.prices = d.prices ?? ((mint) => jupiterPrices(mint));
     fs.mkdirSync(this.quotesDir, { recursive: true });
   }
@@ -306,7 +479,15 @@ export class Entry implements EntryLike {
 
       // 3e. the play: LP into the vault, recorded for the player
       if (!q.steps.play) {
-        const lpMint = new PublicKey(q.steps.lpMint), poolId = new PublicKey(q.steps.poolId), lpRaw = BigInt(q.steps.lpRaw);
+        const lpMint = new PublicKey(q.steps.lpMint), poolId = new PublicKey(q.steps.poolId);
+        let lpRaw = BigInt(q.steps.lpRaw || '0');
+        if (lpRaw <= 0n) {
+          // the pool step went through but its LP was read too early: whatever LP the operator holds for this
+          // pool is this quote's (every earlier quote's LP is already in the vault)
+          lpRaw = await waitForIncrease(() => this.lpHeld(lpMint), 0n, { attempts: 8 });
+          q.steps.lpRaw = lpRaw.toString(); this.saveQuote(q);
+          this.log(`[quote ${id}] re-measured LP: ${lpRaw}`);
+        }
         const player = this.playerKey(q);
         const tx = new Transaction().add(
           ComputeBudgetProgram.setComputeUnitLimit({ units: 200_000 }),
@@ -315,6 +496,7 @@ export class Entry implements EntryLike {
         );
         const sig = await sendAndConfirmTransaction(conn, tx, [op], { commitment: 'confirmed' });
         q.steps.play = sig; q.playSignature = sig; this.saveQuote(q);
+        this.invalidatePot();
         this.log(`[quote ${id}] play locked ${lpRaw} LP, tx ${sig}`);
       }
       step('LP locked in the vault', q.steps.play);
@@ -329,7 +511,7 @@ export class Entry implements EntryLike {
   /** The player's on-chain identity for the play record: a wallet if they gave one, else a pda-like hash of their handle. */
   private playerKey(q: Quote): PublicKey {
     try { return new PublicKey(q.player); } catch { /* not a pubkey */ }
-    const h = Buffer.from(require('node:crypto').createHash('sha256').update(`${q.surface}:${q.player}`).digest());
+    const h = Buffer.from(createHash('sha256').update(`${q.surface}:${q.player}`).digest());
     return new PublicKey(h);
   }
 
@@ -344,6 +526,104 @@ export class Entry implements EntryLike {
     );
     return sendAndConfirmTransaction(conn, tx, [op], { commitment: 'confirmed' });
   }
+
+  /** Everything the vault holds, per LP mint: the pot. */
+  async vaultHoldings(): Promise<{ lpMint: PublicKey; amount: bigint }[]> {
+    const r = await this.d.connection.getParsedTokenAccountsByOwner(vaultPda(this.d.playProgramId)[0], { programId: TOKEN_PROGRAM_ID }, 'confirmed');
+    return r.value
+      .map((a) => ({ lpMint: new PublicKey(a.account.data.parsed.info.mint as string), amount: BigInt(a.account.data.parsed.info.tokenAmount.amount as string) }))
+      .filter((h) => h.amount > 0n);
+  }
+
+  /**
+   * The prize: half of every LP position in the vault, moved to the winner (the config admin, our
+   * operator key, signs `Award`). A few pools per transaction; each transfer is logged and returned.
+   */
+  async awardHalf(winner: PublicKey): Promise<{ lpMint: string; amount: string; signature: string }[]> {
+    const op = this.d.operator, conn = this.d.connection;
+    const holdings = (await this.vaultHoldings()).filter((h) => h.amount >= 2n);
+    const out: { lpMint: string; amount: string; signature: string }[] = [];
+    for (let i = 0; i < holdings.length; i += 3) {
+      const batch = holdings.slice(i, i + 3);
+      const tx = new Transaction().add(ComputeBudgetProgram.setComputeUnitLimit({ units: 60_000 * batch.length + 40_000 }));
+      for (const h of batch) {
+        const dst = getAssociatedTokenAddressSync(h.lpMint, winner, true);
+        tx.add(
+          createAssociatedTokenAccountIdempotentInstruction(op.publicKey, dst, winner, h.lpMint),
+          awardIx({ programId: this.d.playProgramId, admin: op.publicKey, lpMint: h.lpMint, destination: dst, amount: h.amount / 2n }),
+        );
+      }
+      const signature = await sendAndConfirmTransaction(conn, tx, [op], { commitment: 'confirmed' });
+      for (const h of batch) {
+        out.push({ lpMint: h.lpMint.toBase58(), amount: (h.amount / 2n).toString(), signature });
+        this.log(`award ${h.amount / 2n} of LP ${h.lpMint.toBase58()} -> ${winner.toBase58()}, tx ${signature}`);
+      }
+    }
+    this.invalidatePot();
+    return out;
+  }
+
+  private potCache: { at: number; usd: number; detail: VaultPosition[] } | null = null;
+
+  /**
+   * What the vault holds, priced from chain: for each LP position, its share of the pool's reserves,
+   * valued as twice the priced side (the non-master side, priced by Jupiter; an AMM position is two
+   * equal halves). Positions nobody can price count as 0 rather than a guess. Cached for a minute:
+   * every reply shows the pot.
+   */
+  async vaultValueUsd(): Promise<{ usd: number; positions: VaultPosition[] }> {
+    if (this.potCache && Date.now() - this.potCache.at < POT_CACHE_MS) return { usd: this.potCache.usd, positions: this.potCache.detail };
+    const conn = this.d.connection;
+    const holdings = await this.vaultHoldings();
+    const positions: VaultPosition[] = [];
+    if (holdings.length) {
+      const pools = await findCpmmPoolsWithMaster(conn, this.d.cpmmProgramId, this.d.masterMint);
+      const byLp = new Map(pools.map((p) => [p.lpMint.toBase58(), p]));
+      const raydium = await this.getRaydium();
+      for (const h of holdings) {
+        const pool = byLp.get(h.lpMint.toBase58());
+        const pos: VaultPosition = { lpMint: h.lpMint.toBase58(), pool: pool?.pool.toBase58() ?? null, lp: h.amount.toString(), share: 0, usd: 0, priced: false };
+        positions.push(pos);
+        if (!pool) continue;
+        try {
+          const other = pool.token0.equals(this.d.masterMint) ? pool.token1 : pool.token0;
+          const otherIsA = pool.token0.equals(other);
+          const [{ rpcData }, supply, price] = await Promise.all([
+            raydium.cpmm.getPoolInfoFromRpc(pool.pool.toBase58()),
+            getMint(conn, h.lpMint, 'confirmed').then((m) => m.supply),
+            this.prices(other.toBase58()),
+          ]);
+          if (supply === 0n) continue;
+          const reserveOther = BigInt((otherIsA ? rpcData.baseReserve : rpcData.quoteReserve).toString());
+          pos.share = Number(h.amount) / Number(supply);
+          const otherUi = (Number(reserveOther) / 10 ** price.decimals) * pos.share;
+          pos.usd = Math.round(2 * otherUi * price.tokenUsd * 100) / 100;
+          pos.priced = true;
+        } catch (e) {
+          this.log(`pot: could not price LP ${h.lpMint.toBase58()}: ${e instanceof Error ? e.message : e}`);
+        }
+      }
+    }
+    const usd = Math.round(positions.reduce((a, p) => a + p.usd, 0) * 100) / 100;
+    this.potCache = { at: Date.now(), usd, detail: positions };
+    return { usd, positions };
+  }
+
+  /** The pot: half of what the vault holds, in USD, from chain. */
+  async potUsd(): Promise<number> {
+    return Math.round(((await this.vaultValueUsd()).usd / 2) * 100) / 100;
+  }
+
+  /** Forget the cached valuation (after a deposit or an award changed the vault). */
+  invalidatePot(): void { this.potCache = null; }
+
+  /** LP of `lpMint` in the operator's associated account (where Raydium mints and deposits it). */
+  private async lpHeld(lpMint: PublicKey): Promise<bigint> {
+    try { return (await getAccount(this.d.connection, getAssociatedTokenAddressSync(lpMint, this.d.operator.publicKey), 'confirmed')).amount; } catch { return 0n; }
+  }
+
+  /** The wallet that pays Raydium's pool-creation fee and every transaction fee: where a top-up goes. */
+  get feePayer(): string { return this.d.operator.publicKey.toBase58(); }
 
   private async getRaydium(): Promise<Raydium> {
     if (!this.raydium) {
@@ -376,11 +656,14 @@ export class Entry implements EntryLike {
     const masterProgram = await tokenProgramFor(conn, this.d.masterMint);
     const tokenDecimals = mint.equals(NATIVE_SOL_MINT) ? 9 : (await getMint(conn, mint, 'confirmed', program)).decimals;
     const masterDecimals = (await getMint(conn, this.d.masterMint, 'confirmed', masterProgram)).decimals;
-    const lpBalance = async (lpMint: PublicKey) => {
-      try { return (await getAccount(conn, getAssociatedTokenAddressSync(lpMint, op.publicKey))).amount; } catch { return 0n; }
-    };
+    const lpBalance = (lpMint: PublicKey) => this.lpHeld(lpMint);
 
     if (!info) {
+      // Raydium's creation fee comes out of the operator's SOL: say so, with the number, instead of a simulation error
+      const poolFeeSol = Number(feeConfig.createPoolFee ?? 0) / LAMPORTS_PER_SOL;
+      const needSol = poolFeeSol + POOL_RENT_SOL;
+      const haveSol = (await conn.getBalance(op.publicKey)) / LAMPORTS_PER_SOL;
+      if (haveSol < needSol) throw new NeedsSolError(op.publicKey.toBase58(), haveSol, needSol, poolFeeSol);
       const { execute, extInfo } = await raydium.cpmm.createPool({
         programId: CREATE_CPMM_POOL_PROGRAM, poolFeeAccount: CREATE_CPMM_POOL_FEE_ACC,
         mintA: { address: mint.toBase58(), decimals: tokenDecimals, programId: program.toBase58() },
@@ -391,8 +674,15 @@ export class Entry implements EntryLike {
       });
       const lpMint = extInfo.address.lpMint;
       const before = await lpBalance(lpMint);
-      const { txId } = await execute({ sendAndConfirm: true });
-      const after = await lpBalance(lpMint);
+      let txId: string;
+      try {
+        ({ txId } = await execute({ sendAndConfirm: true }));
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        if (/insufficient (lamports|funds)|InsufficientFundsForRent|0x1\b/i.test(msg)) throw new NeedsSolError(op.publicKey.toBase58(), haveSol, needSol, poolFeeSol);
+        throw e;
+      }
+      const after = await waitForIncrease(() => lpBalance(lpMint), before);
       return { poolId: extInfo.address.poolId, lpMint, lpRaw: after - before, signature: txId, created: true };
     }
 
@@ -409,7 +699,7 @@ export class Entry implements EntryLike {
     const before = await lpBalance(sides.lpMint);
     const { execute } = await raydium.cpmm.addLiquidity({ poolInfo, poolKeys, inputAmount, baseIn, slippage: new Percent(this.d.slippageBps ?? 100, 10_000), txVersion: TxVersion.V0 });
     const { txId } = await execute({ sendAndConfirm: true });
-    const after = await lpBalance(sides.lpMint);
+    const after = await waitForIncrease(() => lpBalance(sides.lpMint), before);
     return { poolId, lpMint: sides.lpMint, lpRaw: after - before, signature: txId, created: false };
   }
 

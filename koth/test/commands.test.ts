@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { MemoryChain } from '../src/chain.js';
-import { Commands, html, plain } from '../src/commands.js';
+import { Commands, html, plain, type Ctx } from '../src/commands.js';
 import { Hill, MemoryStore } from '../src/hill.js';
 import { MockJudge } from '../src/judge.js';
 import { MemoryUriProvider } from '../src/uri.js';
-import type { Entry, Quote } from '../src/entry.js';
+import { NeedsSolError, type Entry, type Quote } from '../src/entry.js';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -24,14 +24,29 @@ class FakeEntry {
   }
   async checkDeposit(id: string) { const q = this.quotes.get(id)!; const paid = this.paid.has(id); return { quote: q, paid, balanceRaw: paid ? 26300000n : 0n }; }
   async settle(id: string): Promise<Quote> { const q = this.quotes.get(id)!; q.status = 'settled'; q.playSignature = `sig-${id}`; return q; }
+  awarded: string[] = [];
+  async awardHalf(winner: { toBase58(): string }) { this.awarded.push(winner.toBase58()); return [{ lpMint: 'LPMINT1', amount: '2596238674', signature: 'award-1' }]; }
 }
 
+/** What the chain says half the vault is worth; tests move it. */
+let potOnChain = 0;
 function setup(entry: FakeEntry | null) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'koth-'));
-  const hill = new Hill({ judge: new MockJudge('power'), chain: new MemoryChain({ name: 'Master Shill', symbol: 'SHILL', uri: 'u' }, profiles), uri: new MemoryUriProvider(), entry: { play: async () => ({ playSignature: 'free', detail: {} }) }, store: new MemoryStore() });
+  const hill = new Hill({ judge: new MockJudge('power'), chain: new MemoryChain({ name: 'Master Shill', symbol: 'SHILL', uri: 'u' }, profiles), uri: new MemoryUriProvider(), entry: { play: async () => ({ playSignature: 'free', detail: {} }) }, store: new MemoryStore(), potUsd: async () => potOnChain });
   const commands = new Commands({ hill, entry: entry as unknown as Entry | null, dataDir: dir, masterMint: 'MASTER', explorer: (s) => `https://x/${s}` });
   return { hill, commands };
 }
+
+describe('parse', async () => {
+  const { Commands } = await import('../src/commands.js');
+  it('reads the command through mentions, the ".@bot" convention and leading punctuation', () => {
+    expect(Commands.parse('.@openzoobot king')).toEqual({ cmd: 'king', args: [] });
+    expect(Commands.parse('@openzoobot shill So111 the chain is sol')).toEqual({ cmd: 'shill', args: ['So111', 'the', 'chain', 'is', 'sol'] });
+    expect(Commands.parse('/fee@openzoobotbot')).toEqual({ cmd: 'fee', args: [] });
+    expect(Commands.parse('"paid q1"')).toEqual({ cmd: 'paid', args: ['q1"'] });
+    expect(Commands.parse('gm @openzoobot')).toBeNull();
+  });
+});
 
 describe('command parsing', () => {
   it('accepts slashes, bot mentions and bare words', () => {
@@ -50,13 +65,20 @@ describe('commands over the hill', () => {
   it('quotes, refuses unpaid, then settles and fights on paid', async () => {
     const entry = new FakeEntry();
     const { hill, commands } = setup(entry);
-    const ctx = { surface: 'telegram' as const, author: '@alice', authorId: 'tg:1', text: '' };
+    const ctx: Ctx = { surface: 'telegram', author: '@alice', authorId: 'tg:1', text: '' };
     const t = async (text: string, over: Partial<typeof ctx> = {}) => { const r = await commands.handle({ ...ctx, ...over, text }); return { r, text: r ? plain(r.rich) : '' }; };
-    expect((await t('/king')).text).toMatch(/EMPTY/);
+    const king0 = await t('/king');
+    expect(king0.text).toMatch(/EMPTY/);
+    expect(king0.text).toMatch(/POT \$0\.00 · take the hill and win HALF THE VAULT/);          // every reply carries the pot, from chain
+    expect(king0.text).toMatch(/THIS is how you play: https:\/\/t\.me\/theTokenonsolana\/37167/);   // and the surface's explainer post
+    expect((await t('/king', { surface: 'x' })).text).toMatch(/THIS is how you play: https:\/\/x\.com\/STACCoverflow\/status\/2096102767702016152/);
+    potOnChain = 12.5;
     const q = await t(`/shill ${A} sol is the chain the chain is sol`);
+    expect(q.text).toMatch(/no payout wallet yet/);
     expect(q.text).toMatch(/send exactly 26.3/); expect(q.text).toMatch(/DEPOSIT111/); expect(q.text).toMatch(/paid q1/);
-    expect(q.r?.buttons?.[0]?.[0]?.copy).toBe('DEPOSIT111');
-    expect(q.r?.buttons?.[0]?.[1]?.data).toBe('paid:q1');
+    expect(q.r?.buttons?.[0]?.[0]?.copy).toBe('26.3');
+    expect(q.r?.buttons?.[0]?.[1]?.copy).toBe('DEPOSIT111');
+    expect(q.r?.buttons?.[1]?.[0]?.data).toBe('paid:q1');
     expect(html(q.r!.rich)).toMatch(/<pre>DEPOSIT111<\/pre>/);
     expect((await t('paid q1')).text).toMatch(/not there yet/);
     expect((await t('paid q1', { authorId: 'tg:2' })).text).toMatch(/someone else/);
@@ -66,6 +88,14 @@ describe('commands over the hill', () => {
     const rt = plain(r!.rich);
     expect(rt).toMatch(/takes the empty hill/); expect(plain(r!.announce!)).toMatch(/master token is now/);
     expect(rt).toMatch(/play locked · tx: https:\/\/x\/sig-q1/);
+    // the win: the pot is whatever the chain says half the vault is worth; no wallet yet so it is held
+    expect(rt).toMatch(/YOU WIN THE POT ≈ \$12\.50/); expect(rt).toMatch(/held for you/); expect(rt).toMatch(/POT \$12\.50/);
+    expect(entry.awarded).toEqual([]);
+    const w = await t('wallet WzMaL78srutrF6CsxEkWuhMaDF5HZA6jNRaEPengqpb');
+    expect(w.text).toMatch(/payout wallet set/); expect(w.text).toMatch(/pot from reign 1 \(~\$12\.50\) is on its way/); expect(w.text).toMatch(/award-1/);
+    expect(entry.awarded).toEqual(['WzMaL78srutrF6CsxEkWuhMaDF5HZA6jNRaEPengqpb']);
+    expect((await t('wallet WzMaL78srutrF6CsxEkWuhMaDF5HZA6jNRaEPengqpb')).text).not.toMatch(/on its way/);   // nothing owed twice
+    expect((await t('wallet nope')).text).toMatch(/not a Solana address/);
     expect(hill.king?.mint).toBe(A);
     expect(hill.king?.playSignature).toBe('sig-q1');
     expect((await t('paid q1')).text).toMatch(/no open quote/);
@@ -73,6 +103,36 @@ describe('commands over the hill', () => {
     expect((await t('hall')).text).toMatch(/#1 Wrapped SOL/);
     expect((await t('fee')).text).toMatch(/1.01\^1/);
   });
+  it('resumes a settlement that failed after the sweep, even though the deposit address is empty now', async () => {
+    const entry = new FakeEntry();
+    let calls = 0;
+    entry.settle = async (id: string) => { const q = entry.quotes.get(id)!; calls++; q.status = 'settled'; q.playSignature = `sig-${id}`; return q; };
+    const { commands } = setup(entry);
+    const t = (text: string) => commands.handle({ surface: 'telegram', author: '@a', authorId: 'tg:1', text });
+    await t(`/shill ${A} sol is the chain the chain is sol`);
+    const q = entry.quotes.get('q1')!;
+    q.status = 'failed'; q.steps.sweep = 'swept-sig';                 // swept, then died at the swap; not in entry.paid: the address is empty
+    const r = await t('paid q1');
+    expect(calls).toBe(1);
+    expect(plain(r!.rich)).not.toMatch(/not there yet/);
+  });
+
+  it('tells the player to top up the fee payer when the pool cannot be created, and offers a retry', async () => {
+    const entry = new FakeEntry();
+    entry.settle = async () => { throw new NeedsSolError('FEEPAYER111', 0.02, 0.18, 0.15); };
+    const { commands } = setup(entry);
+    const t = (text: string) => commands.handle({ surface: 'telegram', author: '@a', authorId: 'tg:1', text });
+    await t(`/shill ${A} sol is the chain the chain is sol`);
+    entry.paid.add('q1');
+    const r = await t('paid q1');
+    expect(plain(r!.rich)).toMatch(/0.15 SOL/);
+    expect(plain(r!.rich)).toMatch(/send 0.16 SOL to the fee payer\nFEEPAYER111/);
+    expect(plain(r!.rich)).toMatch(/paid q1/);
+    expect(r?.buttons?.[0]?.[0]).toMatchObject({ copy: 'FEEPAYER111' });
+    expect(r?.buttons?.[0]?.[1]).toEqual({ label: 'Try again', data: 'paid:q1' });
+    expect(r?.page).toBe('/king');
+  });
+
   it('plays for free when no entry flow is configured', async () => {
     const { commands } = setup(null);
     const r = await commands.handle({ surface: 'discord', author: 'bob', authorId: 'dc:1', text: `shill ${B} stable is the new volatile ok` });

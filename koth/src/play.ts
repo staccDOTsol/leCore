@@ -131,6 +131,29 @@ export function playIx(a: { programId: PublicKey; operator: PublicKey; player: P
   });
 }
 
+export function encodeAwardData(amount: bigint): Buffer {
+  const d = Buffer.alloc(9);
+  d[0] = 3;
+  d.writeBigUInt64LE(amount, 1);
+  return d;
+}
+
+/** The Award instruction: the config admin moves `amount` LP of `lpMint` from the vault to a winner's token account. */
+export function awardIx(a: { programId: PublicKey; admin: PublicKey; lpMint: PublicKey; destination: PublicKey; amount: bigint }): TransactionInstruction {
+  return new TransactionInstruction({
+    programId: a.programId, data: encodeAwardData(a.amount),
+    keys: [
+      { pubkey: a.admin, isSigner: true, isWritable: false },
+      { pubkey: configPda(a.programId)[0], isSigner: false, isWritable: false },
+      { pubkey: a.lpMint, isSigner: false, isWritable: false },
+      { pubkey: vaultLpAta(a.programId, a.lpMint), isSigner: false, isWritable: true },
+      { pubkey: a.destination, isSigner: false, isWritable: true },
+      { pubkey: vaultPda(a.programId)[0], isSigner: false, isWritable: false },
+      { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+    ],
+  });
+}
+
 export async function fetchConfig(connection: Connection, programId: PublicKey): Promise<ConfigAccount | null> {
   const info = await connection.getAccountInfo(configPda(programId)[0]);
   return info ? decodeConfig(info.data) : null;

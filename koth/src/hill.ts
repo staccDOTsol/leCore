@@ -16,7 +16,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { cardFromMetrics, type Card } from './cards.js';
 import type { ChainLike } from './chain.js';
-import { decide, type Contender, type Handicap, type JudgeLike, type Remix, type Shill, type Verdict } from './judge.js';
+import type { Contender, JudgeLike, Remix, Shill, Verdict } from './judge.js';
 import type { MetadataFields } from './metadata.js';
 import { sumUsage, type Usage } from './openzoo.js';
 import { buildKingJson, type UriProvider } from './uri.js';
@@ -31,8 +31,6 @@ export type KingRecord = {
   author: string;
   surface: string;
   crownedAt: number;
-  /** True when the hill was empty: an uncontested crown carries a handicap until it is defended for real. */
-  uncontested: boolean;
   /** What the master token became: the remixed name/symbol and the hosted uri, plus the tx. */
   master: MetadataFields & { signature: string | null };
   remix: Remix | null;
@@ -45,13 +43,15 @@ export type KingRecord = {
 export type ChallengeRecord = {
   id: string;
   at: number;
-  /** The reign this challenge was fought against (0 for an empty hill). */
-  reign: number;
   mint: string;
   author: string;
   surface: string;
   pitch: string;
   feeSol: number;
+  /** What this attempt put into the vault, in USD at entry. */
+  stakeUsd: number;
+  /** Set on a win: the pot this winner took, half the vault's book value at that moment. */
+  potUsd: number | null;
   result: 'won' | 'lost' | 'error';
   verdict: Verdict | null;
   usage: Usage | null;
@@ -68,10 +68,12 @@ export type HillState = {
   /** Successful takeovers so far; drives the fee schedule. */
   takeovers: number;
   masterShill: { reign: number; text: string; at: number } | null;
+  /** Every pot taken so far, newest last: the chain value of half the vault at that moment. */
+  awards: { at: number; reign: number; author: string; potUsd: number }[];
 };
 
 export function emptyState(): HillState {
-  return { king: null, hallOfFame: [], challenges: [], takeovers: 0, masterShill: null };
+  return { king: null, hallOfFame: [], challenges: [], takeovers: 0, masterShill: null, awards: [] };
 }
 
 /** 0.05 SOL worth, +1% per successful takeover (compounding), by directive. */
@@ -125,21 +127,18 @@ export type HillDeps = {
   store: Store;
   /** Renders an image url for a king whose token has none; may return null. */
   image?: (card: Card, reign: number) => Promise<string | null>;
+  /** The pot right now, from chain: half the USD value of every LP position the vault holds. */
+  potUsd?: () => Promise<number>;
   baseFeeSol?: number;
   feeGrowthPct?: number;
   /** How long the master shillbot's pitch for a reign is reused before it is rewritten. */
   shillTtlMs?: number;
-  /** Points the king loses per failed challenge against it (the hill erodes under concerted effort). */
-  erosionPerLoss?: number;
-  /** Cap on erosion. */
-  erosionMax?: number;
-  /** Points an uncontested crown (took an empty hill) carries until dethroned. */
-  uncontestedHandicap?: number;
   now?: () => number;
   log?: (line: string) => void;
 };
 
-export type ChallengeOutcome = { record: ChallengeRecord; king: KingRecord | null; oneLiner: string; commentary: string };
+export type ChallengeOutcome = { record: ChallengeRecord; king: KingRecord | null; oneLiner: string; commentary: string; potUsd: number | null };
+export type Prepaid = { playSignature: string; feeSol: number; stakeUsd?: number };
 
 export class Hill {
   private state: HillState;
@@ -154,21 +153,12 @@ export class Hill {
   get hallOfFame(): KingRecord[] { return structuredClone(this.state.hallOfFame); }
   attemptFee(): number { return attemptFeeSol(this.state.takeovers, this.deps.baseFeeSol, this.deps.feeGrowthPct); }
   get baseFeeSol(): number { return this.deps.baseFeeSol ?? BASE_FEE_SOL; }
+  /** The pot: half of what the vault holds on chain, in USD (0 when nothing can price it). */
+  async potUsd(): Promise<number> {
+    try { return Math.round(((await this.deps.potUsd?.()) ?? 0) * 100) / 100; } catch { return 0; }
+  }
 
   private now(): number { return this.deps.now ? this.deps.now() : Date.now(); }
-
-  /**
-   * What the sitting king carries into the next fight. Erosion is read off the ledger (every lost
-   * challenge since the crowning), so it applies retroactively to a reign already under siege.
-   */
-  handicap(): Handicap {
-    const k = this.state.king;
-    if (!k) return { total: 0, erosion: 0, uncontested: 0, failedDefenses: 0 };
-    const failedDefenses = this.state.challenges.filter((c) => c.result === 'lost' && (c.reign === undefined ? c.at > k.crownedAt : c.reign === k.reign)).length;
-    const erosion = Math.min(this.deps.erosionMax ?? 40, failedDefenses * (this.deps.erosionPerLoss ?? 5));
-    const uncontested = (k.uncontested ?? k.reign === 1) ? (this.deps.uncontestedHandicap ?? 15) : 0;
-    return { total: erosion + uncontested, erosion, uncontested, failedDefenses };
-  }
   private log(line: string): void { (this.deps.log ?? (() => {}))(line); }
   private save(): void { this.deps.store.save(this.state); }
 
@@ -204,17 +194,18 @@ export class Hill {
    * Serialized: one battle at a time, so two challengers cannot both dethrone the same king.
    * `prepaid` carries the proof of an entry the bots already settled (throwaway deposit -> locked LP).
    */
-  challenge(shill: Shill, opts: { prepaid?: { playSignature: string; feeSol: number } } = {}): Promise<ChallengeOutcome> {
+  challenge(shill: Shill, opts: { prepaid?: Prepaid } = {}): Promise<ChallengeOutcome> {
     const run = this.busy.then(() => this.runChallenge(shill, opts));
     this.busy = run.catch(() => undefined);
     return run;
   }
 
-  private async runChallenge(shill: Shill, opts: { prepaid?: { playSignature: string; feeSol: number } }): Promise<ChallengeOutcome> {
+  private async runChallenge(shill: Shill, opts: { prepaid?: Prepaid }): Promise<ChallengeOutcome> {
     const id = randomBytes(6).toString('hex');
     const feeSol = opts.prepaid?.feeSol ?? this.attemptFee();
     const rec: ChallengeRecord = {
-      id, at: this.now(), reign: this.state.king?.reign ?? 0, mint: shill.mint, author: shill.author, surface: shill.surface, pitch: shill.pitch, feeSol,
+      id, at: this.now(), mint: shill.mint, author: shill.author, surface: shill.surface, pitch: shill.pitch, feeSol,
+      stakeUsd: opts.prepaid?.stakeUsd ?? 0, potUsd: null,
       result: 'error', verdict: null, usage: null, playSignature: null, error: null, challenger: null, incumbent: null,
     };
     const usages: Usage[] = [];
@@ -222,7 +213,7 @@ export class Hill {
       // 1-2. the fee, as locked LP (already settled by the bots when prepaid)
       const entry = opts.prepaid ?? await this.deps.entry.play({ player: shill.author, mint: shill.mint, feeSol });
       rec.playSignature = entry.playSignature || null;
-      this.log(`[${id}] entry ok fee=${feeSol} SOL play=${rec.playSignature ?? 'free'}`);
+      this.log(`[${id}] entry ok fee=${feeSol} SOL stake=$${rec.stakeUsd} play=${rec.playSignature ?? 'free'}`);
 
       // 3. cards
       const challenger = await this.contender(shill);
@@ -234,39 +225,30 @@ export class Hill {
         rec.result = 'won';
         rec.usage = usages.length ? sumUsage(usages) : null;
         this.finish(rec);
-        return { record: rec, king, oneLiner: `${king.name} takes the empty hill.`, commentary: 'Nobody was home.' };
+        return { record: rec, king, oneLiner: `${king.name} takes the empty hill.`, commentary: 'Nobody was home.', potUsd: rec.potUsd };
       }
 
       const incumbent = await this.contender({ mint: this.state.king.mint, pitch: this.state.king.pitch, author: this.state.king.author, surface: this.state.king.surface as Shill['surface'] });
       rec.incumbent = incumbent.card;
 
-      // 4. the master shillbot speaks for the king, then the arbiter scores; the decision is ours, from the scores
+      // 4. the master shillbot speaks for the king, then the arbiter rules
       const ms = await this.masterShill(incumbent);
       if (ms.usage) usages.push(ms.usage);
-      const h = this.handicap();
-      const j = await this.deps.judge.judge(challenger, incumbent, ms.text, h);
+      const j = await this.deps.judge.judge(challenger, incumbent, ms.text);
       usages.push(j.usage);
-      const d = decide(j.verdict, h);
-      if (d.winner !== j.verdict.winner) {
-        this.log(`[${id}] arbiter said ${j.verdict.winner}, the scores say ${d.winner} (${d.challengerTotal} vs ${d.incumbentTotal} after a ${h.total}-point handicap)`);
-        j.verdict.one_liner = d.winner === 'challenger'
-          ? `${challenger.card.name} takes the hill on points: ${d.challengerTotal} to ${d.incumbentTotal} after ${h.total} points of erosion.`
-          : `${incumbent.card.name} holds on points: ${d.incumbentTotal} to ${d.challengerTotal}.`;
-      }
-      j.verdict.winner = d.winner;
       rec.verdict = j.verdict;
 
-      if (d.winner === 'challenger') {
+      if (j.verdict.winner === 'challenger') {
         const king = await this.crown(challenger, rec, usages);
         rec.result = 'won';
         rec.usage = sumUsage(usages);
         this.finish(rec);
-        return { record: rec, king, oneLiner: j.verdict.one_liner, commentary: j.verdict.commentary };
+        return { record: rec, king, oneLiner: j.verdict.one_liner, commentary: j.verdict.commentary, potUsd: rec.potUsd };
       }
       rec.result = 'lost';
       rec.usage = sumUsage(usages);
       this.finish(rec);
-      return { record: rec, king: this.king, oneLiner: j.verdict.one_liner, commentary: j.verdict.commentary };
+      return { record: rec, king: this.king, oneLiner: j.verdict.one_liner, commentary: j.verdict.commentary, potUsd: null };
     } catch (e) {
       rec.result = 'error';
       rec.error = e instanceof Error ? e.message : String(e);
@@ -303,10 +285,15 @@ export class Hill {
     const tx = await this.deps.chain.updateMasterMetadata(fields);
     this.log(`[${rec.id}] crowned reign ${reign}: "${fields.name}" $${fields.symbol} ${uri} tx=${tx.signature}`);
 
+    // the pot: half of everything in the vault goes to the winner (paid out by the bots via Award); the rest keeps stacking
+    rec.potUsd = await this.potUsd();
+    this.state.awards.push({ at: crownedAt, reign, author: winner.shill.author, potUsd: rec.potUsd });
+    this.log(`[${rec.id}] pot $${rec.potUsd} (chain) to ${winner.shill.author}`);
+
     if (this.state.king) this.state.hallOfFame.push(this.state.king);
     const king: KingRecord = {
       reign, mint: winner.card.mint, name: winner.card.name, symbol: winner.card.symbol, card: winner.card,
-      pitch: winner.shill.pitch, author: winner.shill.author, surface: winner.shill.surface, crownedAt, uncontested: !this.state.king,
+      pitch: winner.shill.pitch, author: winner.shill.author, surface: winner.shill.surface, crownedAt,
       master: { ...fields, signature: tx.signature || null }, remix: r.remix, image, playSignature: rec.playSignature,
       feeSol: rec.feeSol, usage: usages.length ? sumUsage(usages) : null,
     };

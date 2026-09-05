@@ -123,8 +123,8 @@ export class Commands {
   help(): Reply {
     return {
       rich: (f) => f.html
-        ? `${f.b('KING OF THE HILL')}\n\nOne coin wears the crown. The crown is a real token whose ${f.b('name, ticker and image get rewritten on-chain')} to whoever holds the hill.\n\nShill your coin. Beat the king. The master token becomes yours, remixed by the AI. Lose and you are in the hall of fame.\n\n${f.muted('Every attempt is permanent liquidity for <yourcoin>/MASTER. Nobody can pull it, including us.')}\n\n${f.code('shill <mint> <your pitch>')} · ${f.code('paid <quote-id>')} · king · hall · fee`
-        : `${PITCH}\n\nCOMMANDS: king · hall · fee · shill <mint> <pitch> · paid <quote-id>`,
+        ? `${f.b('KING OF THE HILL')}\n\nOne coin wears the crown. The crown is a real token whose ${f.b('name, ticker and image get rewritten on-chain')} to whoever holds the hill.\n\nShill your coin. Beat the king. The master token becomes yours, remixed by the AI. Lose and you are in the hall of fame.\n\n${f.muted('Every attempt is permanent liquidity for <yourcoin>/MASTER. Nobody can pull it, including us.')}\n\n${f.b('How to play')} (each line is its own message):\n${f.code('shill <mint> <your pitch>')}  ${f.muted('start an attempt: you get a deposit address, an amount, and a quote id')}\n${f.code('paid <quote-id>')}  ${f.muted('the quote id from your shill, once you have sent the coins')}\n${f.code('king')}  ${f.muted('who holds the hill')}\n${f.code('hall')}  ${f.muted('hall of fame: every king so far')}\n${f.code('fee')}  ${f.muted('the current attempt fee')}`
+        : `${PITCH}\n\nHOW TO PLAY (each line is its own message):\n  shill <mint> <your pitch>   start an attempt: you get a deposit address, an amount, and a quote id\n  paid <quote-id>             the quote id from your shill, once you have sent the coins\n  king                        who holds the hill\n  hall                        hall of fame: every king so far\n  fee                         the current attempt fee`,
       buttons: [[BTN.king, BTN.fee], [{ label: 'How to play', data: 'cmd:help' }]],
     };
   }

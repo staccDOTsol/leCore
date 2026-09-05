@@ -88,7 +88,7 @@ def test_install_on_tiny_fake_weights_writes_lecore_json(tmp_path):
     ]
     out = tmp_path / "galvatron_dsv4"
     orig = np.array(w["model.embed_tokens.weight"], copy=True)
-    w2, cfg2, rep = D.install(
+    w2, cfg2, rep = D.install_deepseek_v4(
         w, cfg, passages=passages, n_registers=8, seed=0,
         out_dir=str(out), hrr_dim=64, model_dir=str(tmp_path))
     # in-weight rewrite of unused/tail embed rows; original dict not mutated
@@ -175,7 +175,7 @@ def test_unified_mind_faculty_does_not_take_a_gdn_runtime(tmp_path):
 def test_qwen_config_is_refused_by_deepseek_install():
     w = D.fake_deepseek_v4_weights()
     with pytest.raises(ValueError, match="Qwen stays"):
-        D.install(w, _qwen_cfg(), passages=["x"], n_registers=4)
+        D.install_deepseek_v4(w, _qwen_cfg(), passages=["x"], n_registers=4)
 
 
 def test_config_from_json_refuses_deepseek_before_qwen_parse(tmp_path):
@@ -215,7 +215,7 @@ def test_cli_writes_sidecar_and_does_not_touch_qwen_install(tmp_path):
     card = json.loads((out / "lecore.json").read_text())
     assert card["installed"]
     assert "registers" in card["installed"]
-    idx = D.load_sidecar(str(out / "lecore_hrr.npz"))
+    idx = D.load_hrr_sidecar(str(out / "lecore_hrr.npz"))
     hits = D.search_index(idx, "capital of France", k=1)
     assert hits and "paris" in hits[0][2].lower()
     sh = open(os.path.join(os.path.dirname(__file__), "..",
@@ -270,7 +270,7 @@ def _tiny_sidecar(tmp_path, passages=None, n_registers=8, hrr_dim=64):
     model.mkdir()
     (model / "config.json").write_text(json.dumps(cfg))
     out = tmp_path / "out"
-    D.install(w, cfg, passages=texts, n_registers=n_registers, seed=0,
+    D.install_deepseek_v4(w, cfg, passages=texts, n_registers=n_registers, seed=0,
               out_dir=str(out), hrr_dim=hrr_dim, model_dir=str(model))
     return out
 
@@ -434,7 +434,7 @@ def test_in_weight_is_one_and_embed_rows_change(tmp_path):
     w = D.fake_deepseek_v4_weights(hidden=32, vocab=48)
     orig = np.array(w["model.embed_tokens.weight"], copy=True)
     out = tmp_path / "iw"
-    w2, _c, rep = D.install(
+    w2, _c, rep = D.install_deepseek_v4(
         w, cfg,
         passages=["the capital of France is Paris", "water freezes at zero"],
         n_registers=4, seed=0, out_dir=str(out), hrr_dim=64)

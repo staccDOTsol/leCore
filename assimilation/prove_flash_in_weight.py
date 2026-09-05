@@ -21,7 +21,7 @@ if _REPO not in sys.path:
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
     from holographic.io_and_interop.holographic_deepseek_v4 import (
-        fake_deepseek_v4_config, fake_deepseek_v4_weights, install)
+        fake_deepseek_v4_config, fake_deepseek_v4_weights, install_deepseek_v4)
 
     if len(argv) >= 2:
         model_dir, out_dir = os.path.abspath(argv[0]), os.path.abspath(argv[1])
@@ -40,7 +40,7 @@ def main(argv=None):
         "water freezes at zero degrees celsius",
         "leCore holographic reduced representations",
     ]
-    _w, _c, rep = install(
+    _w, _c, rep = install_deepseek_v4(
         w, cfg, passages=passages, n_registers=8, seed=0,
         out_dir=out_dir, hrr_dim=64, model_dir=model_dir)
     card_path = os.path.join(out_dir, "lecore.json")

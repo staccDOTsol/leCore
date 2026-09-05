@@ -245,7 +245,7 @@ def attach_memory_index(passages, dim, seed=0):
         "in_weight": False,
         "in_weight_skip": (
             "Sidecar index is HRR-dim. In-weight landing is a separate step: "
-            "install() writes these passages into Flash placeholder / unused "
+            "install_deepseek_v4() writes these passages into Flash placeholder / unused "
             "embed rows after F8/BF16 decode. GDN hidden-state addresses are "
             "not used -- Flash is not Gated DeltaNet."
         ),
@@ -488,7 +488,7 @@ def _note(rep, name, ok, detail):
     return step
 
 
-def install(weights, cfg, passages=(), n_registers=16, seed=0, out_dir=None,
+def install_deepseek_v4(weights, cfg, passages=(), n_registers=16, seed=0, out_dir=None,
             hrr_dim=HRR_DIM, model_dir=None, tokenize=None):
     """Attach HRR faculties to DeepSeek-V4 Flash. Never calls GDNRuntime.
 
@@ -499,7 +499,7 @@ def install(weights, cfg, passages=(), n_registers=16, seed=0, out_dir=None,
     """
     if not is_deepseek_v4(cfg):
         raise ValueError(
-            "install() on holographic_deepseek_v4 requires a DeepSeek-V4 "
+            "install_deepseek_v4() on holographic_deepseek_v4 requires a DeepSeek-V4 "
             "config (model_type=deepseek_v4 or architectures containing "
             "DeepseekV4ForCausalLM); got model_type=%r architectures=%r. "
             "Qwen stays on assimilation/install.py / GDNRuntime."
@@ -627,7 +627,7 @@ def install(weights, cfg, passages=(), n_registers=16, seed=0, out_dir=None,
     if out_dir:
         os.makedirs(out_dir, exist_ok=True)
         sidecar = os.path.join(out_dir, "lecore_hrr.npz")
-        save_sidecar(sidecar, keys=keys, vectors=vectors, passages=texts,
+        save_hrr_sidecar(sidecar, keys=keys, vectors=vectors, passages=texts,
                      seed=seed, dim=dim, meta={
                          "format": FORMAT,
                          "family": "deepseek_v4",
@@ -679,7 +679,7 @@ def install(weights, cfg, passages=(), n_registers=16, seed=0, out_dir=None,
     return w_out, cfg, rep
 
 
-def save_sidecar(path, keys=None, vectors=None, passages=None, seed=0, dim=HRR_DIM,
+def save_hrr_sidecar(path, keys=None, vectors=None, passages=None, seed=0, dim=HRR_DIM,
                  meta=None):
     """Write the HRR sidecar. Small on purpose -- the base checkpoint stays put."""
     man = dict(meta or {})
@@ -697,7 +697,7 @@ def save_sidecar(path, keys=None, vectors=None, passages=None, seed=0, dim=HRR_D
     return {"path": path, "bytes": os.path.getsize(path)}
 
 
-def load_sidecar(path):
+def load_hrr_sidecar(path):
     z = np.load(path, allow_pickle=False)
     man = json.loads(bytes(z["manifest"]).decode("utf-8"))
     if man.get("format") != FORMAT:
@@ -832,7 +832,7 @@ class FlashHRR:
                 "no lecore_hrr.npz in %r -- run "
                 "python assimilation/install_deepseek_v4.py MODEL_DIR OUT_DIR "
                 "first" % root)
-        index = load_sidecar(npz)
+        index = load_hrr_sidecar(npz)
         card = {}
         card_path = os.path.join(root, "lecore.json")
         if os.path.isfile(card_path):
@@ -1046,6 +1046,20 @@ def dequant_fp8_block(weight, scale, block=FP8_BLOCK):
         np.float32)
 
 
+def dequant_pair(weights, name):
+    """Dequantise one `<name>.weight` against its sibling `<name>.scale`.
+    I8-packed FP4 (experts, block 32) or F8_E4M3 (attention, 128x128 tiles)
+    are told apart by the stored dtype -- what the one-shard smoke scripts
+    walk a shard with."""
+    if not str(name).endswith(".weight"):
+        raise KeyError("expected a '.weight' tensor name, got %r" % (name,))
+    w = weights[name]
+    scale = weights[name[:-7] + ".scale"]
+    if np.asarray(w).dtype == np.int8:
+        return dequant_fp4(np.asarray(w), scale)
+    return dequant_fp8_block(np.asarray(w, np.float32), scale)
+
+
 def first_shard(model_dir):
     """Smallest *.safetensors in the directory -- one-shard smoke, not 48-way."""
     names = sorted(f for f in os.listdir(model_dir)
@@ -1219,7 +1233,7 @@ def _selftest():
     w = fake_deepseek_v4_weights()
     orig = np.array(w["model.embed_tokens.weight"], copy=True)
     td = tempfile.mkdtemp()
-    _w, _c, rep = install(w, cfg, passages=passages, n_registers=8, seed=1,
+    _w, _c, rep = install_deepseek_v4(w, cfg, passages=passages, n_registers=8, seed=1,
                           out_dir=td, hrr_dim=64)
     assert _w is not w
     assert not np.array_equal(_w["model.embed_tokens.weight"], orig)
@@ -1232,7 +1246,7 @@ def _selftest():
     card = json.loads(open(os.path.join(td, "lecore.json")).read())
     assert int(card["in_weight"]) == 1
     assert os.path.isfile(os.path.join(td, "lecore_in_weight.safetensors"))
-    idx = load_sidecar(os.path.join(td, "lecore_hrr.npz"))
+    idx = load_hrr_sidecar(os.path.join(td, "lecore_hrr.npz"))
     assert search_index(idx, "capital of France", k=1)
 
     sess = FlashHRR.open(td)

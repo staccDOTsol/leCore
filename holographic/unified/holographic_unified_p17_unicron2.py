@@ -1091,6 +1091,29 @@ class _UnifiedPart17:
             return app
         app.run(port=int(port), use_reloader=False)
 
+    def unicron_install_deepseek_v4(self, weights, cfg, passages=(),
+                                    n_registers=16, seed=0, out_dir=None,
+                                    hrr_dim=256, model_dir=None):
+        """HRR-ATTACH leCore onto DeepSeek-V4 Flash WITHOUT GDNRuntime.
+
+        Writes faculties into unused/placeholder embed rows (in_weight=1)
+        plus a sidecar for request-time inject. Does not assimilate, does
+        not call GDNRuntime, does not eager-load 48 shards.
+        See holographic_deepseek_v4.install_deepseek_v4."""
+        from holographic.io_and_interop.holographic_deepseek_v4 import install_deepseek_v4
+        return install_deepseek_v4(weights, cfg, passages=passages,
+                       n_registers=n_registers, seed=seed, out_dir=out_dir,
+                       hrr_dim=hrr_dim, model_dir=model_dir)
+
+    def unicron_flash_hrr(self, out_dir):
+        """FLASH-AS-HRR consume: load install OUT_DIR, recall, attach before
+        generate. Returns a FlashHRR session. Does not take a GDNRuntime,
+        does not load 48 shards, does not claim in-weight Galvatron.
+        Serve hook: session.before_generate(openai_body) -> body for vLLM.
+        See holographic_deepseek_v4.FlashHRR."""
+        from holographic.io_and_interop.holographic_deepseek_v4 import FlashHRR
+        return FlashHRR.open(out_dir)
+
     def unicron_hf_wrapper(self, galvatron):
         """Wrap a Galvatron in the shape transformers callers expect --
         .generate(input_ids, max_new_tokens=...) returning (1, T+n), plus a callable
@@ -1805,6 +1828,22 @@ def _selftest():
     # unicron_actr is the first moved method and needs no weights: the declarative-memory
     # activation law over a synthetic trace is pure NumPy
     assert callable(getattr(m, "unicron_actr", None))
+    # DeepSeek-V4 Flash: HRR-attach without a GDNRuntime, then flash-as-hrr consume attaches
+    # the recall into an OpenAI body -- the sidecar path, proved through the assembled mind.
+    import os, tempfile
+    from holographic.io_and_interop.holographic_deepseek_v4 import (
+        fake_deepseek_v4_config, fake_deepseek_v4_weights)
+    td = tempfile.mkdtemp()
+    _w, _c, rep = m.unicron_install_deepseek_v4(
+        fake_deepseek_v4_weights(), fake_deepseek_v4_config(),
+        passages=["the capital of France is Paris"], n_registers=4, seed=0,
+        out_dir=td, hrr_dim=64)
+    assert "registers" in rep["installed"] and "router" not in rep["installed"]
+    assert os.path.isfile(os.path.join(td, "lecore.json"))
+    attached, info = m.unicron_flash_hrr(td).attach(
+        {"model": "deepseek-v4-flash",
+         "messages": [{"role": "user", "content": "capital of France?"}]})
+    assert info["attached"] and "paris" in attached["messages"][0]["content"].lower()
     print("OK: unified p17 (unicron, second half) part contract holds over %d facade defs; "
           "faculties reachable on the assembled mind" % n)
 

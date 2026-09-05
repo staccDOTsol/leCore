@@ -2,7 +2,7 @@
 import os, sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from holographic.io_and_interop.holographic_unicron import load_safetensors
-from holographic.io_and_interop.flash_dequant import dequant_pair
+from holographic.io_and_interop.holographic_deepseek_v4 import dequant_pair
 import numpy as np
 
 shard = os.environ.get(

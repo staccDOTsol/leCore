@@ -53,13 +53,13 @@ def main(argv=None):
     a = ap.parse_args(argv)
 
     from holographic.io_and_interop.holographic_deepseek_v4 import (
-        load_sidecar, search_index,
+        load_hrr_sidecar, search_index,
     )
 
     side = os.path.abspath(a.sidecar_dir)
     npz = os.path.join(side, "lecore_hrr.npz")
     lj = json.load(open(os.path.join(side, "lecore.json")))
-    idx = load_sidecar(npz)
+    idx = load_hrr_sidecar(npz)
     hits = search_index(idx, a.cue, k=int(a.k))
     mem_lines = []
     for rank, item in enumerate(hits, 1):

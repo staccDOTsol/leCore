@@ -52,7 +52,7 @@ def main(argv=None):
     a = ap.parse_args(argv)
 
     from holographic.io_and_interop.holographic_deepseek_v4 import (
-        load_sidecar,
+        load_hrr_sidecar,
         search_index,
     )
 
@@ -61,7 +61,7 @@ def main(argv=None):
     meta = os.path.join(side, "lecore.json")
     if not os.path.isfile(npz):
         raise SystemExit("missing sidecar %s — run install_deepseek_v4.py first" % npz)
-    idx = load_sidecar(npz)
+    idx = load_hrr_sidecar(npz)
     lj = json.load(open(meta)) if os.path.isfile(meta) else {}
     regs = int((lj.get("registers") or {}).get("count") or 0)
     hits = search_index(idx, a.cue, k=int(a.k))

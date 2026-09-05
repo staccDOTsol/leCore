@@ -63,8 +63,8 @@ def main(argv=None):
     a = ap.parse_args(argv)
 
     from holographic.io_and_interop.holographic_deepseek_v4 import (
-        detect_from_dir, first_shard, install, is_deepseek_v4, load_config,
-        search_index, load_sidecar, smoke_one_shard)
+        detect_from_dir, first_shard, install_deepseek_v4, is_deepseek_v4, load_config,
+        search_index, load_hrr_sidecar, smoke_one_shard)
 
     model_dir = os.path.abspath(a.model_dir)
     out_dir = os.path.abspath(a.out_dir)
@@ -109,7 +109,7 @@ def main(argv=None):
                      d["absmax"]))
         elif srep.get("note"):
             print("        %s" % srep["note"])
-    _w, _c, rep = install(None, cfg, passages=passages,
+    _w, _c, rep = install_deepseek_v4(None, cfg, passages=passages,
                           n_registers=int(a.registers), seed=int(a.seed),
                           out_dir=out_dir, hrr_dim=int(a.hrr_dim),
                           model_dir=model_dir)
@@ -128,7 +128,7 @@ def main(argv=None):
         print("        embed:      %s" % rep.get("in_weight_embed"))
 
     if "memory_index" in rep["installed"] and rep.get("sidecar"):
-        idx = load_sidecar(rep["sidecar"])
+        idx = load_hrr_sidecar(rep["sidecar"])
         cue = "capital of France"
         hits = search_index(idx, cue, k=1)
         if hits:

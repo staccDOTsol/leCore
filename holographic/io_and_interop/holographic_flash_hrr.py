@@ -355,7 +355,7 @@ def plan_flash_hrr(model_dir: str) -> dict:
         ],
         "available_now": [
             "F8_E8M0/F8_E4M3 decode in load_safetensors",
-            "flash_dequant FP4/FP8 helpers + smoke_flash_dequant.py",
+            "holographic_deepseek_v4 dequant_pair + smoke_flash_dequant.py",
             "install_flash_hrr: embed-space memory_index + router into placeholders",
         ],
     }

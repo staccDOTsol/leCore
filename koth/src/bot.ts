@@ -75,8 +75,8 @@ export async function main(): Promise<void> {
   hill = new Hill({
     judge, chain, uri, entry: entryLike, store: new FileStore(path.join(cfg.dataDir, 'hill.json')),
     image: (card, reign) => image.image(card, reign), baseFeeSol: cfg.entrySol, feeGrowthPct: cfg.entryGrowthPct, log,
+    potUsd: entry ? () => entry.potUsd() : undefined,   // the pot is what the vault holds on chain, priced live
   });
-  if (entry) hill.seedVaultUsd(entry.settledStakeUsd());   // a vault that predates the pot: its settled stakes are the book value
   const commands = new Commands({ hill, entry, dataDir: cfg.dataDir, masterMint: cfg.masterMint?.toBase58() ?? null, explorer, log });
 
   // the static server for /metadata and /assets (what wallets fetch when they resolve the uri)

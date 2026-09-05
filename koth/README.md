@@ -18,8 +18,8 @@ by the AI. Lose it and you're in the hall of fame.
    the pot: half of every LP position in the vault**, sent to the wallet you named with `wallet <address>`.
    **Lose:** the king stays. Your entry stays in the vault, in the pot for whoever takes the hill next.
 
-Every reply from the bot ends with the pot in dollars: half the vault's book value (every settled stake at entry
-price, minus what winners took).
+Every reply from the bot ends with the pot in dollars, read from chain: half the value of every LP position the
+vault holds (each position's share of its pool's reserves, priced on the non-master side).
 
 Where the money goes: half your entry is swapped into the master token, paired with your coin in a Raydium
 pool `<yourcoin>/MASTER`, and the LP goes into the vault. The vault is the pot: there is no withdraw, LP leaves

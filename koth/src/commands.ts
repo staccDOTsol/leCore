@@ -122,17 +122,17 @@ export class Commands {
     return { cmd, args: m[2] ? m[2].split(' ').filter(Boolean) : [] };
   }
 
-  /** The pot line every reply ends with: what the next winner takes, in dollars, and the rule. */
-  potLine(f: Fmt): string {
-    const pot = this.d.hill.potUsd();
+  /** The pot line every reply ends with: what the next winner takes, in dollars from chain, and the rule. */
+  potLine(f: Fmt, pot: number): string {
     return `🏆 ${f.b(`POT $${pot.toFixed(2)}`)} · ${f.muted('take the hill and win HALF THE VAULT: half of every bid locked in it so far (every failed shill\'s liquidity). the other half keeps stacking for the next king.')}`;
   }
 
   async handle(ctx: Ctx): Promise<Reply | null> {
     const r = await this.handleInner(ctx);
     if (!r) return null;
+    const pot = await this.d.hill.potUsd();
     const inner = r.rich;
-    return { ...r, rich: (f) => `${inner(f)}\n\n${this.potLine(f)}` };
+    return { ...r, rich: (f) => `${inner(f)}\n\n${this.potLine(f, pot)}` };
   }
 
   private async handleInner(ctx: Ctx): Promise<Reply | null> {

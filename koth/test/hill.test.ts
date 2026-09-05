@@ -75,22 +75,24 @@ describe('hill', () => {
     expect(won.record.usage?.usd).toBeGreaterThan(0);
   });
 
-  it('the pot: every stake adds to the vault, a winner takes half, the rest keeps stacking', async () => {
-    const { h } = hill();
-    expect(h.potUsd()).toBe(0);
-    // an empty hill: the first winner takes half of what is there (their own stake included)
+  it('the pot is read from chain when someone wins: recorded on the challenge and in the awards ledger', async () => {
+    let onChain = 0;                                                   // what half the vault is worth right now, per the chain
+    const chain = new MemoryChain({ name: 'Master Shill', symbol: 'SHILL', uri: 'https://x/genesis.json' }, profiles);
+    const h = new Hill({ judge: new MockJudge('power'), chain, uri: new MemoryUriProvider(), entry: new CountingEntry(), store: new MemoryStore(), potUsd: async () => onChain });
+    expect(await h.potUsd()).toBe(0);
+    onChain = 5;
     const first = await h.challenge({ mint: B, pitch: 'beta', author: 'p1', surface: 'telegram' }, { prepaid: { playSignature: 's1', feeSol: 0.05, stakeUsd: 10 } });
-    expect(first.potUsd).toBe(5); expect(h.snapshot.vaultUsd).toBe(5); expect(h.potUsd()).toBe(2.5);
-    // a failed bid stays in the vault
+    expect(first.potUsd).toBe(5);                                      // the empty-hill winner takes half of what is there
+    onChain = 7.5;
     const lost = await h.challenge({ mint: B, pitch: 'beta again', author: 'p2', surface: 'x' }, { prepaid: { playSignature: 's2', feeSol: 0.05, stakeUsd: 10 } });
-    expect(lost.record.result).toBe('lost'); expect(lost.potUsd).toBeNull(); expect(h.snapshot.vaultUsd).toBe(15); expect(h.potUsd()).toBe(7.5);
-    // the next winner takes half of everything on the address, the first winner's leftover included
+    expect(lost.record.result).toBe('lost'); expect(lost.potUsd).toBeNull();
+    onChain = 12.5;
     const won = await h.challenge({ mint: C, pitch: 'gamma', author: 'p3', surface: 'x' }, { prepaid: { playSignature: 's3', feeSol: 0.0505, stakeUsd: 10 } });
-    expect(won.record.result).toBe('won'); expect(won.potUsd).toBe(12.5); expect(h.snapshot.vaultUsd).toBe(12.5);
+    expect(won.record.result).toBe('won'); expect(won.potUsd).toBe(12.5);
     expect(h.snapshot.awards.map((a) => [a.author, a.potUsd])).toEqual([['p1', 5], ['p3', 12.5]]);
-    // seeding only applies to a vault with no book value yet
-    h.seedVaultUsd(999); expect(h.snapshot.vaultUsd).toBe(12.5);
-    const fresh = hill().h; fresh.seedVaultUsd(101.5); expect(fresh.potUsd()).toBe(50.75);
+    // a pricing failure never breaks a reply: the pot reads 0
+    const broken = new Hill({ judge: new MockJudge('power'), chain, uri: new MemoryUriProvider(), entry: new CountingEntry(), store: new MemoryStore(), potUsd: async () => { throw new Error('rpc down'); } });
+    expect(await broken.potUsd()).toBe(0);
   });
 
   it('reuses the master shillbot pitch within its ttl and rewrites it after', async () => {

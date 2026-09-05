@@ -28,9 +28,11 @@ class FakeEntry {
   async awardHalf(winner: { toBase58(): string }) { this.awarded.push(winner.toBase58()); return [{ lpMint: 'LPMINT1', amount: '2596238674', signature: 'award-1' }]; }
 }
 
+/** What the chain says half the vault is worth; tests move it. */
+let potOnChain = 0;
 function setup(entry: FakeEntry | null) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'koth-'));
-  const hill = new Hill({ judge: new MockJudge('power'), chain: new MemoryChain({ name: 'Master Shill', symbol: 'SHILL', uri: 'u' }, profiles), uri: new MemoryUriProvider(), entry: { play: async () => ({ playSignature: 'free', detail: {} }) }, store: new MemoryStore() });
+  const hill = new Hill({ judge: new MockJudge('power'), chain: new MemoryChain({ name: 'Master Shill', symbol: 'SHILL', uri: 'u' }, profiles), uri: new MemoryUriProvider(), entry: { play: async () => ({ playSignature: 'free', detail: {} }) }, store: new MemoryStore(), potUsd: async () => potOnChain });
   const commands = new Commands({ hill, entry: entry as unknown as Entry | null, dataDir: dir, masterMint: 'MASTER', explorer: (s) => `https://x/${s}` });
   return { hill, commands };
 }
@@ -67,7 +69,8 @@ describe('commands over the hill', () => {
     const t = async (text: string, over: Partial<typeof ctx> = {}) => { const r = await commands.handle({ ...ctx, ...over, text }); return { r, text: r ? plain(r.rich) : '' }; };
     const king0 = await t('/king');
     expect(king0.text).toMatch(/EMPTY/);
-    expect(king0.text).toMatch(/POT \$0\.00 · take the hill and win HALF THE VAULT/);          // every reply carries the pot
+    expect(king0.text).toMatch(/POT \$0\.00 · take the hill and win HALF THE VAULT/);          // every reply carries the pot, from chain
+    potOnChain = 12.5;
     const q = await t(`/shill ${A} sol is the chain the chain is sol`);
     expect(q.text).toMatch(/no payout wallet yet/);
     expect(q.text).toMatch(/send exactly 26.3/); expect(q.text).toMatch(/DEPOSIT111/); expect(q.text).toMatch(/paid q1/);
@@ -83,8 +86,8 @@ describe('commands over the hill', () => {
     const rt = plain(r!.rich);
     expect(rt).toMatch(/takes the empty hill/); expect(plain(r!.announce!)).toMatch(/master token is now/);
     expect(rt).toMatch(/play locked · tx: https:\/\/x\/sig-q1/);
-    // the win: the stake ($25) is in the vault, the winner takes half ($12.50), no wallet yet so it is held
-    expect(rt).toMatch(/YOU WIN THE POT ≈ \$12\.50/); expect(rt).toMatch(/held for you/); expect(rt).toMatch(/POT \$6\.25/);
+    // the win: the pot is whatever the chain says half the vault is worth; no wallet yet so it is held
+    expect(rt).toMatch(/YOU WIN THE POT ≈ \$12\.50/); expect(rt).toMatch(/held for you/); expect(rt).toMatch(/POT \$12\.50/);
     expect(entry.awarded).toEqual([]);
     const w = await t('wallet WzMaL78srutrF6CsxEkWuhMaDF5HZA6jNRaEPengqpb');
     expect(w.text).toMatch(/payout wallet set/); expect(w.text).toMatch(/pot from reign 1 \(~\$12\.50\) is on its way/); expect(w.text).toMatch(/award-1/);

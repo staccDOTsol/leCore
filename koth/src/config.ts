@@ -102,7 +102,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): KothConfig {
     publicUrl: (env.KOTH_PUBLIC_URL || 'http://localhost:8787').replace(/\/+$/, ''),
     entrySol: Number(env.KOTH_ENTRY_SOL || 0.05),
     entryGrowthPct: Number(env.KOTH_ENTRY_GROWTH_PCT || 1),
-    model: env.KOTH_MODEL || 'claude-opus-5',
+    model: env.KOTH_MODEL || 'openzoo/auto',
     playProgramId: pk(env.KOTH_PLAY_PROGRAM_ID),
     raydiumCpmmProgramId: new PublicKey(env.RAYDIUM_CPMM_PROGRAM_ID || RAYDIUM_CPMM_PROGRAM),
     telegram: { token: env.TELEGRAM_BOT_TOKEN || '', chatId: env.TELEGRAM_CHAT_ID || '' },

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
-import { OpenzooClient, extractJson, receiptOf } from '../src/openzoo.js';
+import { OpenzooClient, isTransient, extractJson, receiptOf } from '../src/openzoo.js';
 import { Judge, WEIGHTS, decide } from '../src/judge.js';
 import { cardFromMetrics } from '../src/cards.js';
 import { emptyMetrics } from '../src/metrics.js';
@@ -48,6 +48,38 @@ describe('openzoo client', () => {
     expect(calls[0].body.max_tokens).toBe(50);
     expect(calls[0].headers.authorization).toBe('Bearer sk-openzoo');
     expect(calls[0].headers['x-hrr-context']).toBe('ctx_1');
+  });
+  it('retries transient failures with backoff and falls through to the auto router', async () => {
+    const calls: { url: string; body: Record<string, unknown>; headers: Record<string, string> }[] = [];
+    const replies: [number, unknown][] = [
+      [502, { error: { message: 'x402 door for claude-opus-5 failed (502): upstream refused payment' } }],
+      [502, { error: { message: 'again' } }],
+      [502, { error: { message: 'again' } }],
+      [502, { error: { message: 'again' } }],
+      [200, completion('routed fine')],
+    ];
+    const f = (async (url: unknown, init?: RequestInit) => {
+      calls.push({ url: String(url), body: JSON.parse(String(init?.body)), headers: init?.headers as Record<string, string> });
+      const [status, r] = replies.shift()!;
+      return new Response(JSON.stringify(r), { status, headers: { 'content-type': 'application/json' } });
+    }) as typeof fetch;
+    const slept: number[] = [];
+    const zoo = new OpenzooClient({ model: 'claude-opus-5', fetchImpl: f, sleep: async (ms) => { slept.push(ms); } });
+    const r = await zoo.chat([{ role: 'user', content: 'hi' }]);
+    expect(r.text).toBe('routed fine');
+    expect(calls.map((c) => c.body.model)).toEqual(['claude-opus-5', 'claude-opus-5', 'claude-opus-5', 'claude-opus-5', 'openzoo/auto']);
+    expect(slept).toEqual([1000, 2000, 4000]);
+    expect(isTransient(402)).toBe(true); expect(isTransient(503)).toBe(true); expect(isTransient(400)).toBe(false);
+  });
+  it('does not retry a definitive refusal on the same model, but still tries the fallback', async () => {
+    const models: string[] = [];
+    const f = (async (_u: unknown, init?: RequestInit) => {
+      const m = (JSON.parse(String(init?.body)) as { model: string }).model; models.push(m);
+      return m === 'openzoo/auto' ? Response.json(completion('ok')) : Response.json({ error: 'bad model' }, { status: 400 });
+    }) as typeof fetch;
+    const zoo = new OpenzooClient({ model: 'nope', fetchImpl: f, sleep: async () => {} });
+    expect((await zoo.chat([{ role: 'user', content: 'hi' }])).text).toBe('ok');
+    expect(models).toEqual(['nope', 'openzoo/auto']);
   });
   it('retries JSON once, quoting the validation problem', async () => {
     const calls: { url: string; body: Record<string, unknown>; headers: Record<string, string> }[] = [];

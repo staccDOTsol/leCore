@@ -68,17 +68,12 @@ export type HillState = {
   /** Successful takeovers so far; drives the fee schedule. */
   takeovers: number;
   masterShill: { reign: number; text: string; at: number } | null;
-  /**
-   * The vault's book value: every settled stake in USD at entry, minus what winners took. The pot
-   * shown everywhere is half of it, because a winner takes half of every LP position in the vault.
-   */
-  vaultUsd: number;
-  /** Every payout so far, newest last. */
+  /** Every pot taken so far, newest last: the chain value of half the vault at that moment. */
   awards: { at: number; reign: number; author: string; potUsd: number }[];
 };
 
 export function emptyState(): HillState {
-  return { king: null, hallOfFame: [], challenges: [], takeovers: 0, masterShill: null, vaultUsd: 0, awards: [] };
+  return { king: null, hallOfFame: [], challenges: [], takeovers: 0, masterShill: null, awards: [] };
 }
 
 /** 0.05 SOL worth, +1% per successful takeover (compounding), by directive. */
@@ -132,6 +127,8 @@ export type HillDeps = {
   store: Store;
   /** Renders an image url for a king whose token has none; may return null. */
   image?: (card: Card, reign: number) => Promise<string | null>;
+  /** The pot right now, from chain: half the USD value of every LP position the vault holds. */
+  potUsd?: () => Promise<number>;
   baseFeeSol?: number;
   feeGrowthPct?: number;
   /** How long the master shillbot's pitch for a reign is reused before it is rewritten. */
@@ -156,13 +153,9 @@ export class Hill {
   get hallOfFame(): KingRecord[] { return structuredClone(this.state.hallOfFame); }
   attemptFee(): number { return attemptFeeSol(this.state.takeovers, this.deps.baseFeeSol, this.deps.feeGrowthPct); }
   get baseFeeSol(): number { return this.deps.baseFeeSol ?? BASE_FEE_SOL; }
-  /** The pot: half the vault's book value, what the next winner takes. */
-  potUsd(): number { return Math.round((this.state.vaultUsd / 2) * 100) / 100; }
-  /** First boot on a vault that predates the pot: take the settled stakes as the book value. */
-  seedVaultUsd(usd: number): void {
-    if (this.state.vaultUsd > 0 || usd <= 0) return;
-    this.state.vaultUsd = usd; this.save();
-    this.log(`vault book value seeded at $${usd.toFixed(2)} (pot $${this.potUsd().toFixed(2)})`);
+  /** The pot: half of what the vault holds on chain, in USD (0 when nothing can price it). */
+  async potUsd(): Promise<number> {
+    try { return Math.round(((await this.deps.potUsd?.()) ?? 0) * 100) / 100; } catch { return 0; }
   }
 
   private now(): number { return this.deps.now ? this.deps.now() : Date.now(); }
@@ -220,8 +213,7 @@ export class Hill {
       // 1-2. the fee, as locked LP (already settled by the bots when prepaid)
       const entry = opts.prepaid ?? await this.deps.entry.play({ player: shill.author, mint: shill.mint, feeSol });
       rec.playSignature = entry.playSignature || null;
-      this.state.vaultUsd = Math.round((this.state.vaultUsd + rec.stakeUsd) * 100) / 100;   // the stake is in the vault now, win or lose
-      this.log(`[${id}] entry ok fee=${feeSol} SOL stake=$${rec.stakeUsd} play=${rec.playSignature ?? 'free'} vault=$${this.state.vaultUsd}`);
+      this.log(`[${id}] entry ok fee=${feeSol} SOL stake=$${rec.stakeUsd} play=${rec.playSignature ?? 'free'}`);
 
       // 3. cards
       const challenger = await this.contender(shill);
@@ -294,10 +286,9 @@ export class Hill {
     this.log(`[${rec.id}] crowned reign ${reign}: "${fields.name}" $${fields.symbol} ${uri} tx=${tx.signature}`);
 
     // the pot: half of everything in the vault goes to the winner (paid out by the bots via Award); the rest keeps stacking
-    rec.potUsd = this.potUsd();
-    this.state.vaultUsd = Math.round((this.state.vaultUsd - rec.potUsd) * 100) / 100;
+    rec.potUsd = await this.potUsd();
     this.state.awards.push({ at: crownedAt, reign, author: winner.shill.author, potUsd: rec.potUsd });
-    this.log(`[${rec.id}] pot $${rec.potUsd} to ${winner.shill.author}; vault now $${this.state.vaultUsd}`);
+    this.log(`[${rec.id}] pot $${rec.potUsd} (chain) to ${winner.shill.author}`);
 
     if (this.state.king) this.state.hallOfFame.push(this.state.king);
     const king: KingRecord = {

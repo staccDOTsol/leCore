@@ -31,7 +31,7 @@ import {
 } from '@raydium-io/raydium-sdk-v2';
 import { NATIVE_SOL_MINT, ZOO_TOKEN_MINT } from './dbc.js';
 import type { EntryLike } from './hill.js';
-import { awardIx, createVaultLpAtaIx, decodePoolState, playIx, vaultPda } from './play.js';
+import { awardIx, createVaultLpAtaIx, decodePoolState, findCpmmPoolsWithMaster, playIx, vaultPda } from './play.js';
 
 export const USDC_MINT = new PublicKey('EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v');
 export { ZOO_TOKEN_MINT };
@@ -125,6 +125,9 @@ export function computeQuote(a: { playFeeSol: number; inferenceUsd: number; solU
   const amountRaw = BigInt(Math.ceil(amountUi * 10 ** a.decimals));
   return { playFeeUsd, inferenceUsd: a.inferenceUsd, bufferPct, totalUsd, amountUi: Number(amountRaw) / 10 ** a.decimals, amountRaw: amountRaw.toString() };
 }
+
+export type VaultPosition = { lpMint: string; pool: string | null; lp: string; share: number; usd: number; priced: boolean };
+const POT_CACHE_MS = 60_000;
 
 export interface Swapper {
   /** Swap `amountRaw` of `inputMint` into `outputMint`; output lands in `destination`'s ATA (or the operator's). */
@@ -428,6 +431,7 @@ export class Entry implements EntryLike {
         );
         const sig = await sendAndConfirmTransaction(conn, tx, [op], { commitment: 'confirmed' });
         q.steps.play = sig; q.playSignature = sig; this.saveQuote(q);
+        this.invalidatePot();
         this.log(`[quote ${id}] play locked ${lpRaw} LP, tx ${sig}`);
       }
       step('LP locked in the vault', q.steps.play);
@@ -490,21 +494,63 @@ export class Entry implements EntryLike {
         this.log(`award ${h.amount / 2n} of LP ${h.lpMint.toBase58()} -> ${winner.toBase58()}, tx ${signature}`);
       }
     }
+    this.invalidatePot();
     return out;
   }
 
-  /** What every settled attempt put into the vault, in USD at entry (backfills the pot's book value on first boot). */
-  settledStakeUsd(): number {
-    let usd = 0;
-    try {
-      for (const f of fs.readdirSync(this.quotesDir)) {
-        if (!f.endsWith('.json')) continue;
-        const q = JSON.parse(fs.readFileSync(path.join(this.quotesDir, f), 'utf8')) as Partial<Quote>;
-        if (q.status === 'settled' && typeof q.playFeeUsd === 'number') usd += q.playFeeUsd;
+  private potCache: { at: number; usd: number; detail: VaultPosition[] } | null = null;
+
+  /**
+   * What the vault holds, priced from chain: for each LP position, its share of the pool's reserves,
+   * valued as twice the priced side (the non-master side, priced by Jupiter; an AMM position is two
+   * equal halves). Positions nobody can price count as 0 rather than a guess. Cached for a minute:
+   * every reply shows the pot.
+   */
+  async vaultValueUsd(): Promise<{ usd: number; positions: VaultPosition[] }> {
+    if (this.potCache && Date.now() - this.potCache.at < POT_CACHE_MS) return { usd: this.potCache.usd, positions: this.potCache.detail };
+    const conn = this.d.connection;
+    const holdings = await this.vaultHoldings();
+    const positions: VaultPosition[] = [];
+    if (holdings.length) {
+      const pools = await findCpmmPoolsWithMaster(conn, this.d.cpmmProgramId, this.d.masterMint);
+      const byLp = new Map(pools.map((p) => [p.lpMint.toBase58(), p]));
+      const raydium = await this.getRaydium();
+      for (const h of holdings) {
+        const pool = byLp.get(h.lpMint.toBase58());
+        const pos: VaultPosition = { lpMint: h.lpMint.toBase58(), pool: pool?.pool.toBase58() ?? null, lp: h.amount.toString(), share: 0, usd: 0, priced: false };
+        positions.push(pos);
+        if (!pool) continue;
+        try {
+          const other = pool.token0.equals(this.d.masterMint) ? pool.token1 : pool.token0;
+          const otherIsA = pool.token0.equals(other);
+          const [{ rpcData }, supply, price] = await Promise.all([
+            raydium.cpmm.getPoolInfoFromRpc(pool.pool.toBase58()),
+            getMint(conn, h.lpMint, 'confirmed').then((m) => m.supply),
+            this.prices(other.toBase58()),
+          ]);
+          if (supply === 0n) continue;
+          const reserveOther = BigInt((otherIsA ? rpcData.baseReserve : rpcData.quoteReserve).toString());
+          pos.share = Number(h.amount) / Number(supply);
+          const otherUi = (Number(reserveOther) / 10 ** price.decimals) * pos.share;
+          pos.usd = Math.round(2 * otherUi * price.tokenUsd * 100) / 100;
+          pos.priced = true;
+        } catch (e) {
+          this.log(`pot: could not price LP ${h.lpMint.toBase58()}: ${e instanceof Error ? e.message : e}`);
+        }
       }
-    } catch { /* no quotes yet */ }
-    return Math.round(usd * 100) / 100;
+    }
+    const usd = Math.round(positions.reduce((a, p) => a + p.usd, 0) * 100) / 100;
+    this.potCache = { at: Date.now(), usd, detail: positions };
+    return { usd, positions };
   }
+
+  /** The pot: half of what the vault holds, in USD, from chain. */
+  async potUsd(): Promise<number> {
+    return Math.round(((await this.vaultValueUsd()).usd / 2) * 100) / 100;
+  }
+
+  /** Forget the cached valuation (after a deposit or an award changed the vault). */
+  invalidatePot(): void { this.potCache = null; }
 
   /** LP of `lpMint` in the operator's associated account (where Raydium mints and deposits it). */
   private async lpHeld(lpMint: PublicKey): Promise<bigint> {

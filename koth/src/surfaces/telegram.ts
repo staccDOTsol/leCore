@@ -7,6 +7,7 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
+import { PITCH_SHORT } from '../pitch.js';
 import { html, plain, type Button, type Commands, type Reply, type Rich } from '../commands.js';
 
 export type TelegramOpts = {
@@ -90,10 +91,27 @@ export class TelegramSurface {
   async start(): Promise<{ username: string } | null> {
     const me = await this.api('getMe', {});
     if (!me.ok) { this.o.log?.(`telegram getMe failed: ${me.description}`); return null; }
-    await this.api('setMyCommands', { commands: BOT_COMMANDS });
+    await this.registerCommands();
     const username = (me.result as { username?: string }).username ?? '';
     this.o.log?.(`telegram: @${username} ready, ${this.chats.size} known chat(s)`);
     return { username };
+  }
+
+  /**
+   * The slash-command menu, set for every scope Telegram distinguishes (clients pick the most
+   * specific one they know), plus the bot's profile description. Each result is checked and logged.
+   */
+  async registerCommands(): Promise<boolean> {
+    let ok = true;
+    for (const type of ['default', 'all_private_chats', 'all_group_chats', 'all_chat_administrators']) {
+      const r = await this.api('setMyCommands', { commands: BOT_COMMANDS, scope: { type } });
+      if (!r.ok) { ok = false; this.o.log?.(`telegram setMyCommands (${type}) failed: ${r.description}`); }
+    }
+    this.o.log?.(ok ? `telegram: ${BOT_COMMANDS.length} commands registered (${BOT_COMMANDS.map((c) => '/' + c.command).join(' ')})` : 'telegram: command menu NOT fully registered, see above');
+    const short = await this.api('setMyShortDescription', { short_description: PITCH_SHORT.slice(0, 120) });
+    const long = await this.api('setMyDescription', { description: PITCH_SHORT.slice(0, 512) });
+    if (!short.ok || !long.ok) this.o.log?.(`telegram: profile description not set: ${short.description ?? ''} ${long.description ?? ''}`.trim());
+    return ok;
   }
 
   async api(method: string, body: Record<string, unknown>): Promise<{ ok: boolean; result?: unknown; description?: string }> {

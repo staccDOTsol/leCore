@@ -47,9 +47,26 @@ export const Remix = z.object({
 });
 export type Remix = z.infer<typeof Remix>;
 
+/** What the sitting king carries into the fight: points subtracted from its total before the decision. */
+export type Handicap = { total: number; erosion: number; uncontested: number; failedDefenses: number };
+
+export const sideTotal = (s: { persuasion: number; originality: number; coherence: number; degeneracy: number }) =>
+  s.persuasion + s.originality + s.coherence + s.degeneracy;
+
+/**
+ * The decision, in code, from the judge's scores: the king's total minus its handicap against the
+ * challenger's total. A contested crown keeps ties; an uncontested one (took an empty hill) loses them.
+ */
+export function decide(v: Verdict, h: Handicap): { winner: 'challenger' | 'incumbent'; challengerTotal: number; incumbentTotal: number } {
+  const challengerTotal = sideTotal(v.challenger);
+  const incumbentTotal = Math.max(0, sideTotal(v.incumbent) - h.total);
+  const won = challengerTotal > incumbentTotal || (h.uncontested > 0 && challengerTotal >= incumbentTotal);
+  return { winner: won ? 'challenger' : 'incumbent', challengerTotal, incumbentTotal };
+}
+
 export interface JudgeLike {
   shillFor(c: Contender, opts?: { maxChars?: number }): Promise<{ text: string; usage: Usage }>;
-  judge(challenger: Contender, incumbent: Contender, incumbentPitch: string): Promise<{ verdict: Verdict; usage: Usage }>;
+  judge(challenger: Contender, incumbent: Contender, incumbentPitch: string, handicap?: Handicap): Promise<{ verdict: Verdict; usage: Usage }>;
   remixMetadata(king: Contender, master: { name: string; symbol: string }): Promise<{ remix: Remix; fields: Omit<MetadataFields, 'uri'>; usage: Usage }>;
 }
 
@@ -93,12 +110,17 @@ export class Judge implements JudgeLike {
     return { text: r.text.slice(0, maxChars), usage: r.usage };
   }
 
-  async judge(challenger: Contender, incumbent: Contender, incumbentPitch: string): Promise<{ verdict: Verdict; usage: Usage }> {
+  async judge(challenger: Contender, incumbent: Contender, incumbentPitch: string, handicap?: Handicap): Promise<{ verdict: Verdict; usage: Usage }> {
     const inc: Contender = { ...incumbent, shill: { ...incumbent.shill, pitch: incumbentPitch, author: 'the master shillbot' } };
+    const h = handicap ?? { total: 0, erosion: 0, uncontested: 0, failedDefenses: 0 };
+    const rule = h.total > 0
+      ? `The king carries a HANDICAP of ${h.total} points (${h.uncontested > 0 ? `${h.uncontested} for taking an empty hill uncontested, ` : ''}` +
+        `${h.erosion} of erosion from ${h.failedDefenses} failed challenge${h.failedDefenses === 1 ? '' : 's'}): subtract it from the incumbent's total ` +
+        `before deciding, and ${h.uncontested > 0 ? 'ties go to the CHALLENGER' : 'ties go to the king'}.`
+      : `The higher total wins; ties go to the king.`;
     const r = await this.zoo.chatJson(this.msgs(
-      `Judge this battle for the hill. Score both sides 0-100 on each axis, then pick the winner: the higher total wins, ` +
-      `but a challenger only takes the hill if it clearly beats the incumbent (ties go to the king). The cards' power is ` +
-      `context, not the verdict. Reply with ONLY a JSON object shaped exactly like:\n${VERDICT_SHAPE}\n\n` +
+      `Judge this battle for the hill. Score both sides 0-100 on each axis. ${rule} The cards' power is context, not the verdict. ` +
+      `Reply with ONLY a JSON object shaped exactly like:\n${VERDICT_SHAPE}\n\n` +
       `== CHALLENGER ==\n${describeContender(challenger)}\n\n== INCUMBENT (king) ==\n${describeContender(inc)}`,
     ), Verdict, { maxTokens: 900 });
     return { verdict: r.value, usage: r.usage };
@@ -124,9 +146,10 @@ export class MockJudge implements JudgeLike {
   async shillFor(c: Contender): Promise<{ text: string; usage: Usage }> {
     return { text: `${c.card.name} sits on the hill with ${c.card.stats.hp} HP of liquidity. Come and take it.`, usage: this.usage() };
   }
-  async judge(challenger: Contender, incumbent: Contender): Promise<{ verdict: Verdict; usage: Usage }> {
-    const cw = this.bias === 'challenger' || (this.bias === 'power' && challenger.card.power > incumbent.card.power);
+  /** Scores are the cards' power on every axis; the winner is naive (no handicap) so the hill's own decision is what counts. */
+  async judge(challenger: Contender, incumbent: Contender, _pitch?: string, _handicap?: Handicap): Promise<{ verdict: Verdict; usage: Usage }> {
     const side = (p: number) => ({ persuasion: p, originality: p, coherence: p, degeneracy: p });
+    const cw = this.bias === 'challenger' || (this.bias === 'power' && challenger.card.power > incumbent.card.power);
     return {
       verdict: {
         winner: cw ? 'challenger' : 'incumbent', challenger: side(challenger.card.power), incumbent: side(incumbent.card.power),

@@ -74,7 +74,8 @@ export async function main(): Promise<void> {
   let hill: Hill | undefined;
   hill = new Hill({
     judge, chain, uri, entry: entryLike, store: new FileStore(path.join(cfg.dataDir, 'hill.json')),
-    image: (card, reign) => image.image(card, reign), baseFeeSol: cfg.entrySol, feeGrowthPct: cfg.entryGrowthPct, log,
+    image: (card, reign) => image.image(card, reign), baseFeeSol: cfg.entrySol, feeGrowthPct: cfg.entryGrowthPct,
+    erosionPerLoss: cfg.erosionPerLoss, erosionMax: cfg.erosionMax, uncontestedHandicap: cfg.uncontestedHandicap, log,
   });
   const commands = new Commands({ hill, entry, dataDir: cfg.dataDir, masterMint: cfg.masterMint?.toBase58() ?? null, explorer, log });
 

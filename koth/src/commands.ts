@@ -146,6 +146,7 @@ export class Commands {
         f.muted(`crowned by ${k.author} via ${k.surface} · ${ago(k.crownedAt)}`),
         '',
         `attempt fee ${f.b(`${fee} SOL`)} worth + inference ~$${this.d.hill.inferenceEstimateUsd().toFixed(2)}, +5%`,
+        handicapLine(f, this.d.hill.handicap()),
         f.i(k.pitch.slice(0, 300)),
       ].join('\n'),
       image: k.image, buttons,
@@ -280,6 +281,13 @@ export class Commands {
 }
 
 const pad = (n: number) => String(Math.round(n)).padStart(3, ' ');
+function handicapLine(f: Fmt, h: { total: number; erosion: number; uncontested: number; failedDefenses: number }): string {
+  if (h.total <= 0) return f.muted('the crown is contested and unbroken');
+  const parts = [] as string[];
+  if (h.uncontested) parts.push(`${h.uncontested} for taking an empty hill`);
+  if (h.erosion) parts.push(`${h.erosion} of erosion from ${h.failedDefenses} failed challenge${h.failedDefenses === 1 ? '' : 's'}`);
+  return `the king fights at ${f.b(`-${h.total}`)} (${parts.join(', ')}). every loss chips the hill.`;
+}
 const day = (t: number) => new Date(t).toISOString().slice(0, 10);
 function ago(t: number): string {
   const m = Math.max(0, Math.round((Date.now() - t) / 60_000));

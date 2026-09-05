@@ -63,6 +63,34 @@ python assimilation/flash_hrr.py recall OUT_DIR "capital of France"
 python assimilation/flash_hrr.py attach OUT_DIR "what is the capital of France"
 ```
 
+## Tool routes (the sidecar uses every leCore tool)
+
+Recall is one rung. `holographic_flash_tools` puts the whole engine on the same
+OpenAI wire, so vLLM / the openzoo gateway sees ordinary tool-calling traffic:
+
+```
+client --> FlashHRR.attach (recall inject) --> ToolRouter.attach (routed `tools`)
+       --> upstream /v1/chat/completions --> tool_calls? execute on the mind --> re-post
+```
+
+- **Route** -- `find_capability` + `tool_find` over the request cue: catalog
+  faculties, learned APIs (`api_learn`), taught tools, memory. Deterministic,
+  zero model tokens.
+- **Advertise** -- one OpenAI tool schema per routed public faculty (parameter
+  names introspected from the live method) plus the MCP meta pair
+  `lecore_find` / `lecore_invoke`. The caller's own tools are kept.
+- **Execute** -- the model's tool calls run through `mind.invoke` (public-only,
+  same refusals as `/invoke`), results go back as `role: tool` messages, bounded
+  by `--max-rounds`. Streaming bodies are attached but not looped.
+
+```bash
+python assimilation/flash_hrr.py tools   OUT_DIR "rank these documents with bm25"
+python assimilation/flash_hrr.py attach  OUT_DIR "capital of France" --tools
+python assimilation/flash_hrr.py forward OUT_DIR "capital of France" --tools --upstream http://127.0.0.1:8000
+python assimilation/flash_hrr.py serve   OUT_DIR --tools --upstream http://127.0.0.1:8000
+# in code: mind.unicron_flash_tools(OUT_DIR).forward(body, upstream)
+```
+
 ## One-shard dequant smoke
 
 ```bash

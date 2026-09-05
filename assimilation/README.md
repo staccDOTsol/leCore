@@ -11,6 +11,10 @@ plus sidecar inject; no GDNRuntime, no assimilate, no 48-shard eager load:
 See [`docs/DEEPSEEK_V4_FLASH.md`](../docs/DEEPSEEK_V4_FLASH.md) for Vast
 prove commands, the patched-embed serve overlay, and the inject-before-generate
 point (`python assimilation/flash_hrr.py attach|serve OUT_DIR`).
+`--tools` on `attach|forward|serve` (or `flash_hrr.py tools OUT_DIR "task"`) adds the
+engine's routed faculties as OpenAI `tools` and executes the model's tool calls on
+the mind -- recall and the whole toolset in front of the same upstream
+(`holographic_flash_tools`, `mind.unicron_flash_tools`).
 
 Three commands, run from the repo root. A private venv appears at
 `assimilation/.venv` on first run; your system Python is never touched and no

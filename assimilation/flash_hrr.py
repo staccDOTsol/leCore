@@ -3,6 +3,14 @@
     python assimilation/flash_hrr.py recall OUT_DIR "capital of France"
     python assimilation/flash_hrr.py attach OUT_DIR "what is the capital of France"
     python assimilation/flash_hrr.py serve  OUT_DIR --upstream http://127.0.0.1:8000
+    python assimilation/flash_hrr.py tools  OUT_DIR "rank these documents with bm25"
+    python assimilation/flash_hrr.py serve  OUT_DIR --tools --upstream http://127.0.0.1:8000
+
+`--tools` (attach / forward / serve) puts the ENGINE on the same wire as the recall:
+the request cue is routed deterministically over leCore's faculties, learned APIs and
+taught tools; the routed faculties ride as OpenAI `tools` (plus lecore_find /
+lecore_invoke); the model's tool calls are executed on the mind and fed back until
+it answers (holographic_flash_tools). Recall inject still runs first.
 
 Loads install OUT_DIR (lecore.json + lecore_hrr.npz). Recalls from the sidecar,
 builds a Gateway-shaped system inject (<=1024 chars), and attaches it to an
@@ -30,6 +38,29 @@ if _REPO not in sys.path:
 def _session(out_dir):
     from holographic.io_and_interop.holographic_deepseek_v4 import FlashHRR
     return FlashHRR.open(out_dir)
+
+
+def _tool_sidecar(out_dir, k):
+    from holographic.io_and_interop.holographic_flash_tools import ToolSidecar
+    return ToolSidecar.open(out_dir, k=int(k))
+
+
+def _cmd_tools(a):
+    """Deterministic tool routes + the OpenAI schemas a request would carry."""
+    side = _tool_sidecar(a.out_dir, a.k_tools)
+    routes = side.router.routes(a.query, k=int(a.k_tools))
+    if a.json:
+        print(json.dumps({"query": a.query, "routes": routes,
+                          "tools": side.router.openai_tools(a.query, k=int(a.k_tools))},
+                         indent=2))
+        return 0
+    if not routes:
+        print("(no routes)")
+        return 0
+    for rank, r in enumerate(routes, 1):
+        print("%d  %.3f  %-8s %s%s  %s" % (rank, r["score"], r["kind"], r["tool"],
+                                          "()" if r["callable"] else "", r["description"][:80]))
+    return 0
 
 
 def _cmd_recall(a):
@@ -71,7 +102,11 @@ def _cmd_attach(a):
     override = None
     if a.body or a.body_file or a.messages:
         override = a.query or None
-    attached, info = sess.attach(body, k=int(a.k), query=override)
+    if a.tools:
+        side = _tool_sidecar(a.out_dir, a.k_tools)
+        attached, info = side.attach(body, cue=override, k=int(a.k_tools))
+    else:
+        attached, info = sess.attach(body, k=int(a.k), query=override)
     print(json.dumps({"body": attached, "info": info}, indent=2))
     return 0
 
@@ -99,6 +134,12 @@ def _cmd_forward(a):
     override = None
     if a.body or a.body_file or a.messages:
         override = a.query or None
+    if a.tools:
+        side = _tool_sidecar(a.out_dir, a.k_tools)
+        resp, trace = side.forward(body, a.upstream, max_rounds=int(a.max_rounds),
+                                   cue=override, k=int(a.k_tools), timeout=int(a.timeout))
+        print(json.dumps({"response": resp, "trace": trace}, indent=2))
+        return 0
     resp, info, attached = sess.forward(
         body, a.upstream, k=int(a.k), query=override)
     print(json.dumps({"response": resp, "info": info, "body": attached},
@@ -117,6 +158,12 @@ def _cmd_serve(a):
     sess = FlashHRR.open(a.out_dir)
     upstream = a.upstream.rstrip("/")
     k = int(a.k)
+    side = _tool_sidecar(a.out_dir, a.k_tools) if a.tools else None
+    if side is not None:
+        from holographic.io_and_interop.holographic_flash_tools import http_post
+        side.hrr = sess
+        side.k_recall = k
+        tool_post = http_post(upstream, timeout=int(a.timeout))
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, fmt, *args):
@@ -150,7 +197,32 @@ def _cmd_serve(a):
                 except ValueError:
                     self._send(400, {"error": "request body is not JSON"})
                     return
-                attached, info = sess.attach(body, k=k)
+                if side is not None and body.get("messages") is not None \
+                        and not body.get("stream"):
+                    # TOOLS ON: recall + routed tools attached, the model's tool
+                    # calls executed on the mind, re-posted until it answers.
+                    # The client sees one ordinary chat completion.
+                    try:
+                        resp, trace = side.forward(body, post=tool_post,
+                                                   max_rounds=int(a.max_rounds))
+                    except Exception as exc:
+                        self._send(502, {"error": "upstream %s: %s: %s"
+                                         % (upstream, type(exc).__name__, exc)})
+                        return
+                    self.log_message("TOOLS rounds=%d calls=%s routes=%d %s",
+                                     trace["rounds"],
+                                     [c["name"] for c in trace["calls"]],
+                                     len(trace["routes"]), path)
+                    self._send(200, resp)
+                    return
+                if side is not None:
+                    # a stream cannot be looped (the tool round trip needs the
+                    # whole response) -- advertise the tools, proxy as-is
+                    attached, tinfo = side.attach(body)
+                    info = tinfo["hrr"] or {"attached": False, "inject_chars": 0,
+                                            "hits": []}
+                else:
+                    attached, info = sess.attach(body, k=k)
                 raw = json.dumps(attached).encode("utf-8")
                 self.log_message("HRR attached=%s chars=%d hits=%d %s",
                                  info["attached"], info["inject_chars"],
@@ -218,6 +290,22 @@ def main(argv=None):
     p.add_argument("-k", type=int, default=3)
     p.add_argument("--json", action="store_true")
 
+    def _tools_flags(p):
+        p.add_argument("--tools", action="store_true",
+                       help="route leCore faculties for the cue, advertise them as OpenAI "
+                            "tools (+ lecore_find / lecore_invoke) and execute the model's "
+                            "tool calls on the mind")
+        p.add_argument("--k-tools", type=int, default=8,
+                       help="how many tool routes to advertise (default 8)")
+        p.add_argument("--max-rounds", type=int, default=4,
+                       help="tool-call round trips before the loop stops (default 4)")
+
+    p = sub.add_parser("tools", help="deterministic tool routes for a task phrase")
+    _out(p)
+    p.add_argument("query")
+    p.add_argument("--k-tools", type=int, default=8)
+    p.add_argument("--json", action="store_true")
+
     p = sub.add_parser("attach",
                        help="print the OpenAI body vLLM should see")
     _out(p)
@@ -228,6 +316,7 @@ def main(argv=None):
     p.add_argument("--model", default="deepseek-v4-flash")
     p.add_argument("--max-tokens", type=int, default=32)
     p.add_argument("-k", type=int, default=3)
+    _tools_flags(p)
 
     p = sub.add_parser("forward",
                        help="attach then POST to --upstream (one shot)")
@@ -240,6 +329,8 @@ def main(argv=None):
     p.add_argument("--model", default="deepseek-v4-flash")
     p.add_argument("--max-tokens", type=int, default=32)
     p.add_argument("-k", type=int, default=3)
+    p.add_argument("--timeout", type=int, default=120)
+    _tools_flags(p)
 
     p = sub.add_parser("status")
     _out(p)
@@ -247,7 +338,8 @@ def main(argv=None):
     _out(p)
 
     p = sub.add_parser("serve",
-                       help="proxy: HRR attach then vLLM OpenAI server")
+                       help="proxy: HRR attach (+ --tools: routed tools, tool-call "
+                            "execution) then vLLM OpenAI server")
     _out(p)
     p.add_argument("--upstream", default="http://127.0.0.1:8000",
                    help="vLLM OpenAI base (default http://127.0.0.1:8000)")
@@ -255,8 +347,11 @@ def main(argv=None):
     p.add_argument("--port", type=int, default=8765)
     p.add_argument("-k", type=int, default=3)
     p.add_argument("--timeout", type=int, default=120)
+    _tools_flags(p)
 
     a = ap.parse_args(argv)
+    if a.cmd == "tools":
+        return _cmd_tools(a)
     if a.cmd == "recall":
         return _cmd_recall(a)
     if a.cmd == "attach":

@@ -1114,6 +1114,23 @@ class _UnifiedPart17:
         from holographic.io_and_interop.holographic_deepseek_v4 import FlashHRR
         return FlashHRR.open(out_dir)
 
+    def unicron_flash_tools(self, out_dir=None, k=8, k_recall=3):
+        """THE SIDECAR USES EVERY TOOL, not just recall. FlashHRR puts memory in front of a
+        model leCore cannot run; this puts the ENGINE in front of it on the same OpenAI
+        wire. Per request: the engine's deterministic tool routing (find_capability +
+        tool_find -- catalog, learned APIs, taught tools, memory; zero model tokens)
+        picks the faculties relevant to the cue; they are advertised as OpenAI `tools`
+        with real introspected parameter names, beside the MCP surface's meta pair
+        (lecore_find / lecore_invoke -- discovery is a search, execution is one generic
+        tool); the model's tool calls are then executed on THIS mind (mind.invoke:
+        public-only, the same dispatch /invoke uses) and fed back until it answers,
+        bounded by max_rounds. With out_dir the recall inject runs first, so memory
+        and tools compose. Returns a ToolSidecar: attach(body) / before_generate(body)
+        / forward(body, upstream). vLLM, the openzoo gateway, or any chat-completions
+        server sees ordinary tool-calling traffic. See holographic_flash_tools.ToolSidecar."""
+        from holographic.io_and_interop.holographic_flash_tools import ToolSidecar
+        return ToolSidecar.open(out_dir, mind=self, k=k, k_recall=k_recall)
+
     def unicron_hf_wrapper(self, galvatron):
         """Wrap a Galvatron in the shape transformers callers expect --
         .generate(input_ids, max_new_tokens=...) returning (1, T+n), plus a callable
@@ -1844,6 +1861,12 @@ def _selftest():
         {"model": "deepseek-v4-flash",
          "messages": [{"role": "user", "content": "capital of France?"}]})
     assert info["attached"] and "paris" in attached["messages"][0]["content"].lower()
+    # ... and the tool sidecar composes recall with the routed tools on the same body.
+    side = m.unicron_flash_tools(td, k=4)
+    body2, tinfo = side.attach({"messages": [{"role": "user",
+                                              "content": "rank documents with bm25"}]})
+    assert body2["messages"][0]["role"] == "system" and tinfo["tools"]["advertised"]
+    assert "lecore_invoke" in tinfo["tools"]["tools_added"]
     print("OK: unified p17 (unicron, second half) part contract holds over %d facade defs; "
           "faculties reachable on the assembled mind" % n)
 

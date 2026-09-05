@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { PublicKey } from '@solana/web3.js';
-import { MIN_TOPUP_SOL, NeedsSolError, QUOTE_BUFFER_PCT, computeQuote, jupiterPrices } from '../src/entry.js';
+import { Connection, Keypair, PublicKey, TransactionMessage, VersionedTransaction } from '@solana/web3.js';
+import { MIN_TOPUP_SOL, NeedsSolError, QUOTE_BUFFER_PCT, UltraSwapper, computeQuote, jupiterPrices } from '../src/entry.js';
 import { BOND_THRESHOLD_TOKEN, MASTER_CURVE_DEFAULTS, ZOO_TOKEN_MINT, masterCurveParams } from '../src/dbc.js';
 import { TokenAuthorityOption, TokenType } from '@meteora-ag/dynamic-bonding-curve-sdk';
 
@@ -56,5 +56,35 @@ describe('NeedsSolError', () => {
     expect(e.message).toMatch(/FEEPAYER/);
     expect(new NeedsSolError('F', 0.17, 0.18, 0.15).topUpSol).toBe(MIN_TOPUP_SOL);
     expect(e instanceof Error).toBe(true);
+  });
+});
+
+describe('UltraSwapper', () => {
+  const op = Keypair.generate();
+  const conn = new Connection('http://localhost:8899');
+  const mintA = new PublicKey('EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v'), mintB = new PublicKey('HgtdKCcDUKN8rZNctBrNSJzPsRfPQ6XDMtQkBiU6A9ru');
+  const unsignedTx = () => Buffer.from(new VersionedTransaction(new TransactionMessage({ payerKey: op.publicKey, recentBlockhash: '11111111111111111111111111111111', instructions: [] }).compileToV0Message()).serialize()).toString('base64');
+  it('orders, signs, executes, and reports the routed amount', async () => {
+    const seen: { url: string; body?: Record<string, unknown>; key?: string }[] = [];
+    const f = (async (input: unknown, init?: RequestInit) => {
+      const url = String(input); const key = (init?.headers as Record<string, string>)['x-api-key'];
+      if (url.includes('/ultra/v1/order')) { seen.push({ url, key }); return Response.json({ transaction: unsignedTx(), requestId: 'r1', outAmount: '5', router: 'dflow' }); }
+      if (url.endsWith('/ultra/v1/execute')) { const body = JSON.parse(String(init?.body)); seen.push({ url, body, key }); return Response.json({ status: 'Success', signature: 'SIG', outputAmountResult: '7' }); }
+      throw new Error(`unexpected ${url}`);
+    }) as typeof fetch;
+    const r = await new UltraSwapper(conn, op, { apiKey: 'jup_x', fetchImpl: f }).swap({ inputMint: mintA, outputMint: mintB, amountRaw: 100n });
+    expect(r).toEqual({ signature: 'SIG', outAmountRaw: 7n });
+    expect(seen[0].url).toContain(`taker=${op.publicKey.toBase58()}`);
+    expect(seen[0].key).toBe('jup_x');
+    expect(seen[1].body?.requestId).toBe('r1');
+    const signed = VersionedTransaction.deserialize(Buffer.from(String(seen[1].body?.signedTransaction), 'base64'));
+    expect(signed.signatures[0].some((b) => b !== 0)).toBe(true);
+  });
+  it('falls back to the swap api when Ultra has no order', async () => {
+    const f = (async () => Response.json({ transaction: null, errorMessage: 'Insufficient funds' })) as typeof fetch;
+    const fallback = { swap: async () => ({ signature: 'CLASSIC', outAmountRaw: 1n }) };
+    const r = await new UltraSwapper(conn, op, { apiKey: 'k', fetchImpl: f, fallback }).swap({ inputMint: mintA, outputMint: mintB, amountRaw: 1n });
+    expect(r.signature).toBe('CLASSIC');
+    await expect(new UltraSwapper(conn, op, { apiKey: 'k', fetchImpl: f }).swap({ inputMint: mintA, outputMint: mintB, amountRaw: 1n })).rejects.toThrow(/Insufficient funds/);
   });
 });

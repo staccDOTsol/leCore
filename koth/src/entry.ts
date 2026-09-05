@@ -149,6 +149,70 @@ export class JupiterSwapper implements Swapper {
   }
 }
 
+/**
+ * Jupiter Ultra: one `order` (a signed-by-us transaction routed across Jupiter's routers, dflow
+ * included, which is what reaches a Meteora DBC curve quoted in $TOKEN) and one `execute`. Ultra
+ * has no destination account, so a swap for someone else lands in the operator's wallet and is
+ * forwarded. When Ultra cannot build an order the classic swap API is tried.
+ */
+export class UltraSwapper implements Swapper {
+  constructor(
+    private connection: Connection, private operator: Keypair,
+    private opts: { apiKey: string; baseUrl?: string; fetchImpl?: typeof fetch; fallback?: Swapper; log?: (s: string) => void },
+  ) {}
+
+  async swap(a: { inputMint: PublicKey; outputMint: PublicKey; amountRaw: bigint; destinationOwner?: PublicKey }): Promise<{ signature: string; outAmountRaw: bigint }> {
+    try {
+      return await this.ultra(a);
+    } catch (e) {
+      if (!this.opts.fallback) throw e;
+      this.opts.log?.(`jupiter ultra: ${e instanceof Error ? e.message : e}; trying the swap api`);
+      return this.opts.fallback.swap(a);
+    }
+  }
+
+  private async ultra(a: { inputMint: PublicKey; outputMint: PublicKey; amountRaw: bigint; destinationOwner?: PublicKey }): Promise<{ signature: string; outAmountRaw: bigint }> {
+    const base = (this.opts.baseUrl ?? 'https://api.jup.ag').replace(/\/+$/, '');
+    const f = this.opts.fetchImpl ?? fetch;
+    const headers = { 'content-type': 'application/json', 'x-api-key': this.opts.apiKey };
+    const u = new URL(`${base}/ultra/v1/order`);
+    u.searchParams.set('inputMint', a.inputMint.toBase58());
+    u.searchParams.set('outputMint', a.outputMint.toBase58());
+    u.searchParams.set('amount', a.amountRaw.toString());
+    u.searchParams.set('taker', this.operator.publicKey.toBase58());
+    const or = await f(u, { headers, signal: AbortSignal.timeout(20_000) });
+    const order = (await or.json().catch(() => ({}))) as { transaction?: string | null; requestId?: string; outAmount?: string; router?: string; errorMessage?: string; error?: string };
+    if (!or.ok || !order.transaction || !order.requestId) throw new Error(`order: ${order.errorMessage ?? order.error ?? or.status}`);
+    const tx = VersionedTransaction.deserialize(Buffer.from(order.transaction, 'base64'));
+    tx.sign([this.operator]);
+    const er = await f(`${base}/ultra/v1/execute`, {
+      method: 'POST', headers, signal: AbortSignal.timeout(60_000),
+      body: JSON.stringify({ signedTransaction: Buffer.from(tx.serialize()).toString('base64'), requestId: order.requestId }),
+    });
+    const ex = (await er.json().catch(() => ({}))) as { status?: string; signature?: string; outputAmountResult?: string; error?: string; code?: number };
+    if (!er.ok || ex.status !== 'Success' || !ex.signature) throw new Error(`execute: ${ex.error ?? ex.code ?? er.status}`);
+    const outAmountRaw = BigInt(ex.outputAmountResult ?? order.outAmount ?? '0');
+    this.opts.log?.(`jupiter ultra via ${order.router ?? '?'}: ${a.amountRaw} ${a.inputMint.toBase58().slice(0, 6)} -> ${outAmountRaw} ${a.outputMint.toBase58().slice(0, 6)}, tx ${ex.signature}`);
+    if (a.destinationOwner && !a.destinationOwner.equals(this.operator.publicKey) && outAmountRaw > 0n) {
+      await this.forward(a.outputMint, outAmountRaw, a.destinationOwner);
+    }
+    return { signature: ex.signature, outAmountRaw };
+  }
+
+  /** Ultra always pays the taker: move the output on to whoever it was for. */
+  private async forward(mint: PublicKey, amount: bigint, to: PublicKey): Promise<string> {
+    const program = await tokenProgramFor(this.connection, mint);
+    const decimals = (await getMint(this.connection, mint, 'confirmed', program)).decimals;
+    const src = getAssociatedTokenAddressSync(mint, this.operator.publicKey, false, program);
+    const dst = getAssociatedTokenAddressSync(mint, to, true, program);
+    const tx = new Transaction().add(
+      createAssociatedTokenAccountIdempotentInstruction(this.operator.publicKey, dst, to, mint, program),
+      createTransferCheckedInstruction(src, mint, dst, this.operator.publicKey, amount, decimals, [], program),
+    );
+    return sendAndConfirmTransaction(this.connection, tx, [this.operator], { commitment: 'confirmed' });
+  }
+}
+
 export async function tokenProgramFor(connection: Connection, mint: PublicKey): Promise<PublicKey> {
   if (mint.equals(NATIVE_SOL_MINT)) return TOKEN_PROGRAM_ID;
   const info = await connection.getAccountInfo(mint);
@@ -170,6 +234,8 @@ export type EntryDeps = {
   /** From the ledger: what an attempt has been costing in inference. */
   estimateInferenceUsd: () => number;
   swapper?: Swapper;
+  /** With a key, swaps go through Jupiter Ultra (the swap api as fallback); without, the keyless swap api. */
+  jupiterApiKey?: string;
   prices?: (mint: string) => Promise<Prices>;
   slippageBps?: number;
   log?: (line: string) => void;
@@ -181,7 +247,8 @@ export class Entry implements EntryLike {
   private prices: (mint: string) => Promise<Prices>;
   private raydium: Promise<Raydium> | null = null;
   constructor(private d: EntryDeps) {
-    this.swapper = d.swapper ?? new JupiterSwapper(d.connection, d.operator, { slippageBps: d.slippageBps });
+    const classic = new JupiterSwapper(d.connection, d.operator, { apiKey: d.jupiterApiKey, slippageBps: d.slippageBps });
+    this.swapper = d.swapper ?? (d.jupiterApiKey ? new UltraSwapper(d.connection, d.operator, { apiKey: d.jupiterApiKey, fallback: classic, log: d.log }) : classic);
     this.prices = d.prices ?? ((mint) => jupiterPrices(mint));
     fs.mkdirSync(this.quotesDir, { recursive: true });
   }

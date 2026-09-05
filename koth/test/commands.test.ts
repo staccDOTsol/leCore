@@ -85,6 +85,20 @@ describe('commands over the hill', () => {
     expect((await t('hall')).text).toMatch(/#1 Wrapped SOL/);
     expect((await t('fee')).text).toMatch(/1.01\^1/);
   });
+  it('resumes a settlement that failed after the sweep, even though the deposit address is empty now', async () => {
+    const entry = new FakeEntry();
+    let calls = 0;
+    entry.settle = async (id: string) => { const q = entry.quotes.get(id)!; calls++; q.status = 'settled'; q.playSignature = `sig-${id}`; return q; };
+    const { commands } = setup(entry);
+    const t = (text: string) => commands.handle({ surface: 'telegram', author: '@a', authorId: 'tg:1', text });
+    await t(`/shill ${A} sol is the chain the chain is sol`);
+    const q = entry.quotes.get('q1')!;
+    q.status = 'failed'; q.steps.sweep = 'swept-sig';                 // swept, then died at the swap; not in entry.paid: the address is empty
+    const r = await t('paid q1');
+    expect(calls).toBe(1);
+    expect(plain(r!.rich)).not.toMatch(/not there yet/);
+  });
+
   it('tells the player to top up the fee payer when the pool cannot be created, and offers a retry', async () => {
     const entry = new FakeEntry();
     entry.settle = async () => { throw new NeedsSolError('FEEPAYER111', 0.02, 0.18, 0.15); };

@@ -60,7 +60,7 @@ export async function main(): Promise<void> {
       // the hill is built below; the entry reads its inference estimate lazily through this closure
       entry = new Entry({
         connection, operator, masterMint: cfg.masterMint, playProgramId: cfg.playProgramId, cpmmProgramId: cfg.raydiumCpmmProgramId,
-        dataDir: cfg.dataDir, zooWallet: cfg.zooWallet, inferencePayMint: cfg.inferencePayMint,
+        dataDir: cfg.dataDir, zooWallet: cfg.zooWallet, inferencePayMint: cfg.inferencePayMint, jupiterApiKey: cfg.jupiterApiKey || undefined,
         estimateInferenceUsd: () => hill?.inferenceEstimateUsd() ?? 0.05, log,
       });
       entryLike = entry;

@@ -253,7 +253,9 @@ export class Commands {
     if (pend.authorId !== ctx.authorId) return { rich: () => `quote ${id} belongs to someone else` };
     const { quote, paid, balanceRaw } = await this.d.entry.checkDeposit(id);
     if (quote.status === 'expired') { delete this.pending[id]; this.save(); return { rich: () => `quote ${id} expired unpaid. ask for a new one with shill.`, buttons: [[BTN.challenge]] }; }
-    if (!paid) return { rich: (f) => `not there yet: ${f.b(`${Number(balanceRaw) / 10 ** quote.decimals}`)} of ${quote.amountUi} at ${f.code(quote.depositAddress)}. try again in a minute.`, buttons: [[{ label: 'I paid', data: `paid:${id}` }]] };
+    // once swept, the deposit address is empty by design: a settlement that failed part-way resumes from its last step
+    const resumable = Boolean(quote.steps?.sweep) || quote.status === 'settling' || quote.status === 'failed';
+    if (!paid && !resumable) return { rich: (f) => `not there yet: ${f.b(`${Number(balanceRaw) / 10 ** quote.decimals}`)} of ${quote.amountUi} at ${f.code(quote.depositAddress)}. try again in a minute.`, buttons: [[{ label: 'I paid', data: `paid:${id}` }]] };
 
     const steps: { label: string; sig?: string }[] = [];
     const show = async () => {

@@ -333,6 +333,8 @@ def analyze(opp: Opportunity, text: str, llm: LLM | None, full_threshold: int = 
         data = llm.json(SYSTEM_PROMPT, user, VERDICT_SCHEMA, max_tokens=3000, context_id=context_id, top_k=24)
     except LLMError as e:
         heur.other_blockers.append(f"LLM unavailable ({e}); heuristic verdict only")
+        if "budget exhausted" not in str(e) and "could not reach" not in str(e) and "402" not in str(e):
+            heur.method = f"llm-failed:{llm.name}"     # paid and got no usable answer: do not pay again automatically
         return heur
     try:
         v = ClauseVerdict(
@@ -350,6 +352,7 @@ def analyze(opp: Opportunity, text: str, llm: LLM | None, full_threshold: int = 
         )
     except (KeyError, ValueError, TypeError) as e:
         heur.other_blockers.append(f"LLM returned malformed verdict ({e}); heuristic verdict only")
+        heur.method = f"llm-failed:{llm.name}"
         return heur
     # evidence discipline: a non-silent status without a quote is demoted to silent
     if v.delegation != DelegationStatus.SILENT and not v.delegation_evidence:

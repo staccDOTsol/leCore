@@ -17,7 +17,46 @@ from .config import Settings, settings as _settings
 from .llm import LLM, LLMError
 from .models import Opportunity
 from .sources.base import parse_money
-from .talent.scoring import REFERENCE_RATES
+# North American mid-level consulting rates, USD/hour, by skill family: what the BUYER's comparables
+# embed, used for the market-labor line and the overpriced ratio. Inputs, not facts.
+REFERENCE_RATES: dict[str, float] = {
+    "software": 120.0, "data": 130.0, "ai_ml": 150.0, "cloud_devops": 130.0, "cybersecurity": 150.0,
+    "design": 85.0, "writing": 70.0, "marketing": 90.0, "translation": 60.0, "video": 80.0,
+    "consulting": 150.0, "finance": 120.0, "legal": 200.0, "engineering": 130.0, "research": 90.0,
+    "training": 80.0, "project_management": 100.0, "gis": 100.0, "admin": 40.0, "general": 80.0,
+}
+SKILL_FAMILIES: dict[str, str] = {
+    "software": r"software|developer|programm|python|java\b|javascript|typescript|react|node|\.net|api|backend|frontend|mobile|web dev|wordpress|salesforce|erp|crm|integration|qa\b|testing|devops|application",
+    "data": r"\bdata\b|sql|analytics|tableau|power ?bi|etl|warehouse|statistic|dashboard|visuali|database",
+    "ai_ml": r"machine learning|\bml\b|\bai\b|artificial intelligence|deep learning|nlp|llm|computer vision|automation|chatbot",
+    "cloud_devops": r"aws|azure|gcp|cloud|kubernetes|docker|devops|hosting|migration",
+    "cybersecurity": r"security|penetration|soc ?2|iso ?27001|nist|cissp|vulnerab|compliance audit",
+    "design": r"design|ux|ui\b|graphic|illustrat|branding|logo|typograph|print design|creative",
+    "writing": r"writ|copy|editor|editing|proofread|content|grant|proposal|journalis|documentation|report",
+    "marketing": r"marketing|seo|social media|campaign|brand strateg|public relations|advertis|communications|outreach",
+    "translation": r"translat|interpret|localiz|subtitl|transcri|bilingual|french|spanish",
+    "video": r"video|animation|motion graphics|3d|audio|podcast|photograph|film",
+    "consulting": r"consult|strateg|management|business analys|process improvement|change management|organi[sz]ational|policy|governance|advisory|study|assessment|evaluation|plan\b|planning",
+    "finance": r"account|bookkeep|cpa|financial|audit|tax|actuar|budget|forecast",
+    "legal": r"legal|lawyer|attorney|paralegal|regulatory|compliance",
+    "engineering": r"engineer|cad|autocad|revit|civil|mechanical|electrical|structural|architect|survey|imaging|lidar|geotechn",
+    "research": r"research|survey|literature review|academic|economist|evaluation|evaluator|scientific|laboratory",
+    "training": r"training|instructional|curriculum|e-?learning|course|facilitat|coach|lms|education",
+    "project_management": r"project manag|pmp|scrum|agile|program manag|pmo|coordinator|oversight",
+    "gis": r"\bgis\b|arcgis|qgis|mapping|geospatial|remote sensing|cartograph",
+    "admin": r"virtual assistant|data entry|admin|customer service|scheduling|transcription|clerical",
+}
+_FAMILY_RE = {k: re.compile(v, re.I) for k, v in SKILL_FAMILIES.items()}
+
+
+def skill_families(texts: list[str], extra: str = "") -> dict[str, int]:
+    blob = " ".join(texts) + " " + extra
+    hits = {}
+    for fam, rx in _FAMILY_RE.items():
+        n = len(rx.findall(blob))
+        if n:
+            hits[fam] = n
+    return dict(sorted(hits.items(), key=lambda kv: -kv[1]))
 
 SCOPE_SCHEMA: dict[str, Any] = {
     "type": "object", "additionalProperties": False,
@@ -63,7 +102,6 @@ def stated_budget(text: str, floor: float = 5_000) -> float | None:
 
 def heuristic_scope(opp: Opportunity, text: str) -> dict[str, Any]:
     """Keyword-only fallback: family from the taxonomy vocabulary, hours from notice size."""
-    from .talent.scoring import skill_families
     fams = skill_families([opp.title, opp.category_hint], (text or "")[:4000]) or {"consulting": 1}
     total = sum(fams.values())
     mix = {k: round(v / total, 2) for k, v in list(fams.items())[:4]}
@@ -80,10 +118,17 @@ def estimate_scope(opp: Opportunity, text: str, llm: LLM | None, context_id: str
     head = (f"title: {opp.title}\nbuyer: {opp.buyer}\ncurrency: {opp.currency}\nnotice type: {opp.notice_type}\n"
             f"codes: naics={opp.naics} unspsc={opp.unspsc} psc={opp.psc}\n\n")
     if context_id and len(text) > 9_000:
-        user = head + ("The complete solicitation is bound as your context. Recall the scope of work, deliverables, "
-                       "period of performance, evaluation criteria and any budget, estimated value, ceiling or NTE "
-                       "figure before answering. Title and codes above are the only text in this message; everything "
-                       "else is in the bound context.")
+        # same shape as the gate read: concrete excerpts in the body, the whole document in the bound context
+        money = re.compile(r"(budget|estimated (value|cost|amount)|not[- ]to[- ]exceed|\bNTE\b|ceiling|period of performance|"
+                           r"deliverable|scope of (work|services)|statement of work|tasks?\b)", re.I)
+        picks, total = [], 0
+        for para in re.split(r"\n\s*\n", text):
+            if money.search(para) and 40 < len(para) < 1500:
+                picks.append(para.strip()); total += len(para)
+            if total > 5_000:
+                break
+        user = head + (f"SCOPE EXCERPTS (opening + passages mentioning scope, deliverables, budget) of a {len(text):,}-character "
+                       f"solicitation that is also bound as your context:\n\n" + text[:2_500] + "\n\n" + "\n\n".join(picks))
     else:
         body = text if len(text) <= 60_000 else text[:45_000] + "\n...\n" + text[-15_000:]
         user = head + "TEXT:\n" + body
@@ -92,6 +137,8 @@ def estimate_scope(opp: Opportunity, text: str, llm: LLM | None, context_id: str
     except LLMError as e:
         h = heuristic_scope(opp, text)
         h["assumptions"].append(f"LLM unavailable: {e}")
+        if "budget exhausted" not in str(e) and "could not reach" not in str(e) and "402" not in str(e):
+            h["basis"] = f"llm-failed:{llm.name}"       # paid, no usable answer: not retried automatically
         return h
     mix = {k: float(v) for k, v in (d.get("skill_mix") or {}).items() if k in REFERENCE_RATES and float(v) > 0}
     s = sum(mix.values()) or 1.0

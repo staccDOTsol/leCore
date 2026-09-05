@@ -8,7 +8,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterable, Iterator
 
-from .models import Opportunity, Talent, ClauseVerdict, Match, DelegationStatus, AIStatus
+from .models import Opportunity, ClauseVerdict, Match, DelegationStatus, AIStatus
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS opportunities (
@@ -33,12 +33,8 @@ CREATE TABLE IF NOT EXISTS pricing (
     opportunity_key TEXT PRIMARY KEY, ask_value REAL, ask_basis TEXT, hours_low REAL, hours_high REAL,
     skill_mix TEXT, benchmark TEXT, payload TEXT, created TEXT DEFAULT CURRENT_TIMESTAMP
 );
-CREATE TABLE IF NOT EXISTS talent (
-    key TEXT PRIMARY KEY, source TEXT, source_id TEXT, name TEXT, url TEXT, is_team INTEGER, title TEXT,
-    skills TEXT, hourly_rate REAL, currency TEXT, country TEXT, job_success_pct REAL, total_hours REAL,
-    total_earnings REAL, total_jobs INTEGER, badges TEXT, portfolio_items INTEGER, reviews_count INTEGER,
-    rating REAL, team_size INTEGER, raw TEXT, quality_score REAL, price_score REAL,
-    last_seen TEXT DEFAULT CURRENT_TIMESTAMP
+CREATE TABLE IF NOT EXISTS proposals (
+    opportunity_key TEXT PRIMARY KEY, markdown TEXT, payload TEXT, method TEXT, created TEXT DEFAULT CURRENT_TIMESTAMP
 );
 CREATE TABLE IF NOT EXISTS contexts (
     opportunity_key TEXT PRIMARY KEY, context_id TEXT, chars INTEGER, backend TEXT, created TEXT DEFAULT CURRENT_TIMESTAMP
@@ -184,31 +180,15 @@ class Store:
         r = self.conn.execute("SELECT payload FROM pricing WHERE opportunity_key=?", (key,)).fetchone()
         return json.loads(r["payload"]) if r else None
 
-    # -- talent --------------------------------------------------------------------
-    def upsert_talent(self, people: Iterable[Talent]) -> int:
-        n = 0
+    # -- proposals -----------------------------------------------------------------
+    def put_proposal(self, key: str, markdown: str, payload: dict[str, Any], method: str) -> None:
         with self.tx() as c:
-            for t in people:
-                row = t.to_row()
-                row["key"] = t.key
-                cols = ", ".join(row.keys())
-                qs = ", ".join("?" for _ in row)
-                updates = ", ".join(f"{k}=excluded.{k}" for k in row if k != "key")
-                c.execute(f"INSERT INTO talent ({cols}) VALUES ({qs}) ON CONFLICT(key) DO UPDATE SET {updates}, "
-                          f"last_seen=CURRENT_TIMESTAMP", tuple(row.values()))
-                n += 1
-        return n
+            c.execute("INSERT OR REPLACE INTO proposals (opportunity_key, markdown, payload, method) VALUES (?,?,?,?)",
+                      (key, markdown, json.dumps(payload, default=str), method))
 
-    def set_talent_scores(self, key: str, quality: float, price: float) -> None:
-        with self.tx() as c:
-            c.execute("UPDATE talent SET quality_score=?, price_score=? WHERE key=?", (quality, price, key))
-
-    def talent(self, where: str = "1=1", params: tuple = ()) -> list[Talent]:
-        return [Talent.from_row(dict(r)) for r in self.conn.execute(f"SELECT * FROM talent WHERE {where}", params)]
-
-    def talent_scores(self) -> dict[str, tuple[float, float]]:
-        return {r["key"]: (r["quality_score"] or 0.0, r["price_score"] or 0.0)
-                for r in self.conn.execute("SELECT key, quality_score, price_score FROM talent")}
+    def proposal(self, key: str) -> dict[str, Any] | None:
+        r = self.conn.execute("SELECT markdown, payload, method, created FROM proposals WHERE opportunity_key=?", (key,)).fetchone()
+        return {"markdown": r["markdown"], "payload": json.loads(r["payload"]), "method": r["method"], "created": r["created"]} if r else None
 
     # -- matches -------------------------------------------------------------------
     def put_matches(self, matches: Iterable[Match]) -> int:
@@ -249,6 +229,6 @@ class Store:
             "verdicts": one("SELECT COUNT(*) FROM verdicts"),
             "viable": one("SELECT COUNT(*) FROM verdicts WHERE viable=1"),
             "priced": one("SELECT COUNT(*) FROM pricing"),
-            "talent": one("SELECT COUNT(*) FROM talent"),
             "matches": one("SELECT COUNT(*) FROM matches"),
+            "proposals": one("SELECT COUNT(*) FROM proposals"),
         }

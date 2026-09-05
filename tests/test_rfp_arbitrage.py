@@ -19,15 +19,13 @@ from rfp_arbitrage.store import Store  # noqa: E402
 from rfp_arbitrage.taxonomy import classify  # noqa: E402
 from rfp_arbitrage import clauses  # noqa: E402
 from rfp_arbitrage.llm import LLM, _extract_json  # noqa: E402
-from rfp_arbitrage.talent.csv_source import load as load_talent, row_to_talent  # noqa: E402
-from rfp_arbitrage.talent.scoring import score_quality, score_price, skill_families  # noqa: E402
+from rfp_arbitrage.pricing import skill_families  # noqa: E402
 from rfp_arbitrage.pricing import price, stated_budget, heuristic_scope  # noqa: E402
-from rfp_arbitrage.match import build_matches, fit  # noqa: E402
+from rfp_arbitrage.match import build_matches, delivery_cost  # noqa: E402
 from rfp_arbitrage.report import match_report, gate_report  # noqa: E402
 from rfp_arbitrage.sources.base import norm_date, parse_money, strip_html  # noqa: E402
 from rfp_arbitrage.sources.registry import coverage_table, US_STATES, CA_PROVINCES  # noqa: E402
 
-FIX = ROOT / "tests" / "fixtures" / "rfp_talent_sample.csv"
 
 
 def _opp(key="t:1", title="Website redesign and content strategy consulting", desc="", **kw):
@@ -200,22 +198,6 @@ def test_extract_json_variants():
 
 
 # --- talent ------------------------------------------------------------------------------
-def test_talent_csv_and_scoring():
-    people = list(load_talent(FIX, "upwork"))
-    assert len(people) == 10
-    by = {t.name: t for t in people}
-    assert by["Nordic Cloud Collective"].is_team and by["Nordic Cloud Collective"].team_size == 7
-    assert by["Sophie Tremblay"].currency == "CAD" and "top_rated" in by["Sophie Tremblay"].badges
-    q_ana, _ = score_quality(by["Ana Petrova"]); q_new, notes = score_quality(by["Newbie Dev"])
-    assert q_ana >= 0.7 and q_new <= 0.35 and any("floor" in n for n in notes)
-    p_ana, _ = score_price(by["Ana Petrova"]); p_pricey, _ = score_price(by["Pricey Corp"])
-    assert p_ana > 0.5 and p_pricey == 0.0
-    assert "software" in skill_families(by["Ana Petrova"].skills, by["Ana Petrova"].title)
-
-
-def test_talent_row_aliases():
-    t = row_to_talent({"Freelancer": "X", "Rate": "$120/hr", "JSS": "96%", "Hours Billed": "1,200", "Type": "Agency", "Skills": "GIS; ArcGIS"})
-    assert t.hourly_rate == 120 and t.job_success_pct == 96 and t.total_hours == 1200 and t.is_team and t.skills == ["gis", "arcgis"]
 
 
 # --- pricing + matching --------------------------------------------------------------------
@@ -239,30 +221,24 @@ def test_price_and_match_end_to_end(tmp_path):
     st.put_verdict(ClauseVerdict(o1.key, DelegationStatus.SILENT, AIStatus.SILENT, confidence=0.8, method="llm:x"))
     st.put_verdict(ClauseVerdict(o2.key, DelegationStatus.EXPLICITLY_PROHIBITED, AIStatus.SILENT, confidence=0.9, method="llm:x",
                                  delegation_evidence=["shall not subcontract"]))
-    st.upsert_talent(list(load_talent(FIX, "upwork")))
     pricing = {}
     for o in (o1, o2):
         p = price(o, o.description, None)
         assert p["ask_value"] and p["ask_basis"].startswith("stated:text")
         st.put_pricing(o.key, p); pricing[o.key] = p
-    ms = build_matches(st.intellectual(), st.verdicts(), pricing, st.talent())
+    ms = build_matches(st.intellectual(), st.verdicts(), pricing)
     assert ms and all(m.opportunity_key == o1.key for m in ms)          # o2 blocked by the gate, o3 not intellectual
     best = ms[0]
+    cost, plan = delivery_cost(best.hours_estimate)
+    assert best.labor_cost == round(cost, 2) and plan["zoo_usd"] > 0 and best.talent_keys == ["openzoo"]
     assert best.margin >= 0.35 and best.gate_ok and best.labor_cost < best.ask_value
-    assert "Pricey Corp" not in " ".join(best.talent_keys) and "newbie" not in " ".join(best.talent_keys)
     st.put_matches(ms)
     rep = match_report(st)
-    assert "VIABLE" in rep and "Ana Petrova" in rep or "Marcus" in rep
+    assert "VIABLE" in rep and "Delivery (openzoo)" in rep
     assert "| yes |" in gate_report(st) and "| NO |" in gate_report(st)
     # include_blocked lets a reviewer see what the gate removed
-    assert any(m.opportunity_key == o2.key for m in build_matches(st.intellectual(), st.verdicts(), pricing, st.talent(), require_viable=False))
+    assert any(m.opportunity_key == o2.key for m in build_matches(st.intellectual(), st.verdicts(), pricing, require_viable=False))
 
-
-def test_fit_prefers_matching_families():
-    people = {t.name: t for t in load_talent(FIX, "upwork")}
-    o = _opp(title="Machine learning model for permit processing", description="NLP classification of permit applications")
-    mix = {"ai_ml": 0.7, "software": 0.3}
-    assert fit(o, mix, people["Chen Wei"]) > fit(o, mix, people["Diego Alvarez"])
 
 
 # --- source converters (no network) ------------------------------------------------------------
@@ -342,11 +318,9 @@ def test_registry_is_complete():
 def test_cli_smoke(tmp_path):
     from rfp_arbitrage.cli import main
     db = str(tmp_path / "cli.sqlite3")
-    assert main(["--db", db, "talent", "import", str(FIX)]) == 0
     assert main(["--db", db, "stats"]) == 0
     assert main(["--db", db, "sources"]) == 0
-    st = Store(db)
-    assert st.stats()["talent"] == 10 and all(q >= 0 for q, p in st.talent_scores().values())
+    assert Store(db).stats()["opportunities"] == 0
 
 
 def test_pump_streams_cumulatively(tmp_path, monkeypatch):
@@ -356,7 +330,6 @@ def test_pump_streams_cumulatively(tmp_path, monkeypatch):
 
     db = tmp_path / "p.sqlite3"
     st = Store(db)
-    st.upsert_talent(list(load_talent(FIX, "upwork")))
     o1 = _opp("t:1", "Custom software development and data dashboard", "Build a Django app. Estimated value $240,000. " + PERMIT_SUB, naics=["541511"])
     st.upsert_opportunities([o1]); c = classify(o1.title, o1.description); st.set_intellectual(o1.key, c.score, c.reason)
     # no network: attachments stage records the sentinel only

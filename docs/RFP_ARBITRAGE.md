@@ -23,10 +23,12 @@ carries verbatim quotes so a human can confirm the reading in a minute.
     python -m rfp_arbitrage fetch                                     # attachments -> text (PDF/DOCX/XLSX/ZIP/HTML)
     python -m rfp_arbitrage gate                                      # LLM verdict per opportunity (openzoo by default)
     python -m rfp_arbitrage price --viable-only                       # ask, hours, market labor, overpriced ratio
-    python -m rfp_arbitrage talent import roster.csv --show           # or: talent upwork-search --skills "python, gis"
+    python -m rfp_arbitrage awards                                    # comparable bids/awards index (the price side)
     python -m rfp_arbitrage match --show 20
     python -m rfp_arbitrage report --out shortlist.md
-    python -m rfp_arbitrage report --kind gate --out gate.md          # every verdict, viable first, for review
+    python -m rfp_arbitrage report --kind live --out live.md          # every open viable ask with its price distribution
+    python -m rfp_arbitrage propose --limit 5                         # draft bids for the top matches (openzoo)
+    python -m rfp_arbitrage pump --watch                              # all downstream stages concurrently, cumulatively
 
 `python -m rfp_arbitrage run` chains crawl -> fetch -> gate -> price -> score -> match -> report.
 The store is a single SQLite file (`--db` or `$RFP_DB`); every verb is resumable and idempotent.
@@ -85,30 +87,39 @@ on by default -- `RFP_LLM_FALLBACKS=0` to disable).
   labor × (1 + overhead)). Reference rates live in `talent/scoring.py::REFERENCE_RATES` and
   are inputs, not facts -- edit them for your market.
 
-## Talent (`talent/`)
+## Delivery: openzoo only
 
-* `talent import file.csv|json` -- any export or curated roster; columns matched loosely
-  (`name, url, title, skills, hourly_rate, currency, job_success, total_hours, total_earnings,
-  badges, reviews_count, rating, is_team, team_size`).
-* `talent upwork-*` -- the **official Upwork GraphQL API** with OAuth2 (`UPWORK_CLIENT_ID`,
-  `UPWORK_CLIENT_SECRET`, then `upwork-auth`). Anonymous scraping of upwork.com is blocked at
-  the edge and forbidden by their ToS, so there is deliberately no scraper. Upwork gates fields
-  by partner tier: run `upwork-introspect` and adjust `SEARCH_QUERY` in `talent/upwork.py`.
-* **provably good** (`score_quality`): job success, hours/dollars, badges (Expert-Vetted, Top
-  Rated Plus, Top Rated), reviews, portfolio, team depth -- with floors (no JSS or JSS < 85 caps
-  at 0.3; under 100 h and $5k caps at 0.35).
-* **under-priced** (`score_price`): distance below the reference rate for the primary skill family.
+There is no marketplace in the loop. The delivery plan for every viable opportunity is an
+openzoo AI team: scope hours × `RFP_ZOO_USD_PER_HOUR` (default $4 per delivered
+hour-equivalent, a knob until the first delivered contract measures it) plus a human
+review share (`RFP_REVIEW_SHARE`, default 10 % of hours at `RFP_REVIEW_USD_PER_HOUR`,
+default $120). `propose` drafts the bid from the same bound context (understanding,
+approach, deliverables with acceptance criteria, schedule, compliance matrix from the
+solicitation's own mandatory requirements, assumptions, questions for the buyer, price).
+Next stages on the same context: submission packaging, buyer Q&A, the deliverables, and
+revision to acceptance.
 
 ## Matching (`match.py`)
 
-For every opportunity that is intellectual, gate-viable and priced: skill-family fit against
-each candidate (and a composed team when the mix spans families), labor cost at the
-candidates' own rates, margin after overhead, and
+For every opportunity that is intellectual, gate-viable and priced: delivery cost through
+openzoo, margin after overhead, and
 
-    score = gate_conf × (0.35·margin + 0.25·fit + 0.25·quality + 0.15·price)
+    score = gate_conf × (0.6·margin + 0.4·log-size)
 
-with hard cuts: margin ≥ `RFP_MIN_MARGIN` (0.35), quality ≥ 0.5, fit ≥ 0.25.
-`match --include-blocked` also ranks gate-failed opportunities for review.
+with hard cuts: margin ≥ `RFP_MIN_MARGIN` (0.35) and a known ask. A regex-found ask halves
+the score. `match --include-blocked` also ranks gate-failed opportunities for review.
+
+## openzoo wiring (`llm.py`)
+
+Per openzoo's INTEGRATION.md: each solicitation is bound once (free, `/v1/hrr/bind`) and
+gets its own context id, stored in `contexts`; every gate, scope and proposal question is
+sent as a small body with `X-HRR-Context` and `x-hrr-top-k`, so the proxy never auto-spills
+a large prompt or mixes documents. The JSON rule rides in the user turn as well as the
+system prompt; a prose answer is salvaged into the schema with one cheap context-free pass.
+Spend is read from the `x402` receipts and capped by `RFP_LLM_BUDGET_USD`; a paid read that
+yields nothing usable is recorded (`llm-failed:`) and never auto-retried. `npx openzoo`
+runs the paying proxy; fund its wallet in TOKEN or USDC and set `OPENZOO_TOKEN` to the
+asset you funded.
 
 ## Environment
 
@@ -118,7 +129,7 @@ with hard cuts: margin ≥ `RFP_MIN_MARGIN` (0.35), quality ≥ 0.5, fit ≥ 0.2
 | `LECORE_LLM_URL` / `LECORE_LLM_MODEL` / `LECORE_LLM_KEY` | openzoo / OpenAI-compatible LLM (default provider) |
 | `RFP_LLM_PROVIDER` (`openzoo`\|`anthropic`), `RFP_LLM_MODEL`, `RFP_LLM_EFFORT`, `RFP_LLM_FALLBACKS` | LLM selection |
 | `ANTHROPIC_API_KEY` | only with `RFP_LLM_PROVIDER=anthropic` |
-| `UPWORK_CLIENT_ID`, `UPWORK_CLIENT_SECRET`, `UPWORK_REFRESH_TOKEN`, `UPWORK_ORG_ID` | Upwork API |
+| `RFP_ZOO_USD_PER_HOUR`, `RFP_REVIEW_SHARE`, `RFP_REVIEW_USD_PER_HOUR`, `RFP_LLM_BUDGET_USD` | delivery cost model and spend cap |
 | `BIDNET_COOKIE`, `MERX_COOKIE` | logged-in session for locked detail fields |
 | `SOCRATA_APP_TOKEN` | higher Socrata rate limits |
 | `RFP_DB`, `RFP_CACHE`, `RFP_DELAY`, `RFP_USER_AGENT`, `RFP_OVERHEAD`, `RFP_MIN_MARGIN` | store, cache, politeness, economics |

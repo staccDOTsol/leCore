@@ -82,10 +82,13 @@ class LLM:
             self.extra_headers.setdefault("x-openzoo-session", os.environ["OPENZOO_SESSION"])
         self.calls = 0
         self.usage: dict[str, int] = {"input": 0, "output": 0}
+        self.billed_usd = 0.0        # from x402 receipts when the gateway returns them
         self.budget_usd: float | None = float(os.environ["RFP_LLM_BUDGET_USD"]) if os.environ.get("RFP_LLM_BUDGET_USD") else None
 
     @property
     def spent_usd(self) -> float:
+        if self.billed_usd > 0:
+            return self.billed_usd
         i, o = price_of(self.model)
         return self.usage["input"] / 1e6 * i + self.usage["output"] / 1e6 * o
 
@@ -192,10 +195,13 @@ class LLM:
 
     def _openai_json(self, system: str, user: str, schema: dict[str, Any], max_tokens: int,
                      headers: dict[str, str] | None = None) -> dict[str, Any]:
-        sys_msg = system + "\n\nRespond with ONE JSON object and nothing else. It must validate against this JSON Schema:\n" + json.dumps(schema)
+        json_rule = "Respond with ONE JSON object and nothing else. It must validate against this JSON Schema:\n" + json.dumps(schema)
+        sys_msg = system + "\n\n" + json_rule
+        # the rule rides in the USER turn as well: a context-attaching proxy may replace the system message
+        user_msg = user + "\n\n---\n" + json_rule + "\nNo preamble, no prose, no markdown fences: the JSON object only."
         body: dict[str, Any] = {"model": self.model, "temperature": 0,
-                                "messages": [{"role": "system", "content": sys_msg}, {"role": "user", "content": user}],
-                                "max_tokens": max_tokens, "disableStats": True,
+                                "messages": [{"role": "system", "content": sys_msg}, {"role": "user", "content": user_msg}],
+                                "max_tokens": max_tokens,
                                 "response_format": {"type": "json_object"}}
         try:
             data = self._post(body, headers)
@@ -211,9 +217,34 @@ class LLM:
         u = data.get("usage") or {}
         self.usage["input"] += int(u.get("prompt_tokens") or 0)
         self.usage["output"] += int(u.get("completion_tokens") or 0)
+        receipt = data.get("x402") or {}
+        if isinstance(receipt, dict) and receipt.get("billedUsd") is not None:
+            self.billed_usd += float(receipt["billedUsd"])
+        elif u.get("cost") is not None:
+            self.billed_usd += float(u["cost"])
         if isinstance(text, list):   # some proxies return content blocks
             text = "".join(b.get("text", "") for b in text if isinstance(b, dict))
-        return _extract_json(text)
+        try:
+            return _extract_json(text)
+        except LLMError:
+            if not headers:
+                raise
+        # SALVAGE: the paid read came back as prose (context-attaching proxies do that). One cheap,
+        # context-free pass turns the analysis into the schema instead of paying for the read again.
+        salvage = {"model": self.model, "temperature": 0, "max_tokens": max_tokens,
+                   "messages": [{"role": "system", "content": "You convert an analyst's answer into a JSON object. " + json_rule +
+                                 " Use only what the answer states; anything it does not address is 'silent', null, false or an empty list."},
+                                {"role": "user", "content": "ANALYST'S ANSWER:\n" + text[:12000] + "\n\n---\n" + json_rule + "\nThe JSON object only."}]}
+        data2 = self._post(salvage)
+        u2 = data2.get("usage") or {}
+        self.usage["input"] += int(u2.get("prompt_tokens") or 0); self.usage["output"] += int(u2.get("completion_tokens") or 0)
+        r2 = data2.get("x402") or {}
+        if isinstance(r2, dict) and r2.get("billedUsd") is not None:
+            self.billed_usd += float(r2["billedUsd"])
+        text2 = data2["choices"][0]["message"]["content"]
+        if isinstance(text2, list):
+            text2 = "".join(b.get("text", "") for b in text2 if isinstance(b, dict))
+        return _extract_json(text2)
 
     # -- Anthropic SDK ---------------------------------------------------------------
     def _anthropic_json(self, system: str, user: str, schema: dict[str, Any], max_tokens: int) -> dict[str, Any]:

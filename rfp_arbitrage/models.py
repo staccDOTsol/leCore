@@ -124,60 +124,12 @@ class ClauseVerdict:
 
 
 @dataclass
-class Talent:
-    source: str                      # "upwork", "csv", ...
-    source_id: str
-    name: str
-    url: str = ""
-    is_team: bool = False            # agency / team vs. individual
-    title: str = ""
-    skills: list[str] = field(default_factory=list)
-    hourly_rate: float | None = None
-    currency: str = "USD"
-    country: str = ""
-    # evidence of quality -- all optional, all verifiable on the marketplace profile
-    job_success_pct: float | None = None
-    total_hours: float | None = None
-    total_earnings: float | None = None
-    total_jobs: int | None = None
-    badges: list[str] = field(default_factory=list)   # top_rated, top_rated_plus, expert_vetted, rising_talent
-    portfolio_items: int = 0
-    reviews_count: int = 0
-    rating: float | None = None       # 0-5
-    team_size: int = 1
-    raw: dict[str, Any] = field(default_factory=dict)
-
-    @property
-    def key(self) -> str:
-        return f"{self.source}:{self.source_id}"
-
-    def to_row(self) -> dict[str, Any]:
-        d = asdict(self)
-        d["skills"] = json.dumps(self.skills)
-        d["badges"] = json.dumps(self.badges)
-        d["raw"] = json.dumps(self.raw, default=str)
-        d["is_team"] = int(self.is_team)
-        return d
-
-    @staticmethod
-    def from_row(d: dict[str, Any]) -> "Talent":
-        d = dict(d)
-        for k in ("skills", "badges"):
-            if isinstance(d.get(k), str):
-                d[k] = json.loads(d[k]) if d[k] else []
-        if isinstance(d.get("raw"), str):
-            d["raw"] = json.loads(d["raw"]) if d["raw"] else {}
-        d["is_team"] = bool(d.get("is_team"))
-        return Talent(**{k: v for k, v in d.items() if k in Talent.__dataclass_fields__})
-
-
-@dataclass
 class Match:
     opportunity_key: str
-    talent_keys: list[str]
+    talent_keys: list[str]           # delivery plan: ["openzoo"]
     ask_value: float                 # what the buyer will pay (stated or benchmarked), USD
     ask_basis: str                   # "stated" | "benchmark:<naics>" | "estimate"
-    labor_cost: float                # estimated cost of delivering with the matched talent, USD
+    labor_cost: float                # estimated cost of delivering through openzoo (+ review), USD
     hours_estimate: float
     margin: float                    # (ask - labor - overhead) / ask
     fit_score: float                 # 0-1 skill overlap

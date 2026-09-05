@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import re
 import json
 import sys
 from typing import Any
@@ -202,48 +203,6 @@ def cmd_price(args) -> int:
     return 0
 
 
-def cmd_talent(args) -> int:
-    from .talent.scoring import score_quality, score_price
-    store = _store(args)
-    if args.talent_cmd == "import":
-        from .talent.csv_source import load
-        people = list(load(args.path, args.source_name))
-        n = store.upsert_talent(people)
-        print(f"[talent] imported {n} from {args.path}")
-    elif args.talent_cmd == "upwork-auth":
-        from .talent.upwork import UpworkClient
-        c = UpworkClient()
-        print("1. Open this URL, approve, and paste the `code` query parameter from the redirect:\n   " + c.consent_url(args.scopes))
-        code = input("code: ").strip()
-        tok = c.exchange_code(code)
-        print("export UPWORK_REFRESH_TOKEN=" + str(tok.get("refresh_token")))
-        print("export UPWORK_ACCESS_TOKEN=" + str(tok.get("access_token")))
-    elif args.talent_cmd == "upwork-introspect":
-        from .talent.upwork import UpworkClient
-        for f in UpworkClient().introspect():
-            print(f"  {f['name']}  {(f.get('description') or '')[:80]}")
-    elif args.talent_cmd == "upwork-search":
-        from .talent.upwork import UpworkClient
-        c = UpworkClient()
-        skills = [s.strip() for s in (args.skills or "").split(",") if s.strip()]
-        people = list(c.search(skills=skills, query=args.query, max_rate=args.max_rate, limit=args.limit))
-        n = store.upsert_talent(people)
-        print(f"[talent] upwork: {n} profiles")
-    elif args.talent_cmd == "score":
-        pass
-    # (re)score everything
-    m = 0
-    for t in store.talent():
-        q, qn = score_quality(t)
-        p, pn = score_price(t)
-        store.set_talent_scores(t.key, q, p)
-        m += 1
-        if args.show:
-            print(f"  q={q:.2f} p={p:.2f} {'[team] ' if t.is_team else ''}{t.name[:30]:30s} ${t.hourly_rate or 0:>5.0f}/h  {'; '.join(qn)} | {pn}")
-    print(f"[talent] scored {m}; provably good (q>=0.5): {sum(1 for k, (q, p) in store.talent_scores().items() if q >= 0.5)}")
-    return 0
-
-
 def cmd_match(args) -> int:
     from .match import build_matches
     store = _store(args)
@@ -251,16 +210,15 @@ def cmd_match(args) -> int:
     verdicts = store.verdicts()
     pricing = {o.key: store.pricing(o.key) for o in opps}
     pricing = {k: v for k, v in pricing.items() if v}
-    talent = store.talent()
-    ms = build_matches(opps, verdicts, pricing, talent, top_k=args.top_k, require_viable=not args.include_blocked)
+    ms = build_matches(opps, verdicts, pricing, require_viable=not args.include_blocked)
     store.conn.execute("DELETE FROM matches")
     store.conn.commit()
     n = store.put_matches(ms)
-    print(f"[match] {n} matches over {len(opps)} opportunities, {len(pricing)} priced, {len(verdicts)} gated, {len(talent)} talent")
+    print(f"[match] {n} matches over {len(opps)} opportunities, {len(pricing)} priced, {len(verdicts)} gated; delivery = openzoo at ${__import__('rfp_arbitrage.match', fromlist=['zoo_rate']).zoo_rate():.0f}/h")
     for m in ms[: args.show]:
         o = store.opportunity(m.opportunity_key)
-        print(f"  {m.score:.3f} margin={m.margin:.0%} ask=${m.ask_value:,.0f} labor=${m.labor_cost:,.0f} fit={m.fit_score:.2f} q={m.quality_score:.2f} "
-              f"{o.title[:50] if o else m.opportunity_key} <- {', '.join(m.talent_keys)}")
+        print(f"  {m.score:.3f} margin={m.margin:.0%} ask=${m.ask_value:,.0f} delivery=${m.labor_cost:,.0f} gate={m.quality_score:.2f} "
+              f"{o.title[:60] if o else m.opportunity_key}")
     return 0
 
 
@@ -287,14 +245,6 @@ def cmd_pump(args) -> int:
     factory = None
     if llm is None and not getattr(args, "no_llm", False):
         factory = lambda: LLM(provider=getattr(args, "provider", None), model=getattr(args, "model", None))  # noqa: E731
-    if args.talent:
-        from .talent.csv_source import load
-        st = Store(args.db or cfg.db_path)
-        st.upsert_talent(list(load(args.talent)))
-        from .talent.scoring import score_quality, score_price
-        for t in st.talent():
-            st.set_talent_scores(t.key, score_quality(t)[0], score_price(t)[0])
-        st.close()
     pump = Pump(args.db or cfg.db_path, threshold=args.threshold, interval=args.interval, batch=args.batch, llm=llm,
                 max_docs=args.max_docs, benchmark=not args.no_benchmark, out_dir=args.out_dir, report_limit=args.limit, cfg=cfg,
                 fetch_workers=args.fetch_workers, llm_factory=factory, gate_workers=args.gate_workers)
@@ -308,6 +258,40 @@ def cmd_ingest(args) -> int:
     from .ingest import loop
     loop(fast_every=args.fast_every * 3600, slow_every=args.slow_every * 3600, sam_every=args.sam_every * 3600,
          sam_days=args.sam_days, max_pages=args.max_pages, discover=not args.no_discover, watch=args.watch)
+    return 0
+
+
+def cmd_propose(args) -> int:
+    """draft proposals for the top matches, from the bound solicitation, through openzoo."""
+    from .propose import draft
+    from .clauses import ensure_context
+    from pathlib import Path
+    store = _store(args)
+    llm = _llm(args)
+    if llm is None:
+        print("[propose] a model is required (openzoo at LECORE_LLM_URL)", file=sys.stderr)
+        return 2
+    out = Path(args.out_dir); out.mkdir(parents=True, exist_ok=True)
+    n = 0
+    for m in store.matches(args.limit * 3):
+        if n >= args.limit:
+            break
+        if not args.refresh and store.proposal(m.opportunity_key):
+            continue
+        o = store.opportunity(m.opportunity_key); pr = store.pricing(m.opportunity_key) or {}
+        text = store.full_text(o.key)
+        try:
+            ctx = ensure_context(store, llm, o.key, text)
+            md, data = draft(o, text, pr, m.to_dict(), llm, ctx)
+        except Exception as e:  # noqa: BLE001
+            print(f"[propose] {o.key}: {type(e).__name__}: {str(e)[:160]}", file=sys.stderr)
+            continue
+        store.put_proposal(o.key, md, data, f"llm:{llm.name}")
+        fn = out / (re.sub(r"[^A-Za-z0-9]+", "-", o.key)[:80] + ".md")
+        fn.write_text(md, encoding="utf-8")
+        n += 1
+        print(f"  drafted ${float(data.get('price_usd') or 0):,.0f} -> {fn}  ({o.title[:60]})  spent ${llm.spent_usd:.2f}")
+    print(f"[propose] {n} proposals")
     return 0
 
 
@@ -327,13 +311,11 @@ def cmd_stats(args) -> int:
 
 
 def cmd_run(args) -> int:
-    """crawl -> classify -> fetch -> gate -> price -> (talent score) -> match -> report"""
+    """crawl -> classify -> fetch -> gate -> price -> match -> report"""
     for fn in (cmd_crawl, cmd_fetch, cmd_gate, cmd_price):
         rc = fn(args)
         if rc:
             return rc
-    args.talent_cmd = "score"; args.show = False
-    cmd_talent(args)
     cmd_match(args)
     args.kind = "matches"
     return cmd_report(args)
@@ -380,18 +362,8 @@ def build_parser() -> argparse.ArgumentParser:
     common_select(s); llm_opts(s); s.add_argument("--refresh", action="store_true")
     s.add_argument("--viable-only", action="store_true"); s.add_argument("--no-benchmark", action="store_true")
 
-    s = sub.add_parser("talent", help="load / search / score talent"); s.set_defaults(fn=cmd_talent)
-    ts = s.add_subparsers(dest="talent_cmd", required=True)
-    show = argparse.ArgumentParser(add_help=False); show.add_argument("--show", action="store_true", help="print every scored profile")
-    t = ts.add_parser("import", parents=[show]); t.add_argument("path"); t.add_argument("--source-name", default="csv")
-    t = ts.add_parser("upwork-auth", parents=[show]); t.add_argument("--scopes", default="")
-    ts.add_parser("upwork-introspect", parents=[show])
-    t = ts.add_parser("upwork-search", parents=[show]); t.add_argument("--skills"); t.add_argument("--query", default="")
-    t.add_argument("--max-rate", type=float); t.add_argument("--limit", type=int, default=100)
-    ts.add_parser("score", parents=[show])
-
-    s = sub.add_parser("match", help="rank overpriced asks x underpriced provably-good talent"); s.set_defaults(fn=cmd_match)
-    common_select(s); s.add_argument("--top-k", type=int, default=3); s.add_argument("--show", type=int, default=20)
+    s = sub.add_parser("match", help="rank gate-viable asks by margin when delivered through openzoo"); s.set_defaults(fn=cmd_match)
+    common_select(s); s.add_argument("--show", type=int, default=20)
     s.add_argument("--include-blocked", action="store_true", help="also match opportunities that failed the gate (for review)")
 
     s = sub.add_parser("report", help="markdown dossier"); s.set_defaults(fn=cmd_report)
@@ -402,7 +374,6 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--batch", type=int, default=25); s.add_argument("--max-docs", type=int, default=6)
     s.add_argument("--no-benchmark", action="store_true"); s.add_argument("--out-dir", default="rfp_out")
     s.add_argument("--limit", type=int, default=40, help="opportunities in shortlist.md")
-    s.add_argument("--talent", help="CSV/JSON roster to (re)load before pumping")
     s.add_argument("--fetch-workers", type=int, default=4, help="parallel attachment fetchers")
     s.add_argument("--gate-workers", type=int, default=4, help="parallel LLM gate readers (each paid call has a settlement round trip)")
     s.add_argument("--watch", action="store_true", help="never exit; keep pumping as crawls land rows")
@@ -413,6 +384,9 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--sam-every", type=float, default=24.0, help="hours between SAM.gov crawls (public key: 10 req/day)")
     s.add_argument("--sam-days", type=int, default=7); s.add_argument("--max-pages", type=int, default=40)
     s.add_argument("--no-discover", action="store_true"); s.add_argument("--watch", action="store_true", help="loop forever")
+
+    s = sub.add_parser("propose", help="draft bids for the top matches from the bound solicitation (openzoo)"); s.set_defaults(fn=cmd_propose)
+    llm_opts(s); s.add_argument("--limit", type=int, default=5); s.add_argument("--out-dir", default="rfp_out/proposals"); s.add_argument("--refresh", action="store_true")
 
     s = sub.add_parser("awards", help="build the comparable bids/awards index used to price asks"); s.set_defaults(fn=cmd_awards)
     s.add_argument("--seao-months", type=int, default=3); s.add_argument("--naics-limit", type=int, default=40)
@@ -426,7 +400,7 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--no-details", action="store_true"); common_select(s); llm_opts(s)
     s.add_argument("--max-docs", type=int, default=12); s.add_argument("--refresh", action="store_true")
     s.add_argument("--viable-only", action="store_true", default=True); s.add_argument("--no-benchmark", action="store_true")
-    s.add_argument("--show", type=int, default=20); s.add_argument("--top-k", type=int, default=3); s.add_argument("--include-blocked", action="store_true")
+    s.add_argument("--show", type=int, default=20); s.add_argument("--include-blocked", action="store_true")
     s.add_argument("--out"); s.add_argument("--kind", default="matches")
     return p
 

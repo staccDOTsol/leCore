@@ -67,7 +67,7 @@ class Pump:
     def pending_gate(self, st: Store) -> list[Opportunity]:
         # a heuristic verdict is re-done once an LLM is available
         cond = "key NOT IN (SELECT opportunity_key FROM verdicts)" if self.llm is None else \
-               "key NOT IN (SELECT opportunity_key FROM verdicts WHERE method LIKE 'llm:%')"
+               "key NOT IN (SELECT opportunity_key FROM verdicts WHERE method LIKE 'llm%')"
         rows = st.conn.execute(
             f"SELECT o.* FROM opportunities o LEFT JOIN pricing p ON p.opportunity_key=o.key "
             f"WHERE o.intellectual_score >= ? AND (o.deadline='' OR o.deadline >= date('now')) AND o.key IN "
@@ -84,7 +84,7 @@ class Pump:
         rows = st.conn.execute(
             "SELECT o.* FROM opportunities o JOIN verdicts v ON v.opportunity_key=o.key AND v.viable=1 AND v.method LIKE 'llm:%' "
             "LEFT JOIN pricing p ON p.opportunity_key=o.key "
-            "WHERE p.opportunity_key IS NULL OR json_extract(p.payload, '$.scope_basis') NOT LIKE 'llm:%' "
+            "WHERE p.opportunity_key IS NULL OR json_extract(p.payload, '$.scope_basis') NOT LIKE 'llm%' "
             "ORDER BY COALESCE(p.ask_value, 0) DESC LIMIT ?", (self.batch,)).fetchall()
         return [Opportunity.from_row(dict(r)) for r in rows]
 
@@ -150,6 +150,9 @@ class Pump:
                         self.log(f"[pump:gate] bind failed for {o.key}: {str(e)[:120]}")
                 v = analyze(o, text, self.llm, context_id=ctx)
                 st.put_verdict(v)
+                if self.llm is not None:
+                    self.log(f"[pump:gate] {v.method} {v.delegation.value}/{v.ai_use.value} conf={v.confidence:.2f} "
+                             f"spent=${self.llm.spent_usd:.2f} {o.title[:60]}")
                 n += 1
                 with self._lock:
                     self.counts["gated"] += 1
@@ -209,8 +212,7 @@ class Pump:
         verdicts = st.verdicts()
         pricing = {o.key: st.pricing(o.key) for o in opps}
         pricing = {k: v for k, v in pricing.items() if v}
-        talent = st.talent()
-        ms = build_matches(opps, verdicts, pricing, talent, self.cfg)
+        ms = build_matches(opps, verdicts, pricing, self.cfg)
         with st.tx() as c:
             c.execute("DELETE FROM matches")
         st.put_matches(ms)
@@ -228,7 +230,7 @@ class Pump:
             llm_note = f" llm-verdicts {llm_verdicts} spent ${self.llm.spent_usd:.2f}" + (f"/${self.llm.budget_usd:.0f}" if self.llm.budget_usd else "")
         self.log(f"[pump] round {self.counts['rounds']}: opps {s['opportunities']} intellectual {s['intellectual']} "
                  f"fetched {self.counts['fetched']} docs {s['documents']} gated {s['verdicts']} viable {s['viable']} "
-                 f"priced {s['priced']} talent {s['talent']} matches {len(ms)}{llm_note} -> {self.out_dir / 'shortlist.md'}")
+                 f"priced {s['priced']} matches {len(ms)}{llm_note} -> {self.out_dir / 'shortlist.md'}")
         return len(ms)
 
     # -- run -------------------------------------------------------------------------

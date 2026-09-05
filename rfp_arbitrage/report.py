@@ -13,7 +13,7 @@ def _money(v: float | None) -> str:
 
 def match_report(store: Store, limit: int = 25) -> str:
     lines = ["# RFP service-arbitrage shortlist", "",
-             "Each entry: the ask (stated or benchmarked), the legal gate verdict with quotes, the labor plan and the margin. "
+             "Each entry: the ask (stated or benchmarked), the legal gate verdict with quotes, the openzoo delivery cost and the margin. "
              "Nothing here is a bid decision -- the gate verdict is an LLM reading with evidence for a human to confirm.", ""]
     # one section per opportunity, best option first, alternatives listed under it
     groups: dict[str, list] = {}
@@ -53,15 +53,8 @@ def match_report(store: Store, limit: int = 25) -> str:
                 lines.append(f"  - blocker/note: {b}")
             if v.rationale:
                 lines.append(f"  - rationale: {v.rationale}")
-        for j, opt in enumerate(ms[:4]):
-            label = "Team" if j == 0 else f"Alternative {j}"
-            lines.append(f"- **{label}** (labor {_money(opt.labor_cost)}, margin {opt.margin:.0%}, fit {opt.fit_score:.2f}):")
-            for k in opt.talent_keys:
-                ts = store.talent("key=?", (k,))
-                if ts:
-                    t = ts[0]
-                    lines.append(f"  - {'[team] ' if t.is_team else ''}{t.name} -- {t.title} -- ${t.hourly_rate or 0:.0f}/h {t.currency} -- "
-                                 f"JSS {t.job_success_pct or 0:.0f}% -- {t.total_hours or 0:,.0f} h -- {', '.join(t.badges) or 'no badges'} -- {t.url}")
+        lines.append(f"- **Delivery (openzoo)**: {m.hours_estimate:,.0f} h of deliverable -> {_money(m.labor_cost)} "
+                     f"(AI team + human review), margin {m.margin:.0%}")
         if pr.get("deliverables"):
             lines.append("- **Deliverables**: " + "; ".join(pr["deliverables"][:6]))
         lines.append("- **Notes**: " + "; ".join(m.notes))
@@ -96,7 +89,7 @@ def live_report(store: Store, limit: int = 500) -> str:
            ORDER BY (p.ask_value IS NULL), COALESCE(p.ask_value, 0) DESC, o.deadline LIMIT ?""", (limit,)).fetchall()
     lines = ["# Live biddable opportunities", "",
              f"{len(rows)} open, intellectual-work, gate-viable solicitations. Price = distribution of comparable bids/awards "
-             "(min / p25 / median / mean / p75 / max, n) or the stated value. Margin = at the best matched team's rates.", "",
+             "(min / p25 / median / mean / p75 / max, n) or the stated value. Margin = delivered by openzoo at RFP_ZOO_USD_PER_HOUR plus review.", "",
              "| deadline | ask (USD) | basis | min | median | mean | max | n | margin | gate | title | buyer | where | link |",
              "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
     for r in rows:

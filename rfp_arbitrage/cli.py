@@ -63,6 +63,13 @@ def cmd_crawl(args) -> int:
     names = args.sources.split(",") if args.sources else DEFAULT_ORDER
     reg = sources()
     total = 0
+    scrapy_sites = [n for n in names if n in reg and reg[n].kind == "scrapy"]
+    if len(scrapy_sites) > 1:      # one reactor per process: crawl every HTML portal in one batch
+        from .sources.mets import run_spiders
+        try:
+            run_spiders(scrapy_sites, args.keywords or "", args.max_pages, not args.no_details)
+        except Exception as e:  # noqa: BLE001
+            print(f"[crawl] scrapy batch FAILED {type(e).__name__}: {e}", file=sys.stderr)
     for name in names:
         if name not in reg:
             print(f"[crawl] unknown source {name}; known: {list(reg)}", file=sys.stderr)

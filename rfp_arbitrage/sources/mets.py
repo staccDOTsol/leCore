@@ -16,23 +16,35 @@ US_STATE_RE = re.compile(r"\b(Alabama|Alaska|Arizona|Arkansas|California|Colorad
                          r"Wisconsin|Wyoming|District of Columbia)\b")
 
 
-def run_spider(site: str, keywords: str = "", max_pages: int = 20, details: bool = True) -> list[dict]:
-    """Run the spider in-process and return its items. Twisted's reactor runs once per
-    process, so one CLI invocation crawls one or more sites in a single CrawlerProcess."""
+_RESULTS: dict[str, list[dict]] = {}
+
+
+def run_spiders(sites: list[str], keywords: str = "", max_pages: int = 20, details: bool = True) -> dict[str, list[dict]]:
+    """Run one or more sites in ONE CrawlerProcess. Twisted's reactor starts once per process,
+    so the CLI batches every scrapy source of a crawl into a single call here."""
     from scrapy.crawler import CrawlerProcess
     from ..spiders.mets_spider import MetsSpider
 
-    items: list[dict] = []
+    items: dict[str, list[dict]] = {s: [] for s in sites}
 
     class Collect:
         def process_item(self, item, spider=None):
-            items.append(dict(item))
+            items[item["site"]].append(dict(item))
             return item
 
     process = CrawlerProcess(settings={"ITEM_PIPELINES": {Collect: 100}, **MetsSpider.custom_settings})
-    process.crawl(MetsSpider, site=site, keywords=keywords, max_pages=max_pages, details="1" if details else "0")
+    for site in sites:
+        process.crawl(MetsSpider, site=site, keywords=keywords, max_pages=max_pages, details="1" if details else "0")
     process.start()
+    _RESULTS.update(items)
     return items
+
+
+def run_spider(site: str, keywords: str = "", max_pages: int = 20, details: bool = True) -> list[dict]:
+    """Items for one site: reuse a batch already crawled in this process, else crawl now."""
+    if site in _RESULTS:
+        return _RESULTS.pop(site)
+    return run_spiders([site], keywords, max_pages, details)[site]
 
 
 def convert(it: dict) -> Opportunity:

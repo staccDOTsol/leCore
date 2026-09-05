@@ -14,7 +14,7 @@ Pick your seat; read two documents, not fifty.
 3. **docs/ABLATIONS.md** — the kept negatives. Slop hides failures; this doesn't.
 
 ## "I operate openzoo.fun (or any hosted deployment)"
-1. **docs/OPENZOO_OPERATIONS.md** — the operator manual: all 26 hosted tools with
+1. **docs/OPENZOO_OPERATIONS.md** — the operator manual: all 40 hosted tools with
    descriptions generated from source, env vars, boot, the bundle, security
    boundaries, cost levers, adoption steps, troubleshooting.
 2. **docs/OPENZOO_INTEGRATION.md** — the why behind each lever, with measured numbers.

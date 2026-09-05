@@ -56,6 +56,14 @@ class LLM:
             self.model = (model or os.environ.get("RFP_LLM_MODEL") or os.environ.get("LECORE_LLM_MODEL")
                           or os.environ.get("OPENAI_MODEL") or "claude-opus-5")
             self.api_key = api_key or os.environ.get("LECORE_LLM_KEY") or os.environ.get("OPENAI_API_KEY") or ""
+        # extra headers for gateways that authenticate by session/namespace rather than a bearer
+        # (openzoo.fun: x-openzoo-session minted by /v1/auth/session for a funded tenant)
+        try:
+            self.extra_headers: dict[str, str] = json.loads(os.environ.get("LECORE_LLM_HEADERS") or "{}")
+        except json.JSONDecodeError:
+            self.extra_headers = {}
+        if os.environ.get("OPENZOO_SESSION"):
+            self.extra_headers.setdefault("x-openzoo-session", os.environ["OPENZOO_SESSION"])
         self.calls = 0
         self.usage: dict[str, int] = {"input": 0, "output": 0}
 
@@ -81,8 +89,21 @@ class LLM:
             req = urllib.request.Request(self.url.rsplit("/chat/completions", 1)[0] + "/models")
             if self.api_key:
                 req.add_header("Authorization", "Bearer " + self.api_key)
-            with urllib.request.urlopen(req, timeout=5):
-                return None
+            for k, v in self.extra_headers.items():
+                req.add_header(k, v)
+            with urllib.request.urlopen(req, timeout=8):
+                pass
+            # /models is public on paid gateways; prove the chat door actually opens for us
+            probe = {"model": self.model, "messages": [{"role": "user", "content": "ok"}], "max_tokens": 1}
+            try:
+                self._post(probe)
+            except LLMError as e:
+                if "402" in str(e):
+                    return f"{self.url} answers 402: this gateway wants payment (x402) or a funded session (OPENZOO_SESSION / LECORE_LLM_HEADERS)"
+                if "401" in str(e) or "403" in str(e):
+                    return f"{self.url} rejects our credentials ({str(e)[:80]})"
+                raise
+            return None
         except Exception as e:  # noqa: BLE001
             return f"{self.provider} at {self.url or 'api.anthropic.com'} unreachable: {type(e).__name__}: {e}"
 
@@ -92,6 +113,8 @@ class LLM:
                                      headers={"Content-Type": "application/json"}, method="POST")
         if self.api_key:
             req.add_header("Authorization", "Bearer " + self.api_key)
+        for k, v in self.extra_headers.items():
+            req.add_header(k, v)
         try:
             with urllib.request.urlopen(req, timeout=self.timeout) as r:
                 return json.loads(r.read().decode("utf-8"))

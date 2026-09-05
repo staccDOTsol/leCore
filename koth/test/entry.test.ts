@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { Connection, Keypair, PublicKey, TransactionMessage, VersionedTransaction } from '@solana/web3.js';
-import { MIN_TOPUP_SOL, NeedsSolError, QUOTE_BUFFER_PCT, UltraSwapper, computeQuote, jupiterPrices } from '../src/entry.js';
+import { MIN_TOPUP_SOL, NeedsSolError, QUOTE_BUFFER_PCT, UltraSwapper, computeQuote, jupiterPrices, waitForIncrease } from '../src/entry.js';
 import { BOND_THRESHOLD_TOKEN, MASTER_CURVE_DEFAULTS, ZOO_TOKEN_MINT, masterCurveParams } from '../src/dbc.js';
 import { TokenAuthorityOption, TokenType } from '@meteora-ag/dynamic-bonding-curve-sdk';
 
@@ -86,5 +86,18 @@ describe('UltraSwapper', () => {
     const r = await new UltraSwapper(conn, op, { apiKey: 'k', fetchImpl: f, fallback }).swap({ inputMint: mintA, outputMint: mintB, amountRaw: 1n });
     expect(r.signature).toBe('CLASSIC');
     await expect(new UltraSwapper(conn, op, { apiKey: 'k', fetchImpl: f }).swap({ inputMint: mintA, outputMint: mintB, amountRaw: 1n })).rejects.toThrow(/Insufficient funds/);
+  });
+});
+
+describe('waitForIncrease', () => {
+  it('re-reads until the balance rises, then returns it', async () => {
+    const reads = [0n, 0n, 5192477349n];
+    let slept = 0;
+    const v = await waitForIncrease(async () => reads.shift() ?? 5192477349n, 0n, { sleep: async () => { slept++; }, attempts: 5 });
+    expect(v).toBe(5192477349n);
+    expect(slept).toBe(2);
+  });
+  it('gives up with a resumable message instead of returning zero', async () => {
+    await expect(waitForIncrease(async () => 7n, 7n, { sleep: async () => {}, attempts: 3 })).rejects.toThrow(/say paid again/);
   });
 });

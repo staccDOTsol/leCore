@@ -67,6 +67,23 @@ export type Quote = {
 
 export type Prices = { solUsd: number; tokenUsd: number; decimals: number };
 
+/**
+ * Read a balance until it rises above `before`. A confirmed transaction is not always visible on the
+ * next read from a load-balanced RPC; reading once right after `sendAndConfirm` once recorded 0 LP
+ * for a pool that had just been created, and the vault then refused to lock 0.
+ */
+export async function waitForIncrease(read: () => Promise<bigint>, before: bigint, opts: { attempts?: number; delayMs?: number; sleep?: (ms: number) => Promise<void> } = {}): Promise<bigint> {
+  const attempts = opts.attempts ?? 12, delayMs = opts.delayMs ?? 1500;
+  const sleep = opts.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
+  let last = before;
+  for (let i = 0; i < attempts; i++) {
+    last = await read().catch(() => before);
+    if (last > before) return last;
+    await sleep(delayMs);
+  }
+  throw new Error(`the LP tokens have not shown up yet (${last} of at least ${before + 1n}); the pool transaction is recorded, say paid again in a minute`);
+}
+
 /** Rent for the accounts a CPMM pool creates (vaults, lp mint, observation state), on top of Raydium's creation fee. */
 export const POOL_RENT_SOL = 0.03;
 /** The least we ever ask for, so a top-up covers a few pools and the fees around them. */
@@ -394,7 +411,15 @@ export class Entry implements EntryLike {
 
       // 3e. the play: LP into the vault, recorded for the player
       if (!q.steps.play) {
-        const lpMint = new PublicKey(q.steps.lpMint), poolId = new PublicKey(q.steps.poolId), lpRaw = BigInt(q.steps.lpRaw);
+        const lpMint = new PublicKey(q.steps.lpMint), poolId = new PublicKey(q.steps.poolId);
+        let lpRaw = BigInt(q.steps.lpRaw || '0');
+        if (lpRaw <= 0n) {
+          // the pool step went through but its LP was read too early: whatever LP the operator holds for this
+          // pool is this quote's (every earlier quote's LP is already in the vault)
+          lpRaw = await waitForIncrease(() => this.lpHeld(lpMint), 0n, { attempts: 8 });
+          q.steps.lpRaw = lpRaw.toString(); this.saveQuote(q);
+          this.log(`[quote ${id}] re-measured LP: ${lpRaw}`);
+        }
         const player = this.playerKey(q);
         const tx = new Transaction().add(
           ComputeBudgetProgram.setComputeUnitLimit({ units: 200_000 }),
@@ -433,6 +458,11 @@ export class Entry implements EntryLike {
     return sendAndConfirmTransaction(conn, tx, [op], { commitment: 'confirmed' });
   }
 
+  /** LP of `lpMint` in the operator's associated account (where Raydium mints and deposits it). */
+  private async lpHeld(lpMint: PublicKey): Promise<bigint> {
+    try { return (await getAccount(this.d.connection, getAssociatedTokenAddressSync(lpMint, this.d.operator.publicKey), 'confirmed')).amount; } catch { return 0n; }
+  }
+
   /** The wallet that pays Raydium's pool-creation fee and every transaction fee: where a top-up goes. */
   get feePayer(): string { return this.d.operator.publicKey.toBase58(); }
 
@@ -467,9 +497,7 @@ export class Entry implements EntryLike {
     const masterProgram = await tokenProgramFor(conn, this.d.masterMint);
     const tokenDecimals = mint.equals(NATIVE_SOL_MINT) ? 9 : (await getMint(conn, mint, 'confirmed', program)).decimals;
     const masterDecimals = (await getMint(conn, this.d.masterMint, 'confirmed', masterProgram)).decimals;
-    const lpBalance = async (lpMint: PublicKey) => {
-      try { return (await getAccount(conn, getAssociatedTokenAddressSync(lpMint, op.publicKey))).amount; } catch { return 0n; }
-    };
+    const lpBalance = (lpMint: PublicKey) => this.lpHeld(lpMint);
 
     if (!info) {
       // Raydium's creation fee comes out of the operator's SOL: say so, with the number, instead of a simulation error
@@ -495,7 +523,7 @@ export class Entry implements EntryLike {
         if (/insufficient (lamports|funds)|InsufficientFundsForRent|0x1\b/i.test(msg)) throw new NeedsSolError(op.publicKey.toBase58(), haveSol, needSol, poolFeeSol);
         throw e;
       }
-      const after = await lpBalance(lpMint);
+      const after = await waitForIncrease(() => lpBalance(lpMint), before);
       return { poolId: extInfo.address.poolId, lpMint, lpRaw: after - before, signature: txId, created: true };
     }
 
@@ -512,7 +540,7 @@ export class Entry implements EntryLike {
     const before = await lpBalance(sides.lpMint);
     const { execute } = await raydium.cpmm.addLiquidity({ poolInfo, poolKeys, inputAmount, baseIn, slippage: new Percent(this.d.slippageBps ?? 100, 10_000), txVersion: TxVersion.V0 });
     const { txId } = await execute({ sendAndConfirm: true });
-    const after = await lpBalance(sides.lpMint);
+    const after = await waitForIncrease(() => lpBalance(sides.lpMint), before);
     return { poolId, lpMint: sides.lpMint, lpRaw: after - before, signature: txId, created: false };
   }
 

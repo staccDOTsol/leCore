@@ -17,6 +17,7 @@ from .store import Store
 
 MAX_BYTES = 40 * 1024 * 1024
 MAX_CHARS = 400_000
+MAX_PDF_PAGES = 120          # pdfminer is ~0.3 s/page; terms live in the first hundred pages of any RFP
 
 
 def _kind(url: str, content_type: str, head: bytes) -> str:
@@ -42,7 +43,7 @@ def _kind(url: str, content_type: str, head: bytes) -> str:
 def extract_text(data: bytes, kind: str) -> str:
     if kind == "pdf":
         from pdfminer.high_level import extract_text as pdf_text
-        return pdf_text(io.BytesIO(data))[:MAX_CHARS]
+        return pdf_text(io.BytesIO(data), maxpages=MAX_PDF_PAGES)[:MAX_CHARS]
     if kind == "docx":
         import docx
         d = docx.Document(io.BytesIO(data))
@@ -80,6 +81,9 @@ def extract_text(data: bytes, kind: str) -> str:
     return ""
 
 
+_SAM_DESC_QUOTA_HIT = False    # process-wide: once the description endpoint 429s, stop asking until the daily reset
+
+
 class Fetcher:
     def __init__(self, store: Store, cfg: Settings | None = None):
         self.store = store
@@ -98,7 +102,8 @@ class Fetcher:
 
     def fetch(self, opp: Opportunity, max_docs: int = 12, refresh: bool = False) -> Iterator[dict]:
         # a SAM notice body is only reachable through its description endpoint
-        if opp.source == "sam_gov" and not opp.description:
+        global _SAM_DESC_QUOTA_HIT
+        if opp.source == "sam_gov" and not opp.description and not _SAM_DESC_QUOTA_HIT:
             from .sources.sam_gov import SamGov
             try:
                 body = SamGov(self.cfg, self.http).describe(opp)
@@ -106,6 +111,8 @@ class Fetcher:
                     self.store.put_document(opp.key, opp.raw.get("description_url", "sam:desc"), "html", body)
                     yield {"url": "sam:desc", "kind": "html", "chars": len(body)}
             except Exception as e:  # noqa: BLE001
+                if "429" in str(e):
+                    _SAM_DESC_QUOTA_HIT = True      # attachments still download from sam.gov itself
                 self.store.put_document(opp.key, "sam:desc", "html", "", str(e))
         for url in self.urls_for(opp)[:max_docs]:
             if not refresh and self.store.has_document(opp.key, url):

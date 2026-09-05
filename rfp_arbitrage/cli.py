@@ -287,7 +287,8 @@ def cmd_pump(args) -> int:
             st.set_talent_scores(t.key, score_quality(t)[0], score_price(t)[0])
         st.close()
     pump = Pump(args.db or cfg.db_path, threshold=args.threshold, interval=args.interval, batch=args.batch, llm=llm,
-                max_docs=args.max_docs, benchmark=not args.no_benchmark, out_dir=args.out_dir, report_limit=args.limit, cfg=cfg)
+                max_docs=args.max_docs, benchmark=not args.no_benchmark, out_dir=args.out_dir, report_limit=args.limit, cfg=cfg,
+                fetch_workers=args.fetch_workers)
     counts = pump.run(watch=args.watch)
     print(f"[pump] finished: {json.dumps(counts)}")
     return 0
@@ -375,6 +376,7 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--no-benchmark", action="store_true"); s.add_argument("--out-dir", default="rfp_out")
     s.add_argument("--limit", type=int, default=40, help="opportunities in shortlist.md")
     s.add_argument("--talent", help="CSV/JSON roster to (re)load before pumping")
+    s.add_argument("--fetch-workers", type=int, default=4, help="parallel attachment fetchers")
     s.add_argument("--watch", action="store_true", help="never exit; keep pumping as crawls land rows")
 
     s = sub.add_parser("stats"); s.set_defaults(fn=cmd_stats)

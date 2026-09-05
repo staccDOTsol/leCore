@@ -2,7 +2,7 @@
 stages, run them as concurrent workers over the shared store, each picking up whatever the
 previous one has produced, cumulatively, while a crawl is still landing rows:
 
-    fetch worker   : intellectual + open + never fetched      -> documents
+    fetch workers  : intellectual + open + never fetched      -> documents  (N threads, claim-based)
     gate worker    : fetched + no verdict (or heuristic-only while an LLM is up) -> verdict
     price worker   : gated + no pricing                        -> pricing (+ USAspending benchmark)
     match/report   : every `interval` seconds rebuild matches from everything gated+priced,
@@ -30,8 +30,10 @@ FETCHED_MARK = "rfp:fetched"      # sentinel document row: "attachments were att
 class Pump:
     def __init__(self, db: str | Path, threshold: float = 0.6, interval: float = 30.0, batch: int = 25,
                  llm=None, max_docs: int = 6, benchmark: bool = True, out_dir: str | Path = ".",
-                 report_limit: int = 40, log: Callable[[str], None] = print, cfg: Settings | None = None):
+                 report_limit: int = 40, log: Callable[[str], None] = print, cfg: Settings | None = None,
+                 fetch_workers: int = 4):
         self.db = str(db)
+        self.fetch_workers = max(1, fetch_workers)
         self.threshold = threshold
         self.interval = interval
         self.batch = batch
@@ -44,7 +46,7 @@ class Pump:
         self.cfg = cfg or _settings()
         self.stop = threading.Event()
         self.counts = {"fetched": 0, "gated": 0, "priced": 0, "matched": 0, "rounds": 0}
-        self._idle = {"fetch": 0, "gate": 0, "price": 0}
+        self._idle = {"gate": 0, "price": 0, **{f"fetch{i}": 0 for i in range(max(1, fetch_workers))}}
         self._lock = threading.Lock()
 
     # -- queues ----------------------------------------------------------------------
@@ -55,7 +57,8 @@ class Pump:
     def pending_fetch(self, st: Store) -> list[Opportunity]:
         return st.opportunities(
             "intellectual_score >= ? AND (deadline='' OR deadline >= date('now')) AND key NOT IN "
-            "(SELECT DISTINCT opportunity_key FROM documents)", (self.threshold,), limit=self.batch)
+            "(SELECT DISTINCT opportunity_key FROM documents WHERE NOT (kind='mark' AND error='in progress'))",
+            (self.threshold,), limit=self.batch * self.fetch_workers)
 
     def pending_gate(self, st: Store) -> list[Opportunity]:
         # a heuristic verdict is re-done once an LLM is available
@@ -87,17 +90,30 @@ class Pump:
         finally:
             st.close()
 
+    def _claim(self, st: Store, key: str) -> bool:
+        """Insert the sentinel first; the worker whose insert lands owns the key."""
+        with st.tx() as c:
+            cur = c.execute("INSERT OR IGNORE INTO documents (opportunity_key, url, kind, chars, text, error) VALUES (?,?,?,?,?,?)",
+                            (key, FETCHED_MARK, "mark", 0, "", "in progress"))
+            if cur.rowcount == 1:
+                return True
+            # a sentinel left 'in progress' by a killed run: take it over once
+            cur = c.execute("UPDATE documents SET error='claimed' WHERE opportunity_key=? AND url=? AND error='in progress'", (key, FETCHED_MARK))
+            return cur.rowcount == 1
+
     def step_fetch(self, st: Store) -> int:
         from .attachments import Fetcher
         f = Fetcher(st, self.cfg)
-        opps = self.pending_fetch(st)
-        for o in opps:
+        n = 0
+        for o in self.pending_fetch(st):
+            if not self._claim(st, o.key):
+                continue
+            n += 1
             got = list(f.fetch(o, max_docs=self.max_docs))
-            if not st.has_document(o.key, FETCHED_MARK):
-                st.put_document(o.key, FETCHED_MARK, "mark", "", "" if got else "no attachments")
+            st.put_document(o.key, FETCHED_MARK, "mark", "", "" if got else "no attachments")
             with self._lock:
                 self.counts["fetched"] += 1
-        return len(opps)
+        return n
 
     def step_gate(self, st: Store) -> int:
         from .clauses import analyze
@@ -158,8 +174,8 @@ class Pump:
 
     # -- run -------------------------------------------------------------------------
     def run(self, watch: bool = False) -> dict:
-        threads = [threading.Thread(target=self._loop, args=(n, f), name=n, daemon=True)
-                   for n, f in (("fetch", self.step_fetch), ("gate", self.step_gate), ("price", self.step_price))]
+        jobs = [("gate", self.step_gate), ("price", self.step_price)] + [(f"fetch{i}", self.step_fetch) for i in range(self.fetch_workers)]
+        threads = [threading.Thread(target=self._loop, args=(n, f), name=n, daemon=True) for n, f in jobs]
         for t in threads:
             t.start()
         st = self._open()

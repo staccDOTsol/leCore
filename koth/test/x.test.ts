@@ -105,6 +105,15 @@ describe('x surface', () => {
     expect(seen.length).toBe(2);
   });
 
+  it('ignores the backlog on the very first poll, then answers everything newer', async () => {
+    const old = new Date(Date.now() - 3600_000).toISOString(), fresh = new Date().toISOString();
+    const { f } = fakeX([{ id: '1', text: '@openzoobot king', author_id: '7', created_at: old }, { id: '2', text: '@openzoobot king', author_id: '7', created_at: fresh }]);
+    const before = seen.length;
+    const x = new XSurface(commands, { creds: { ...creds, botUserId: '99' }, dataDir: fs.mkdtempSync(path.join(os.tmpdir(), 'koth-x-')), fetchImpl: f });
+    await x.pollOnce();
+    expect(seen.length - before).toBe(1);
+  });
+
   it('uses OAuth user context for mentions when no bearer is set', async () => {
     const { f, calls } = fakeX([]);
     const x = new XSurface(commands, { creds: { ...creds, botUserId: '99' }, dataDir: fs.mkdtempSync(path.join(os.tmpdir(), 'koth-x-')), fetchImpl: f });

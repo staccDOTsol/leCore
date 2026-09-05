@@ -183,7 +183,10 @@ export class XSurface {
     await this.postThread(renderForX(rich, buttons), { image });
   }
 
-  async mentions(): Promise<{ id: string; text: string; author_id: string; username: string }[]> {
+  /** Mentions older than this on the very first poll (no since_id yet) are history, not commands. */
+  static readonly FIRST_POLL_WINDOW_MS = 10 * 60_000;
+
+  async mentions(): Promise<{ id: string; text: string; author_id: string; username: string; created_at?: string }[]> {
     const url = `https://api.x.com/2/users/${this.o.creds.botUserId}/mentions`;
     const params: Record<string, string> = {
       max_results: '25', 'tweet.fields': 'author_id,text,created_at', expansions: 'author_id', 'user.fields': 'username',
@@ -195,10 +198,14 @@ export class XSurface {
     const res = await this.f(u, { headers: { authorization }, signal: AbortSignal.timeout(30_000) });
     if (res.status === 429) throw Object.assign(new Error('rate limited'), { reset: Number(res.headers.get('x-rate-limit-reset')) || 0 });
     if (!res.ok) throw new Error(`mentions ${res.status}: ${(await res.text()).slice(0, 200)}`);
-    const j = (await res.json()) as { data?: { id: string; text: string; author_id: string }[]; includes?: { users?: { id: string; username: string }[] }; meta?: { newest_id?: string } };
+    const j = (await res.json()) as { data?: { id: string; text: string; author_id: string; created_at?: string }[]; includes?: { users?: { id: string; username: string }[] }; meta?: { newest_id?: string } };
     const users = new Map((j.includes?.users ?? []).map((x) => [x.id, x.username]));
+    const firstPoll = !this.state.sinceId;
     if (j.meta?.newest_id) { this.state.sinceId = j.meta.newest_id; this.save(); }
-    return (j.data ?? []).map((t) => ({ ...t, username: users.get(t.author_id) ?? t.author_id }));
+    const cutoff = Date.now() - XSurface.FIRST_POLL_WINDOW_MS;
+    return (j.data ?? [])
+      .filter((t) => !firstPoll || !t.created_at || Date.parse(t.created_at) >= cutoff)
+      .map((t) => ({ ...t, username: users.get(t.author_id) ?? t.author_id }));
   }
 
   /** Answer one mention: reply thread, and a standalone post for a takeover. Exposed so tests can drive it. */
@@ -214,8 +221,9 @@ export class XSurface {
       if (id) anchor = id;
     };
     const reply = await this.commands.handle({ surface: 'x', author: `@${t.username}`, authorId: `x:${t.author_id}`, text: t.text, progress });
-    if (!reply) return;
-    await this.send(reply, anchor);
+    if (!reply) { this.o.log?.(`x: @${t.username} ${t.id} "${t.text.slice(0, 60)}" is not a command`); return; }
+    const ids = await this.send(reply, anchor);
+    this.o.log?.(`x: answered @${t.username} ${t.id} "${t.text.slice(0, 60)}" -> ${ids ?? 'no id'}${reply.image ? ' +card' : ''}`);
     if (reply.announce) await this.broadcast(reply.announce, reply.image, reply.announceButtons).catch((e) => this.o.log?.(`x announce failed: ${e}`));
   }
 

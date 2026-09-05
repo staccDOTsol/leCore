@@ -198,14 +198,14 @@ export class Commands {
     return {
       rich: (f) => [
         f.muted(`QUOTE ${q.id} · ${ctx.author}`),
-        `send exactly ${f.b(`${q.amountUi}`)} of ${f.code(mint)}`,
+        `send exactly ${f.code(`${q.amountUi}`)} of ${f.code(mint)}`,
         'to this one-time address',
         f.pre(q.depositAddress),
         f.muted('never reused · deleted after sweep · expires in 30 min'),
         f.code(`${q.playFeeSol} SOL stake ≈ $${q.playFeeUsd.toFixed(2)} + inference ≈ $${q.inferenceUsd.toFixed(2)} · +${q.bufferPct}%`),
         `then say ${f.code(`paid ${q.id}`)}. half becomes liquidity for your coin/MASTER, locked for good.`,
       ].join('\n'),
-      buttons: [[{ label: 'Copy address', copy: q.depositAddress, data: `addr:${q.id}` }, { label: 'I paid', data: `paid:${q.id}` }], [{ label: 'Cancel', data: `cancel:${q.id}` }]],
+      buttons: [[{ label: 'Copy amount', copy: `${q.amountUi}`, data: `amt:${q.id}` }, { label: 'Copy address', copy: q.depositAddress, data: `addr:${q.id}` }], [{ label: 'I paid', data: `paid:${q.id}` }], [{ label: 'Cancel', data: `cancel:${q.id}` }]],
     };
   }
 

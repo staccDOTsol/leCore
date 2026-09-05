@@ -14,7 +14,7 @@
  * Settlement is idempotent per quote: every step records what it did, so a crash mid-way can be
  * resumed with `settle(quoteId)` again without double-spending.
  */
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import BN from 'bn.js';
@@ -329,7 +329,7 @@ export class Entry implements EntryLike {
   /** The player's on-chain identity for the play record: a wallet if they gave one, else a pda-like hash of their handle. */
   private playerKey(q: Quote): PublicKey {
     try { return new PublicKey(q.player); } catch { /* not a pubkey */ }
-    const h = Buffer.from(require('node:crypto').createHash('sha256').update(`${q.surface}:${q.player}`).digest());
+    const h = Buffer.from(createHash('sha256').update(`${q.surface}:${q.player}`).digest());
     return new PublicKey(h);
   }
 

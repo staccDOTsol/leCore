@@ -75,11 +75,14 @@ class Pump:
             f"ORDER BY COALESCE(p.ask_value, 0) DESC, o.posted DESC LIMIT ?", (self.threshold, self.batch * self.gate_workers)).fetchall()
         return [Opportunity.from_row(dict(r)) for r in rows]
 
+    def pending_price_free(self, st: Store) -> list[Opportunity]:
+        return st.opportunities(
+            "key IN (SELECT opportunity_key FROM verdicts WHERE viable=1) AND key NOT IN (SELECT opportunity_key FROM pricing)",
+            (), limit=self.batch * 10)
+
     def pending_price(self, st: Store) -> list[Opportunity]:
         if self.llm is None:
-            return st.opportunities(
-                "key IN (SELECT opportunity_key FROM verdicts WHERE viable=1) AND key NOT IN (SELECT opportunity_key FROM pricing)",
-                (), limit=self.batch)
+            return self.pending_price_free(st)
         # with an LLM: price what has an LLM verdict and no LLM-scoped pricing yet, biggest first
         rows = st.conn.execute(
             "SELECT o.* FROM opportunities o JOIN verdicts v ON v.opportunity_key=o.key AND v.viable=1 AND v.method LIKE 'llm:%' "
@@ -187,6 +190,17 @@ class Pump:
     def step_price(self, st: Store) -> int:
         from .pricing import price
         from .awards import AwardIndex
+        if self.llm is not None:
+            # free pass first: comparables + heuristic scope for anything unpriced; the paid scope read upgrades later
+            free = self.pending_price_free(st)
+            if free:
+                idx0 = AwardIndex(st)
+                for o in free:
+                    b = idx0.benchmark(o)
+                    st.put_pricing(o.key, price(o, st.full_text(o.key), None, b if b.get("n", 0) >= 8 else None, self.cfg))
+                    with self._lock:
+                        self.counts["priced"] += 1
+                return len(free)
         opps = self.pending_price(st)
         us = None
         if self.benchmark:

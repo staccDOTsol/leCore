@@ -14,7 +14,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { cardLine, type Card } from './cards.js';
-import type { Entry, Quote } from './entry.js';
+import { NeedsSolError, type Entry, type Quote } from './entry.js';
 import type { ChallengeOutcome, Hill, KingRecord } from './hill.js';
 import type { Shill } from './judge.js';
 import { PITCH, PITCH_SHORT } from './pitch.js';
@@ -118,6 +118,7 @@ export class Commands {
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       this.log(`[${ctx.surface}:${ctx.author}] ${p.cmd} failed: ${msg}`);
+      if (e instanceof NeedsSolError) return this.needsSol(e, p.args[0] ?? '');
       return { rich: (f) => `that did not work: ${f.esc(msg.slice(0, 300))}` };
     }
     return null;
@@ -152,6 +153,21 @@ export class Commands {
         f.i(k.pitch.slice(0, 300)),
       ].join('\n'),
       image: k.image, buttons, page: '/king',
+    };
+  }
+
+  /** The pool could not be created because the fee payer is short of SOL: say how much, where, and that `paid` resumes. */
+  needsSol(e: NeedsSolError, quoteId: string): Reply {
+    return {
+      rich: (f) => [
+        f.b('one more thing before the fight'),
+        `Raydium charges ${f.b(`${e.poolFeeSol} SOL`)} to create your coin/MASTER pool, and the fee payer has ${e.haveSol.toFixed(3)} SOL.`,
+        `send ${f.b(`${e.topUpSol} SOL`)} to the fee payer`,
+        f.pre(e.feePayer),
+        quoteId ? `then say ${f.code(`paid ${quoteId}`)} again. your deposit, the swap and everything settled so far are kept; it resumes at the pool.` : 'then say paid again; everything settled so far is kept.',
+      ].join('\n'),
+      buttons: [[{ label: 'Copy fee payer', copy: e.feePayer, data: 'cmd:king' }, ...(quoteId ? [{ label: 'Try again', data: `paid:${quoteId}` }] : [])]],
+      page: '/king',
     };
   }
 

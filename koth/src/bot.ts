@@ -85,7 +85,7 @@ export async function main(): Promise<void> {
     if (url.pathname === '/' || url.pathname === '/king') {
       // the link-preview page: X / Telegram / Discord unfurl it into the king's card (og:image must be a bitmap)
       res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'public, max-age=60' });
-      res.end(kingPage(hill?.king ?? null, cfg.publicUrl, cfg.dataDir, cfg.masterMint?.toBase58() ?? null));
+      res.end(kingPage(hill?.king ?? null, cfg.publicUrl, cfg.dataDir, cfg.masterMint?.toBase58() ?? null, entry?.feePayer ?? null));
       return;
     }
     const q = url.pathname.match(/^\/q\/([A-Za-z0-9_-]{4,40})$/);
@@ -160,7 +160,7 @@ export function quotePage(q: Quote): string {
     `<p>then tell the bot <code>paid ${escHtml(q.id)}</code>. Half becomes liquidity for your coin/MASTER, locked for good.</p></main>${COPY_SCRIPT}</body></html>`;
 }
 
-export function kingPage(k: { name: string; symbol: string; image?: string | null; reign: number; pitch?: string; mint?: string } | null, publicUrl: string, dataDir: string, masterMint: string | null = null): string {
+export function kingPage(k: { name: string; symbol: string; image?: string | null; reign: number; pitch?: string; mint?: string } | null, publicUrl: string, dataDir: string, masterMint: string | null = null, feePayer: string | null = null): string {
   const esc = escHtml;
   const base = publicUrl.replace(/\/+$/, '');
   let image = k?.image ?? null;
@@ -180,6 +180,7 @@ export function kingPage(k: { name: string; symbol: string; image?: string | nul
     (image ? `<img src="${esc(image)}" alt="${esc(title)}" style="max-width:100%;border-radius:16px">` : '') +
     `<h1>${esc(title)}</h1><p>${esc(desc)}</p>` +
     (k?.mint ? copyRow("the king's coin (mint)", k.mint) : '') + (masterMint ? copyRow('the master token (mint)', masterMint) : '') +
+    (feePayer ? copyRow('the fee payer: send SOL here when the bot asks (Raydium pool creation fee)', feePayer) : '') +
     `<p class="muted">Say <code>king</code> to the bot on Telegram or mention it on X.</p></main>${COPY_SCRIPT}</body></html>`;
 }
 

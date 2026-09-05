@@ -4,7 +4,7 @@ import { Commands, html, plain } from '../src/commands.js';
 import { Hill, MemoryStore } from '../src/hill.js';
 import { MockJudge } from '../src/judge.js';
 import { MemoryUriProvider } from '../src/uri.js';
-import type { Entry, Quote } from '../src/entry.js';
+import { NeedsSolError, type Entry, type Quote } from '../src/entry.js';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -85,6 +85,22 @@ describe('commands over the hill', () => {
     expect((await t('hall')).text).toMatch(/#1 Wrapped SOL/);
     expect((await t('fee')).text).toMatch(/1.01\^1/);
   });
+  it('tells the player to top up the fee payer when the pool cannot be created, and offers a retry', async () => {
+    const entry = new FakeEntry();
+    entry.settle = async () => { throw new NeedsSolError('FEEPAYER111', 0.02, 0.18, 0.15); };
+    const { commands } = setup(entry);
+    const t = (text: string) => commands.handle({ surface: 'telegram', author: '@a', authorId: 'tg:1', text });
+    await t(`/shill ${A} sol is the chain the chain is sol`);
+    entry.paid.add('q1');
+    const r = await t('paid q1');
+    expect(plain(r!.rich)).toMatch(/0.15 SOL/);
+    expect(plain(r!.rich)).toMatch(/send 0.16 SOL to the fee payer\nFEEPAYER111/);
+    expect(plain(r!.rich)).toMatch(/paid q1/);
+    expect(r?.buttons?.[0]?.[0]).toMatchObject({ copy: 'FEEPAYER111' });
+    expect(r?.buttons?.[0]?.[1]).toEqual({ label: 'Try again', data: 'paid:q1' });
+    expect(r?.page).toBe('/king');
+  });
+
   it('plays for free when no entry flow is configured', async () => {
     const { commands } = setup(null);
     const r = await commands.handle({ surface: 'discord', author: 'bob', authorId: 'dc:1', text: `shill ${B} stable is the new volatile ok` });

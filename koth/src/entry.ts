@@ -67,6 +67,27 @@ export type Quote = {
 
 export type Prices = { solUsd: number; tokenUsd: number; decimals: number };
 
+/** Rent for the accounts a CPMM pool creates (vaults, lp mint, observation state), on top of Raydium's creation fee. */
+export const POOL_RENT_SOL = 0.03;
+/** The least we ever ask for, so a top-up covers a few pools and the fees around them. */
+export const MIN_TOPUP_SOL = 0.1;
+
+/**
+ * The operator (the fee payer) cannot afford to create the <coin>/MASTER pool: Raydium charges a
+ * creation fee in SOL. Everything settled so far is kept; `paid <quote-id>` again after a top-up
+ * resumes at the pool step.
+ */
+export class NeedsSolError extends Error {
+  readonly topUpSol: number;
+  constructor(readonly feePayer: string, readonly haveSol: number, readonly needSol: number, readonly poolFeeSol: number) {
+    const shortfall = Math.max(0, needSol - haveSol);
+    const topUpSol = Math.max(MIN_TOPUP_SOL, Math.ceil(shortfall * 100) / 100);
+    super(`Raydium charges ${poolFeeSol} SOL to create the pool and the fee payer ${feePayer} has ${haveSol.toFixed(4)} SOL (needs ~${needSol.toFixed(2)}). Send it ${topUpSol} SOL and say paid again.`);
+    this.name = 'NeedsSolError';
+    this.topUpSol = topUpSol;
+  }
+}
+
 /** Jupiter price v3: usd per token for any tradable mint, in one call. */
 export async function jupiterPrices(mint: string, baseUrl = 'https://lite-api.jup.ag', f: typeof fetch = fetch): Promise<Prices> {
   const sol = NATIVE_SOL_MINT.toBase58();
@@ -345,6 +366,9 @@ export class Entry implements EntryLike {
     return sendAndConfirmTransaction(conn, tx, [op], { commitment: 'confirmed' });
   }
 
+  /** The wallet that pays Raydium's pool-creation fee and every transaction fee: where a top-up goes. */
+  get feePayer(): string { return this.d.operator.publicKey.toBase58(); }
+
   private async getRaydium(): Promise<Raydium> {
     if (!this.raydium) {
       this.raydium = Raydium.load({ connection: this.d.connection, owner: this.d.operator, cluster: 'mainnet', disableLoadToken: true, disableFeatureCheck: true });
@@ -381,6 +405,11 @@ export class Entry implements EntryLike {
     };
 
     if (!info) {
+      // Raydium's creation fee comes out of the operator's SOL: say so, with the number, instead of a simulation error
+      const poolFeeSol = Number(feeConfig.createPoolFee ?? 0) / LAMPORTS_PER_SOL;
+      const needSol = poolFeeSol + POOL_RENT_SOL;
+      const haveSol = (await conn.getBalance(op.publicKey)) / LAMPORTS_PER_SOL;
+      if (haveSol < needSol) throw new NeedsSolError(op.publicKey.toBase58(), haveSol, needSol, poolFeeSol);
       const { execute, extInfo } = await raydium.cpmm.createPool({
         programId: CREATE_CPMM_POOL_PROGRAM, poolFeeAccount: CREATE_CPMM_POOL_FEE_ACC,
         mintA: { address: mint.toBase58(), decimals: tokenDecimals, programId: program.toBase58() },
@@ -391,7 +420,14 @@ export class Entry implements EntryLike {
       });
       const lpMint = extInfo.address.lpMint;
       const before = await lpBalance(lpMint);
-      const { txId } = await execute({ sendAndConfirm: true });
+      let txId: string;
+      try {
+        ({ txId } = await execute({ sendAndConfirm: true }));
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        if (/insufficient (lamports|funds)|InsufficientFundsForRent|0x1\b/i.test(msg)) throw new NeedsSolError(op.publicKey.toBase58(), haveSol, needSol, poolFeeSol);
+        throw e;
+      }
       const after = await lpBalance(lpMint);
       return { poolId: extInfo.address.poolId, lpMint, lpRaw: after - before, signature: txId, created: true };
     }

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { PublicKey } from '@solana/web3.js';
-import { QUOTE_BUFFER_PCT, computeQuote, jupiterPrices } from '../src/entry.js';
+import { MIN_TOPUP_SOL, NeedsSolError, QUOTE_BUFFER_PCT, computeQuote, jupiterPrices } from '../src/entry.js';
 import { BOND_THRESHOLD_TOKEN, MASTER_CURVE_DEFAULTS, ZOO_TOKEN_MINT, masterCurveParams } from '../src/dbc.js';
 import { TokenAuthorityOption, TokenType } from '@meteora-ag/dynamic-bonding-curve-sdk';
 
@@ -45,5 +45,16 @@ describe('master curve', () => {
     expect(p.migrationQuoteThreshold.toString()).toBe(String(100_000_000 * 1e6));
     const partner = masterCurveParams({ authority: 'partner' });
     expect(partner.tokenUpdateAuthority).toBe(TokenAuthorityOption.PartnerUpdateAuthority);
+  });
+});
+
+describe('NeedsSolError', () => {
+  it('asks for the shortfall rounded up to a cent, never less than the minimum top-up, and names the fee payer', () => {
+    const e = new NeedsSolError('FEEPAYER', 0.02, 0.18, 0.15);
+    expect(e.topUpSol).toBe(0.16);
+    expect(e.message).toMatch(/0.15 SOL to create the pool/);
+    expect(e.message).toMatch(/FEEPAYER/);
+    expect(new NeedsSolError('F', 0.17, 0.18, 0.15).topUpSol).toBe(MIN_TOPUP_SOL);
+    expect(e instanceof Error).toBe(true);
   });
 });

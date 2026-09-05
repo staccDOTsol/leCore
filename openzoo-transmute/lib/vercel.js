@@ -215,6 +215,17 @@ export function readNextjs(root) {
   for (const f of readVercelNode(root).functions) {
     if (!functions.some((g) => g.name === f.name)) functions.push(f);
   }
+  // A top-level `api/` next to pages/app is built by @vercel/node too (Vite-style functions in a Next repo).
+  for (const f of walk(path.join(root, 'api'))) {
+    if (!HANDLER_EXTS.includes(path.extname(f))) continue;
+    const rel = 'api/' + path.relative(path.join(root, 'api'), f).replace(/\\/g, '/');
+    const name = rel.replace(/\.[^.]+$/, '');
+    if (functions.some((fn) => fn.name === name)) continue;
+    const src = fs.readFileSync(f, 'utf8');
+    const rc = detectRuntimeConfig(src);
+    const { routePath, pattern, params } = routeFromFile(rel, 'pages');
+    functions.push(new VercelFunction({ name, routePath, pattern, params, sourceFile: f, style: 'vercel-node', methods: detectMethods(src), runtime: rc.runtime, maxDuration: rc.maxDuration }));
+  }
   // Static: `public/` is copied verbatim by @vercel/next; `out/` exists after `next build` with output:'export'.
   const staticDir = fs.existsSync(path.join(root, 'out')) ? path.join(root, 'out') : path.join(root, 'public');
   if (!fs.existsSync(path.join(root, 'out'))) notes.push("no `out/` directory: only `public/` is treated as static. Run `next build` with `output: 'export'` in next.config to ship the rendered pages.");

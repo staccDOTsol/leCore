@@ -1,0 +1,10 @@
+.git
+.claude
+openzoo-transmute/node_modules
+openzoo-transmute/runtime/zoo-host/target
+**/target
+**/__pycache__
+*.png
+archive
+gallery
+figures

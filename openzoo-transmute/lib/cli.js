@@ -16,6 +16,7 @@ import { readDeployment } from './vercel.js';
 import { build } from './build.js';
 import { deploy, resolveOutDir, clusterLabel } from './deploy.js';
 import { startGateway, DEFAULT_PORT } from './gateway.js';
+import { startHub, DEFAULT_HUB_PORT } from './hub.js';
 import { connect, getProgramInfo, readManifest } from './solana.js';
 import { loadWallet, rpcUrl } from './wallet.js';
 import { MANIFEST_PATH } from './wire.js';
@@ -27,6 +28,8 @@ usage:
   openzoo-transmute deploy  [dir|outDir] [--cluster mainnet|devnet|localnet|<url>] [--keypair <path>] [--yes] [--program <id>]
                             [--concurrency 4] [--skip-assets] [--force]
   openzoo-transmute serve   <programId> [--cluster <c>] [--port ${DEFAULT_PORT}] [--keypair <path>] [--host 127.0.0.1] [--quiet]
+  openzoo-transmute hub     [--cluster mainnet] [--port 8080] [--host 0.0.0.0] [--public-url <https://…>]
+                            hosted explorer for EVERY program on the cluster (/s/<programId>), read-only
   openzoo-transmute inspect [dir]                 print the Vercel model + eligibility report
   openzoo-transmute status  <programId> [--cluster <c>]
   openzoo-transmute help
@@ -191,13 +194,28 @@ async function cmdStatus(p, f, log) {
  * @param {string[]} argv  arguments after the program name
  * @param {{log?:Function, error?:Function}} io
  */
+async function cmdHub(p, f, log) {
+  // The hosted explorer: every program on the cluster from one public host,
+  // read-only by default (a public signer would be a drain). --keypair opts in.
+  const cluster = f.cluster || process.env.OPENZOO_CLUSTER || 'mainnet';
+  let keypair = null;
+  if (typeof f.keypair === 'string') { keypair = loadWallet({ keypair: f.keypair }).keypair; log(`warning: this hub signs writes with ${keypair.publicKey.toBase58()} for anyone who can reach it`); }
+  const port = f.port != null ? Number(f.port) : Number(process.env.PORT || DEFAULT_HUB_PORT);
+  const h = await startHub({ cluster, port, host: f.host || '0.0.0.0', keypair, log, quiet: !!f.quiet, publicUrl: f.publicUrl || process.env.OPENZOO_HUB_URL || null, maxSites: f.maxSites ? Number(f.maxSites) : undefined });
+  log(`openzoo hub → ${h.url}/.hub  (cluster ${cluster}; sites at ${h.url}/s/<programId>)`);
+  const stop = () => h.close().then(() => process.exit(0));
+  process.once('SIGINT', stop);
+  process.once('SIGTERM', stop);
+  return 0;
+}
+
 export async function run(argv = process.argv.slice(2), io = {}) {
   const log = io.log ?? console.log;
   const error = io.error ?? console.error;
   const { cmd, positionals, flags } = parseArgs(argv);
   if (flags.version) { log(JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version); return 0; }
   if (flags.help || cmd === 'help' || cmd === '--help') { log(USAGE); return 0; }
-  const commands = { build: cmdBuild, deploy: cmdDeploy, serve: cmdServe, inspect: cmdInspect, status: cmdStatus };
+  const commands = { build: cmdBuild, deploy: cmdDeploy, serve: cmdServe, inspect: cmdInspect, status: cmdStatus, hub: cmdHub };
   const fn = commands[cmd];
   if (!fn) { error(`unknown command: ${cmd}\n`); error(USAGE); process.exitCode = 1; return 1; }
   try {

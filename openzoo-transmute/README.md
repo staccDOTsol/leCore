@@ -314,6 +314,24 @@ docs/OPENZOO_CLI_PATCH.md    mounting build/deploy/serve in npx openzoo
 | rent | 6.96 SOL per MB of static + program bytes, 2 × the `.so` reserved |
 | not supported | network, fs, timers, randomness, regex, classes, streaming, `waitUntil`, ISR, crons, middleware, local imports |
 
+## The hosted explorer (`hub`)
+
+`serve` fronts one program on localhost. `hub` fronts every program on a
+cluster from one public host, read-only:
+
+```
+openzoo-transmute hub --cluster mainnet --port 8080        # or: fly deploy (Dockerfile + fly.toml here)
+https://<host>/s/<programId>        pins that site (cookie) and opens its /
+https://<host>/s/<programId>/api/x  one page of it, absolute
+https://<host>/.hub                 paste a program id; recently served sites
+```
+
+Reads are free simulations, exactly as in `serve`. Writes answer 402 on a
+public host (a shared signer would be drained); use `serve` with your wallet
+locally, or the x402-paid lane once the openzoo proxy fronts it. The site's
+own root-relative links keep working because the pinned program rides a
+cookie, so a transmuted app needs no base-path changes.
+
 ## Roadmap
 
 * **Browser fork / `sol://` scheme** — a browser that resolves

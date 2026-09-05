@@ -1,0 +1,26 @@
+# leCore HTTP service (the gateway's lecore-front). See deploy/lecore-service/Dockerfile.
+app = "lecore-service"
+primary_region = "iad"
+
+[build]
+  dockerfile = "deploy/lecore-service/Dockerfile"
+
+[env]
+  LECORE_MEMORY_ROOT = "/data/lecore_memory"
+  PORT = "8080"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = false
+  auto_start_machines = true
+  min_machines_running = 1
+
+[mounts]
+  source = "lecore_data"
+  destination = "/data"
+
+[[vm]]
+  cpu_kind = "shared"
+  cpus = 2
+  memory_mb = 4096

@@ -55,8 +55,9 @@ describe('commands over the hill', () => {
     expect((await t('/king')).text).toMatch(/EMPTY/);
     const q = await t(`/shill ${A} sol is the chain the chain is sol`);
     expect(q.text).toMatch(/send exactly 26.3/); expect(q.text).toMatch(/DEPOSIT111/); expect(q.text).toMatch(/paid q1/);
-    expect(q.r?.buttons?.[0]?.[0]?.copy).toBe('DEPOSIT111');
-    expect(q.r?.buttons?.[0]?.[1]?.data).toBe('paid:q1');
+    expect(q.r?.buttons?.[0]?.[0]?.copy).toBe('26.3');
+    expect(q.r?.buttons?.[0]?.[1]?.copy).toBe('DEPOSIT111');
+    expect(q.r?.buttons?.[1]?.[0]?.data).toBe('paid:q1');
     expect(html(q.r!.rich)).toMatch(/<pre>DEPOSIT111<\/pre>/);
     expect((await t('paid q1')).text).toMatch(/not there yet/);
     expect((await t('paid q1', { authorId: 'tg:2' })).text).toMatch(/someone else/);

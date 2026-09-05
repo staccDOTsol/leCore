@@ -94,6 +94,12 @@ export function isTransient(status: number): boolean {
   return status === 402 || status === 408 || status === 409 || status === 425 || status === 429 || status >= 500;
 }
 
+/**
+ * Where a completion goes when the configured model's doors cannot be paid: the auto router, then
+ * one strong model per provider, so a dead door on one side of the zoo does not decide a fight.
+ */
+export const DEFAULT_FALLBACKS = ['openzoo/auto', 'anthropic/claude-sonnet-5', 'openai/gpt-5.6-auto', 'google/gemini-3.6-flash', 'x-ai/grok-4.6', 'deepseek/deepseek-v4-pro'];
+
 export class OpenzooClient {
   readonly baseUrl: string;
   readonly model: string;
@@ -111,11 +117,11 @@ export class OpenzooClient {
     this.baseUrl = (opts.baseUrl ?? process.env.OPENZOO_BASE_URL ?? 'http://localhost:8402/v1').replace(/\/+$/, '');
     this.apiKey = opts.apiKey ?? process.env.OPENZOO_API_KEY ?? 'sk-openzoo';
     this.model = opts.model ?? process.env.KOTH_MODEL ?? 'openzoo/auto';
-    const fb = opts.fallbacks ?? (process.env.KOTH_MODEL_FALLBACKS ?? 'openzoo/auto').split(',').map((m) => m.trim()).filter(Boolean);
+    const fb = opts.fallbacks ?? (process.env.KOTH_MODEL_FALLBACKS ?? DEFAULT_FALLBACKS.join(',')).split(',').map((m) => m.trim()).filter(Boolean);
     this.fallbacks = fb.filter((m) => m !== this.model);
     this.contextId = opts.contextId ?? process.env.OPENZOO_CONTEXT ?? '';
     this.timeoutMs = opts.timeoutMs ?? Number(process.env.OPENZOO_TIMEOUT_MS ?? 420_000);
-    this.attempts = opts.attempts ?? Number(process.env.OPENZOO_ATTEMPTS ?? 4);
+    this.attempts = opts.attempts ?? Number(process.env.OPENZOO_ATTEMPTS ?? 3);
     this.f = opts.fetchImpl ?? fetch;
     this.log = opts.log ?? (() => {});
     this.sleep = opts.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));

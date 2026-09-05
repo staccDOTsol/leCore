@@ -64,11 +64,12 @@ describe('openzoo client', () => {
       return new Response(JSON.stringify(r), { status, headers: { 'content-type': 'application/json' } });
     }) as typeof fetch;
     const slept: number[] = [];
-    const zoo = new OpenzooClient({ model: 'claude-opus-5', fetchImpl: f, sleep: async (ms) => { slept.push(ms); } });
+    const zoo = new OpenzooClient({ model: 'claude-opus-5', fetchImpl: f, attempts: 4, sleep: async (ms) => { slept.push(ms); } });
     const r = await zoo.chat([{ role: 'user', content: 'hi' }]);
     expect(r.text).toBe('routed fine');
     expect(calls.map((c) => c.body.model)).toEqual(['claude-opus-5', 'claude-opus-5', 'claude-opus-5', 'claude-opus-5', 'openzoo/auto']);
     expect(slept).toEqual([1000, 2000, 4000]);
+    expect(new OpenzooClient({ model: 'openzoo/auto', fetchImpl: f }).fallbacks).toEqual(['anthropic/claude-sonnet-5', 'openai/gpt-5.6-auto', 'google/gemini-3.6-flash', 'x-ai/grok-4.6', 'deepseek/deepseek-v4-pro']);
     expect(isTransient(402)).toBe(true); expect(isTransient(503)).toBe(true); expect(isTransient(400)).toBe(false);
   });
   it('does not retry a definitive refusal on the same model, but still tries the fallback', async () => {

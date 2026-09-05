@@ -154,11 +154,17 @@ const COPY_SCRIPT = `<script>for(const b of document.querySelectorAll('[data-cop
 export function quotePage(q: Quote): string {
   const left = Math.max(0, q.expiresAt - Date.now());
   const status = q.status === 'pending' ? (left ? `expires in ${Math.ceil(left / 60_000)} min` : 'expired') : q.status;
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>KOTH quote ${escHtml(q.id)}</title><meta name="robots" content="noindex"><meta name="viewport" content="width=device-width,initial-scale=1"><style>${PAGE_STYLE}</style></head>` +
-    `<body><main><h1>QUOTE ${escHtml(q.id)} · ${escHtml(q.player)}</h1><p class="muted">${escHtml(status)} · one-time address, never reused, deleted after sweep</p>` +
-    copyRow('send exactly this amount', String(q.amountUi)) + copyRow('of this token (mint)', q.mint) + copyRow('to this one-time address', q.depositAddress) +
-    `<p>${escHtml(`${q.playFeeSol} SOL stake ≈ $${q.playFeeUsd.toFixed(2)} + inference ≈ $${q.inferenceUsd.toFixed(2)} · +${q.bufferPct}%`)}</p>` +
-    `<p>then tell the bot <code>paid ${escHtml(q.id)}</code>. Half becomes liquidity for your coin/MASTER, locked for good.</p></main>${COPY_SCRIPT}</body></html>`;
+  const donation = q.kind === 'donation';
+  const kind = donation ? 'DONATION' : 'QUOTE';
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>KOTH ${kind.toLowerCase()} ${escHtml(q.id)}</title><meta name="robots" content="noindex"><meta name="viewport" content="width=device-width,initial-scale=1"><style>${PAGE_STYLE}</style></head>` +
+    `<body><main><h1>${kind} ${escHtml(q.id)} · ${escHtml(q.player)}</h1><p class="muted">${escHtml(status)} · one-time address, never reused, deleted after sweep</p>` +
+    copyRow(donation ? 'send exactly this much SOL' : 'send exactly this amount', String(q.amountUi)) + (donation ? '' : copyRow('of this token (mint)', q.mint)) + copyRow('to this one-time address', q.depositAddress) +
+    (donation
+      ? `<p>${escHtml(`${q.playFeeSol} SOL ≈ $${q.playFeeUsd.toFixed(2)}${q.extraSol ? ` + ${q.extraSol} SOL for Raydium's pool creation (no SOL/MASTER pool yet)` : ''}`)}</p>` +
+        `<p>then tell the bot <code>paid ${escHtml(q.id)}</code>. Half is swapped to the master token; the pair is locked for good as SOL/MASTER liquidity on Raydium, and the lock NFT (that position's trading fees) goes to ${q.nftOwner ? `<code>${escHtml(q.nftOwner)}</code>` : 'the wallet that sends the SOL'}.</p>`
+      : `<p>${escHtml(`${q.playFeeSol} SOL stake ≈ $${q.playFeeUsd.toFixed(2)} + inference ≈ $${q.inferenceUsd.toFixed(2)} · +${q.bufferPct}%`)}</p>` +
+        `<p>then tell the bot <code>paid ${escHtml(q.id)}</code>. Half becomes liquidity for your coin/MASTER, locked for good.</p>`) +
+    `</main>${COPY_SCRIPT}</body></html>`;
 }
 
 export function kingPage(k: { name: string; symbol: string; image?: string | null; reign: number; pitch?: string; mint?: string } | null, publicUrl: string, dataDir: string, masterMint: string | null = null, feePayer: string | null = null): string {

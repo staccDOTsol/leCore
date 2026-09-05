@@ -35,6 +35,8 @@ export const BOT_COMMANDS = [
   { command: 'shill', description: 'shill <mint> <pitch>: challenge the king' },
   { command: 'paid', description: 'paid <quote-id>: I sent it, fight' },
   { command: 'wallet', description: 'wallet <address>: where your pot goes when you win' },
+  { command: 'donate', description: 'donate <sol>: lock SOL/MASTER liquidity on Raydium, keep the fee NFT' },
+  { command: 'dividends', description: 'what every play has paid you (20% to past kings, 10% to all players)' },
   { command: 'hall', description: 'the hall of fame' },
   { command: 'fee', description: 'what an attempt costs right now' },
   { command: 'help', description: 'how to play' },

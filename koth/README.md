@@ -17,14 +17,25 @@ by the AI. Lose it and you're in the hall of fame.
 4. **Win:** the master token's metadata is rewritten on-chain to your coin. Your name on the crown. **And you take
    the pot: half of every LP position in the vault**, sent to the wallet you named with `wallet <address>`.
    **Lose:** the king stays. Your entry stays in the vault, in the pot for whoever takes the hill next.
+5. **Every play pays the people before it.** Of the LP each attempt makes: **20 %** to every past king with a
+   wallet (split by reigns: two reigns, two shares), **10 %** to every player who ever played (split by plays;
+   donors count), both **locked for good on Raydium** and handed over as **Raydium lock NFTs** (the NFT claims
+   that liquidity's trading fees, forever) once a person's position is worth **$1**. **35 %** is the winner's,
+   sent as **plain LP** they can remove; on a loss it pushes into the vault. **35 %** always pushes into the
+   vault. `dividends` shows what you have accrued and been paid.
+6. `donate <sol>` — half is swapped to the master token, the pair is locked for good as SOL/MASTER
+   liquidity on Raydium, and **you** get the lock NFT. The first donation creates that pool, so if the fee payer
+   cannot cover Raydium's creation fee the quote asks for it on top.
 
 Every reply from the bot ends with the pot in dollars, read from chain: half the value of every LP position the
 vault holds (each position's share of its pool's reserves, priced on the non-master side).
 
 Where the money goes: half your entry is swapped into the master token, paired with your coin in a Raydium
-pool `<yourcoin>/MASTER`, and the LP goes into the vault. The vault is the pot: there is no withdraw, LP leaves
-it only through `Award`, which the game's operator key uses to hand a winner half of everything in it. The other
-half keeps stacking. The AI's cut goes to openzoo in `$TOKEN`. No website: it lives in Telegram, Discord and on X.
+pool `<yourcoin>/MASTER`, and the LP is split as above: the pushes go into the vault, the dividends wait in the
+operator's LP account until they are worth paying (`dividends.json` on the volume is the ledger: accrued, paying,
+paid, per person per pool), the winner's share goes straight to their wallet. The vault is the pot: there is no
+withdraw, LP leaves it only through `Award`, which the game's operator key uses to hand a winner half of
+everything in it. The other half keeps stacking. The AI's cut goes to openzoo in `$TOKEN`. No website: it lives in Telegram, Discord and on X.
 
 There is no website. The game exists as the bots (Telegram, Discord, an automated X account) and as
 three things on Solana:
@@ -44,7 +55,9 @@ three things on Solana:
 3. They say `paid <quote-id>`. The operator sweeps the deposit, converts the inference share into
    `$TOKEN` / LEOS / USDC for the openzoo wallet, swaps **half** the stake into the master token on
    Jupiter, **creates the Raydium CPMM pool `<token>/MASTER` if it does not exist** (else deposits into
-   it), and locks the LP in the play vault. The player never sees LP.
+   it), and locks **35 %** of the LP in the play vault (the push). After the fight the rest is split:
+   20 % accrued to past kings, 10 % to every player (paid as Raydium lock NFTs from $1), 35 % to the winner as
+   plain LP or, on a loss, into the vault. Shares nobody can take push into the vault too.
 4. The token's **metrics become a card** (HP = liquidity, ATK = turnover, DEF = distribution,
    SPD = volatility, LUCK = buy pressure; element and rarity from the dominant signal and market cap),
    and a creature body grown from the same numbers — rendered by leCore (`render_asset.py`) or as an SVG.

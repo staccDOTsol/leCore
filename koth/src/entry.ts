@@ -30,6 +30,7 @@ import {
   CREATE_CPMM_POOL_FEE_ACC, CREATE_CPMM_POOL_PROGRAM, Percent, Raydium, TxVersion, getCpmmPdaPoolId, type ApiCpmmConfigInfo,
 } from '@raydium-io/raydium-sdk-v2';
 import { NATIVE_SOL_MINT, ZOO_TOKEN_MINT } from './dbc.js';
+import { PUSH_BPS, bps } from './dividends.js';
 import type { EntryLike } from './hill.js';
 import { awardIx, createVaultLpAtaIx, decodePoolState, findCpmmPoolsWithMaster, playIx, vaultPda } from './play.js';
 
@@ -42,6 +43,8 @@ export const QUOTE_TTL_MS = 30 * 60_000;
 
 export type Quote = {
   id: string;
+  /** A play (the default) fights for the hill; a donation only grows the pot. */
+  kind?: 'play' | 'donation';
   player: string;
   surface: string;
   mint: string;
@@ -57,6 +60,10 @@ export type Quote = {
   decimals: number;
   amountUi: number;
   amountRaw: string;
+  /** SOL included in the deposit to pay Raydium's pool creation (the first SOL/MASTER donation); not part of the stake. */
+  extraSol?: number;
+  /** Donations: who receives the Raydium lock NFT (the donor's registered wallet; else whoever paid the deposit). */
+  nftOwner?: string;
   createdAt: number;
   expiresAt: number;
   status: 'pending' | 'deposited' | 'settling' | 'settled' | 'expired' | 'failed';
@@ -103,6 +110,22 @@ export class NeedsSolError extends Error {
     this.name = 'NeedsSolError';
     this.topUpSol = topUpSol;
   }
+}
+
+/** The least a donation can be: below this the swap and the pool deposit are mostly fees. */
+export const MIN_DONATION_SOL = 0.01;
+
+/**
+ * How a swept deposit is split: the inference share (nothing for a donation), the pool-creation SOL
+ * that rode along in the deposit (nothing for a play), and the stake, half of which is swapped to
+ * the master token while the other half stays as it is; the pair becomes liquidity.
+ */
+export function splitDeposit(q: Pick<Quote, 'inferenceUsd' | 'totalUsd' | 'extraSol' | 'mint'>, swept: bigint): { inferenceShare: bigint; extra: bigint; stake: bigint; half: bigint } {
+  const extra = q.mint === NATIVE_SOL_MINT.toBase58() && q.extraSol ? BigInt(Math.round(q.extraSol * LAMPORTS_PER_SOL)) : 0n;
+  const net = swept > extra ? swept - extra : 0n;
+  const inferenceShare = q.totalUsd > 0 && q.inferenceUsd > 0 ? (net * BigInt(Math.round((q.inferenceUsd / q.totalUsd) * 1e6))) / 1_000_000n : 0n;
+  const stake = net - inferenceShare;
+  return { inferenceShare, extra, stake, half: stake / 2n };
 }
 
 /** Jupiter price v3: usd per token for any tradable mint, in one call. */
@@ -357,17 +380,61 @@ export class Entry implements EntryLike {
     const p = await this.prices(a.mint);
     const inferenceUsd = this.d.estimateInferenceUsd();
     const math = computeQuote({ playFeeSol: a.playFeeSol, inferenceUsd, solUsd: p.solUsd, tokenUsd: p.tokenUsd, decimals: p.decimals });
+    const q = this.newQuote({
+      kind: 'play', player: a.player, surface: a.surface, mint: a.mint, playFeeSol: a.playFeeSol, ...math,
+      solUsd: p.solUsd, tokenUsd: p.tokenUsd, decimals: p.decimals,
+    });
+    this.log(`[quote ${q.id}] ${q.amountUi} ${a.mint.slice(0, 6)} -> ${q.depositAddress} (play $${q.playFeeUsd.toFixed(2)} + inference $${inferenceUsd.toFixed(3)}, +${q.bufferPct}%)`);
+    return q;
+  }
+
+  /**
+   * A donation to the pot: SOL, any amount. It settles like a play without the fight or the inference
+   * share: half is swapped to the master token, the pair becomes SOL/MASTER liquidity in the vault.
+   * The first donation also creates that pool, so when the fee payer cannot cover Raydium's creation
+   * fee the quote asks for it on top (`extraSol`), and that part never enters the stake. The LP is
+   * locked for good with Raydium's lock program and the lock NFT (the fee claim) goes to the donor.
+   */
+  async donate(a: { donor: string; surface: string; sol: number; nftOwner?: string | null }): Promise<Quote & { extraSol: number; poolExists: boolean }> {
+    if (!(a.sol >= MIN_DONATION_SOL)) throw new Error(`a donation is at least ${MIN_DONATION_SOL} SOL`);
+    const sol = Math.round(a.sol * 1e6) / 1e6;
+    const p = await this.prices(NATIVE_SOL_MINT.toBase58());
+    const need = await this.poolCreationNeed(NATIVE_SOL_MINT);
+    const extraSol = need.exists ? 0 : Math.max(0, Math.ceil(need.shortfallSol * 100) / 100);
+    const amountUi = Math.round((sol + extraSol) * 1e6) / 1e6;
+    const q = this.newQuote({
+      kind: 'donation', player: a.donor, surface: a.surface, mint: NATIVE_SOL_MINT.toBase58(), playFeeSol: sol,
+      playFeeUsd: Math.round(sol * p.solUsd * 100) / 100, inferenceUsd: 0, bufferPct: 0, totalUsd: Math.round(sol * p.solUsd * 100) / 100,
+      amountUi, amountRaw: String(Math.round(amountUi * LAMPORTS_PER_SOL)), extraSol, ...(a.nftOwner ? { nftOwner: a.nftOwner } : {}),
+      solUsd: p.solUsd, tokenUsd: p.solUsd, decimals: 9,
+    });
+    this.log(`[quote ${q.id}] donation ${sol} SOL${extraSol ? ` + ${extraSol} SOL pool creation` : ''} -> ${q.depositAddress}`);
+    return { ...q, extraSol, poolExists: need.exists };
+  }
+
+  private newQuote(a: Omit<Quote, 'id' | 'depositAddress' | 'createdAt' | 'expiresAt' | 'status' | 'steps' | 'playSignature' | 'error'>): Quote {
     const throwaway = Keypair.generate();
     const q: Quote = {
-      id: randomBytes(6).toString('hex'), player: a.player, surface: a.surface, mint: a.mint,
-      depositAddress: throwaway.publicKey.toBase58(), playFeeSol: a.playFeeSol, ...math,
-      solUsd: p.solUsd, tokenUsd: p.tokenUsd, decimals: p.decimals,
+      id: randomBytes(6).toString('hex'), ...a, depositAddress: throwaway.publicKey.toBase58(),
       createdAt: this.now(), expiresAt: this.now() + QUOTE_TTL_MS, status: 'pending', steps: {}, playSignature: null, error: null,
     };
     fs.writeFileSync(this.keyPath(q.id), JSON.stringify([...throwaway.secretKey]), { mode: 0o600 });
     this.saveQuote(q);
-    this.log(`[quote ${q.id}] ${q.amountUi} ${a.mint.slice(0, 6)} -> ${q.depositAddress} (play $${q.playFeeUsd.toFixed(2)} + inference $${inferenceUsd.toFixed(3)}, +${q.bufferPct}%)`);
     return q;
+  }
+
+  /**
+   * Does the <mint>/MASTER pool exist, and if not, can the fee payer create it? `shortfallSol` is what
+   * it is missing for Raydium's fee plus the pool's rent (0 when the pool is there or the SOL is).
+   */
+  async poolCreationNeed(mint: PublicKey): Promise<{ exists: boolean; poolFeeSol: number; needSol: number; haveSol: number; shortfallSol: number }> {
+    const feeConfig = await this.cpmmFeeConfig();
+    const poolId = this.poolIdFor(new PublicKey(feeConfig.id), mint);
+    const info = await this.d.connection.getAccountInfo(poolId);
+    const poolFeeSol = Number(feeConfig.createPoolFee ?? 0) / LAMPORTS_PER_SOL;
+    const needSol = poolFeeSol + POOL_RENT_SOL;
+    const haveSol = (await this.d.connection.getBalance(this.d.operator.publicKey)) / LAMPORTS_PER_SOL;
+    return { exists: Boolean(info), poolFeeSol, needSol, haveSol, shortfallSol: info ? 0 : Math.max(0, needSol - haveSol) };
   }
 
   /** How much of the quoted token sits at the deposit address right now (raw units). */
@@ -441,9 +508,7 @@ export class Entry implements EntryLike {
       step(`swept ${Number(q.steps.sweptRaw) / 10 ** q.decimals} · key deleted`, q.steps.sweep);
       const swept = BigInt(q.steps.sweptRaw);
       // the shares, from what actually arrived (the buffer means this is >= the quote in the normal case)
-      const inferenceShare = q.totalUsd > 0 ? (swept * BigInt(Math.round((q.inferenceUsd / q.totalUsd) * 1e6))) / 1_000_000n : 0n;
-      const playShare = swept - inferenceShare;
-      const half = playShare / 2n;
+      const { inferenceShare, stake: playShare, half } = splitDeposit(q, swept);
 
       // 3b. the inference share -> TOKEN/USDC/LEOS for the openzoo wallet
       if (!q.steps.inference) {
@@ -477,29 +542,39 @@ export class Entry implements EntryLike {
       }
       step(`pool ${q.steps.poolCreated === 'true' ? 'created' : 'deposited'} on Raydium`, q.steps.pool);
 
-      // 3e. the play: LP into the vault, recorded for the player
-      if (!q.steps.play) {
-        const lpMint = new PublicKey(q.steps.lpMint), poolId = new PublicKey(q.steps.poolId);
-        let lpRaw = BigInt(q.steps.lpRaw || '0');
-        if (lpRaw <= 0n) {
-          // the pool step went through but its LP was read too early: whatever LP the operator holds for this
-          // pool is this quote's (every earlier quote's LP is already in the vault)
-          lpRaw = await waitForIncrease(() => this.lpHeld(lpMint), 0n, { attempts: 8 });
-          q.steps.lpRaw = lpRaw.toString(); this.saveQuote(q);
-          this.log(`[quote ${id}] re-measured LP: ${lpRaw}`);
-        }
-        const player = this.playerKey(q);
-        const tx = new Transaction().add(
-          ComputeBudgetProgram.setComputeUnitLimit({ units: 200_000 }),
-          createVaultLpAtaIx(op.publicKey, this.d.playProgramId, lpMint),
-          playIx({ programId: this.d.playProgramId, operator: op.publicKey, player, poolState: poolId, lpMint, sourceLp: getAssociatedTokenAddressSync(lpMint, op.publicKey), amount: lpRaw }),
-        );
-        const sig = await sendAndConfirmTransaction(conn, tx, [op], { commitment: 'confirmed' });
-        q.steps.play = sig; q.playSignature = sig; this.saveQuote(q);
-        this.invalidatePot();
-        this.log(`[quote ${id}] play locked ${lpRaw} LP, tx ${sig}`);
+      const lpMint = new PublicKey(q.steps.lpMint), poolId = new PublicKey(q.steps.poolId);
+      if (!q.steps.play && !q.steps.lock && BigInt(q.steps.lpRaw || '0') <= 0n) {
+        // the pool step went through but its LP was read too early: whatever LP the operator holds for this
+        // pool is this quote's (every earlier quote's LP is already in the vault or locked)
+        const lpRaw = await waitForIncrease(() => this.lpHeld(lpMint), 0n, { attempts: 8 });
+        q.steps.lpRaw = lpRaw.toString(); this.saveQuote(q);
+        this.log(`[quote ${id}] re-measured LP: ${lpRaw}`);
       }
-      step('LP locked in the vault', q.steps.play);
+
+      // 3e (donation). the LP is locked for good on Raydium; the lock NFT, which claims the pool's fees, goes to the donor
+      if (q.kind === 'donation') {
+        if (!q.steps.lock) {
+          const owner = q.nftOwner ? new PublicKey(q.nftOwner) : (await this.payerOf(q)) ?? op.publicKey;
+          const r = await this.lockOnRaydium(poolId, BigInt(q.steps.lpRaw), owner);
+          q.steps.lock = r.signature; q.steps.nftMint = r.nftMint.toBase58(); q.steps.nftOwner = owner.toBase58(); q.playSignature = r.signature; this.saveQuote(q);
+          this.log(`[quote ${id}] locked ${q.steps.lpRaw} LP on Raydium, nft ${q.steps.nftMint} -> ${q.steps.nftOwner}, tx ${r.signature}`);
+        }
+        step(`LP locked for good on Raydium · fee NFT → ${q.steps.nftOwner}`, q.steps.lock);
+        q.status = 'settled'; this.saveQuote(q);
+        return q;
+      }
+
+      // 3e. the play: the push share (35%) of the LP into the vault, recorded for the player. The rest waits
+      // in the operator's LP account for the fight: dividends to past kings and players, and the winner's
+      // share or, on a loss, a second push (`settleShares` in the command layer).
+      if (!q.steps.play) {
+        const lpRaw = BigInt(q.steps.lpRaw);
+        const pushRaw = bps(lpRaw, PUSH_BPS);
+        const sig = await this.pushToVault(q, pushRaw > 0n ? pushRaw : lpRaw);
+        q.steps.play = sig; q.steps.pushedRaw = (pushRaw > 0n ? pushRaw : lpRaw).toString(); q.playSignature = sig; this.saveQuote(q);
+        this.log(`[quote ${id}] play locked ${q.steps.pushedRaw} of ${lpRaw} LP, tx ${sig}`);
+      }
+      step(`${PUSH_BPS / 100}% of the LP locked in the vault`, q.steps.play);
       q.status = 'settled'; this.saveQuote(q);
       return q;
     } catch (e) {
@@ -525,6 +600,67 @@ export class Entry implements EntryLike {
       createTransferCheckedInstruction(src, mint, dst, op.publicKey, amount, decimals, [], program),
     );
     return sendAndConfirmTransaction(conn, tx, [op], { commitment: 'confirmed' });
+  }
+
+  /** LP of this quote's pool into the vault, recorded for the quote's player. Used for the play and, on a loss, the second push. */
+  async pushToVault(q: Quote, raw: bigint): Promise<string> {
+    if (raw <= 0n) throw new Error('nothing to push');
+    const op = this.d.operator;
+    const lpMint = new PublicKey(q.steps.lpMint), poolId = new PublicKey(q.steps.poolId);
+    const tx = new Transaction().add(
+      ComputeBudgetProgram.setComputeUnitLimit({ units: 200_000 }),
+      createVaultLpAtaIx(op.publicKey, this.d.playProgramId, lpMint),
+      playIx({ programId: this.d.playProgramId, operator: op.publicKey, player: this.playerKey(q), poolState: poolId, lpMint, sourceLp: getAssociatedTokenAddressSync(lpMint, op.publicKey), amount: raw }),
+    );
+    const sig = await sendAndConfirmTransaction(this.d.connection, tx, [op], { commitment: 'confirmed' });
+    this.invalidatePot();
+    return sig;
+  }
+
+  /** Plain LP tokens to a wallet: the winner's share, unlocked, theirs to remove on Raydium. */
+  async sendLp(lpMint: PublicKey, raw: bigint, to: PublicKey): Promise<string> {
+    return this.sendTokens(lpMint, TOKEN_PROGRAM_ID, raw, to);
+  }
+
+  /** A one-of-one token (the Raydium lock NFT) to a wallet: where a donor's fee claim is forwarded once they name one. */
+  async sendNft(nftMint: PublicKey, to: PublicKey): Promise<string> {
+    return this.sendTokens(nftMint, TOKEN_PROGRAM_ID, 1n, to);
+  }
+
+  /**
+   * Who funded a one-time deposit address: the fee payer of the oldest transaction that touched it
+   * and was not ours. A donor who never named a wallet still gets their lock NFT this way.
+   */
+  async payerOf(q: Quote): Promise<PublicKey | null> {
+    try {
+      const deposit = new PublicKey(q.depositAddress);
+      const sigs = await this.d.connection.getSignaturesForAddress(deposit, { limit: 25 }, 'confirmed');
+      for (const s of [...sigs].reverse()) {
+        if (s.err) continue;
+        const tx = await this.d.connection.getTransaction(s.signature, { maxSupportedTransactionVersion: 0, commitment: 'confirmed' });
+        if (!tx) continue;
+        const keys = tx.transaction.message.getAccountKeys({ accountKeysFromLookups: tx.meta?.loadedAddresses ?? undefined });
+        const payer = keys.get(0);
+        if (!payer || payer.equals(deposit) || payer.equals(this.d.operator.publicKey)) continue;
+        return payer;
+      }
+    } catch (e) {
+      this.log(`[quote ${q.id}] could not read who paid the deposit: ${e instanceof Error ? e.message : e}`);
+    }
+    return null;
+  }
+
+  /**
+   * Lock LP with Raydium's lock program (LockrWmn…): the position can never be withdrawn; the NFT it
+   * mints claims the position's share of trading fees, and it belongs to `nftOwner`.
+   */
+  async lockOnRaydium(poolId: PublicKey, lpRaw: bigint, nftOwner: PublicKey): Promise<{ signature: string; nftMint: PublicKey }> {
+    if (lpRaw <= 0n) throw new Error('nothing to lock');
+    const raydium = await this.getRaydium();
+    const { poolInfo, poolKeys } = await raydium.cpmm.getPoolInfoFromRpc(poolId.toBase58());
+    const { execute, extInfo } = await raydium.cpmm.lockLp({ poolInfo, poolKeys, lpAmount: new BN(lpRaw.toString()), feeNftOwner: nftOwner, withMetadata: true, txVersion: TxVersion.V0 });
+    const { txId } = await execute({ sendAndConfirm: true });
+    return { signature: txId, nftMint: extInfo.nftMint };
   }
 
   /** Everything the vault holds, per LP mint: the pot. */
@@ -564,6 +700,34 @@ export class Entry implements EntryLike {
   }
 
   private potCache: { at: number; usd: number; detail: VaultPosition[] } | null = null;
+  private lpPriceCache = new Map<string, { at: number; pool: PublicKey; usdPerRaw: number }>();
+
+  /**
+   * What one raw unit of an LP mint is worth: its share of the pool's reserves, both sides (twice the
+   * side Jupiter can price). Only pools with the master token on one side. Cached for a minute.
+   */
+  async priceLp(lpMint: PublicKey): Promise<{ pool: PublicKey; usdPerRaw: number }> {
+    const hit = this.lpPriceCache.get(lpMint.toBase58());
+    if (hit && Date.now() - hit.at < POT_CACHE_MS) return hit;
+    const conn = this.d.connection;
+    const pools = await findCpmmPoolsWithMaster(conn, this.d.cpmmProgramId, this.d.masterMint);
+    const pool = pools.find((p) => p.lpMint.equals(lpMint));
+    if (!pool) throw new Error(`LP ${lpMint.toBase58()} is not a pool with the master token`);
+    const raydium = await this.getRaydium();
+    const other = pool.token0.equals(this.d.masterMint) ? pool.token1 : pool.token0;
+    const otherIsA = pool.token0.equals(other);
+    const [{ rpcData }, supply, price] = await Promise.all([
+      raydium.cpmm.getPoolInfoFromRpc(pool.pool.toBase58()),
+      getMint(conn, lpMint, 'confirmed').then((m) => m.supply),
+      this.prices(other.toBase58()),
+    ]);
+    if (supply === 0n) throw new Error(`LP ${lpMint.toBase58()} has no supply`);
+    const reserveOther = BigInt((otherIsA ? rpcData.baseReserve : rpcData.quoteReserve).toString());
+    const usdPerRaw = (2 * (Number(reserveOther) / 10 ** price.decimals) * price.tokenUsd) / Number(supply);
+    const out = { at: Date.now(), pool: pool.pool, usdPerRaw };
+    this.lpPriceCache.set(lpMint.toBase58(), out);
+    return out;
+  }
 
   /**
    * What the vault holds, priced from chain: for each LP position, its share of the pool's reserves,
@@ -579,25 +743,15 @@ export class Entry implements EntryLike {
     if (holdings.length) {
       const pools = await findCpmmPoolsWithMaster(conn, this.d.cpmmProgramId, this.d.masterMint);
       const byLp = new Map(pools.map((p) => [p.lpMint.toBase58(), p]));
-      const raydium = await this.getRaydium();
       for (const h of holdings) {
         const pool = byLp.get(h.lpMint.toBase58());
         const pos: VaultPosition = { lpMint: h.lpMint.toBase58(), pool: pool?.pool.toBase58() ?? null, lp: h.amount.toString(), share: 0, usd: 0, priced: false };
         positions.push(pos);
         if (!pool) continue;
         try {
-          const other = pool.token0.equals(this.d.masterMint) ? pool.token1 : pool.token0;
-          const otherIsA = pool.token0.equals(other);
-          const [{ rpcData }, supply, price] = await Promise.all([
-            raydium.cpmm.getPoolInfoFromRpc(pool.pool.toBase58()),
-            getMint(conn, h.lpMint, 'confirmed').then((m) => m.supply),
-            this.prices(other.toBase58()),
-          ]);
-          if (supply === 0n) continue;
-          const reserveOther = BigInt((otherIsA ? rpcData.baseReserve : rpcData.quoteReserve).toString());
-          pos.share = Number(h.amount) / Number(supply);
-          const otherUi = (Number(reserveOther) / 10 ** price.decimals) * pos.share;
-          pos.usd = Math.round(2 * otherUi * price.tokenUsd * 100) / 100;
+          const [{ usdPerRaw }, supply] = await Promise.all([this.priceLp(h.lpMint), getMint(conn, h.lpMint, 'confirmed').then((m) => m.supply)]);
+          pos.share = supply === 0n ? 0 : Number(h.amount) / Number(supply);
+          pos.usd = Math.round(Number(h.amount) * usdPerRaw * 100) / 100;
           pos.priced = true;
         } catch (e) {
           this.log(`pot: could not price LP ${h.lpMint.toBase58()}: ${e instanceof Error ? e.message : e}`);
@@ -661,7 +815,9 @@ export class Entry implements EntryLike {
     if (!info) {
       // Raydium's creation fee comes out of the operator's SOL: say so, with the number, instead of a simulation error
       const poolFeeSol = Number(feeConfig.createPoolFee ?? 0) / LAMPORTS_PER_SOL;
-      const needSol = poolFeeSol + POOL_RENT_SOL;
+      // when SOL is the token side it leaves the fee payer too: it must be there on top of the fee
+      const committedSol = mint.equals(NATIVE_SOL_MINT) ? Number(tokenRaw) / LAMPORTS_PER_SOL : 0;
+      const needSol = poolFeeSol + POOL_RENT_SOL + committedSol;
       const haveSol = (await conn.getBalance(op.publicKey)) / LAMPORTS_PER_SOL;
       if (haveSol < needSol) throw new NeedsSolError(op.publicKey.toBase58(), haveSol, needSol, poolFeeSol);
       const { execute, extInfo } = await raydium.cpmm.createPool({

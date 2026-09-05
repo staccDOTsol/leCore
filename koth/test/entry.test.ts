@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { Connection, Keypair, PublicKey, TransactionMessage, VersionedTransaction } from '@solana/web3.js';
 import { MINT_SIZE, MintLayout, TOKEN_PROGRAM_ID } from '@solana/spl-token';
-import { JupiterSwapper, MIN_TOPUP_SOL, NeedsSolError, QUOTE_BUFFER_PCT, UltraSwapper, computeQuote, jupiterPrices, waitForIncrease } from '../src/entry.js';
+import { JupiterSwapper, MIN_TOPUP_SOL, NeedsSolError, QUOTE_BUFFER_PCT, UltraSwapper, computeQuote, jupiterPrices, waitForIncrease, splitDeposit } from '../src/entry.js';
 import { BOND_THRESHOLD_TOKEN, MASTER_CURVE_DEFAULTS, ZOO_TOKEN_MINT, masterCurveParams } from '../src/dbc.js';
 import { TokenAuthorityOption, TokenType } from '@meteora-ag/dynamic-bonding-curve-sdk';
 
@@ -46,6 +46,17 @@ describe('master curve', () => {
     expect(p.migrationQuoteThreshold.toString()).toBe(String(100_000_000 * 1e6));
     const partner = masterCurveParams({ authority: 'partner' });
     expect(partner.tokenUpdateAuthority).toBe(TokenAuthorityOption.PartnerUpdateAuthority);
+  });
+});
+
+describe('splitDeposit', () => {
+  it('a play: the inference share by the quote\'s ratio, half the rest to swap', () => {
+    const r = splitDeposit({ mint: 'X', inferenceUsd: 1, totalUsd: 25, extraSol: 0 }, 2_500_000n);
+    expect(r).toEqual({ inferenceShare: 100_000n, extra: 0n, stake: 2_400_000n, half: 1_200_000n });
+  });
+  it('a SOL donation: no inference share, the pool-creation SOL set aside before the halves', () => {
+    const r = splitDeposit({ mint: 'So11111111111111111111111111111111111111112', inferenceUsd: 0, totalUsd: 50, extraSol: 0.18 }, 1_180_000_000n);
+    expect(r).toEqual({ inferenceShare: 0n, extra: 180_000_000n, stake: 1_000_000_000n, half: 500_000_000n });
   });
 });
 

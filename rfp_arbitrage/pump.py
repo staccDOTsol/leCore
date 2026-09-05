@@ -131,9 +131,32 @@ class Pump:
                 self.counts["fetched"] += 1
         return n
 
+    def pending_gate_free(self, st: Store) -> list[Opportunity]:
+        """Rows with no verdict at all: a free heuristic verdict now, the paid read later."""
+        return st.opportunities(
+            "intellectual_score >= ? AND (deadline='' OR deadline >= date('now')) AND key IN "
+            "(SELECT DISTINCT opportunity_key FROM documents) AND key NOT IN (SELECT opportunity_key FROM verdicts)",
+            (self.threshold,), limit=self.batch * 10)
+
     def step_gate(self, st: Store) -> int:
         from .clauses import analyze
         n = 0
+        if self.llm is not None:
+            for o in self.pending_gate_free(st):
+                with self._lock:
+                    if o.key in self._gate_claimed:
+                        continue
+                    self._gate_claimed.add(o.key)
+                try:
+                    st.put_verdict(analyze(o, st.full_text(o.key), None))
+                    n += 1
+                    with self._lock:
+                        self.counts["gated"] += 1
+                finally:
+                    with self._lock:
+                        self._gate_claimed.discard(o.key)
+            if n:
+                return n
         for o in self.pending_gate(st):
             with self._lock:
                 if o.key in self._gate_claimed:

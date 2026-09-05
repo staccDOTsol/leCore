@@ -9,18 +9,22 @@ on-chain** to whoever is holding the hill. Take it and the master token literall
 by the AI. Lose it and you're in the hall of fame.
 
 1. `shill <mint> <your pitch>` — any Jupiter-tradable coin. Sell it.
-2. You get a **burner address and a number**. Send that much of *your* coin. Entry is 0.25 SOL worth, +1 %
+2. You get a **burner address and a number**. Send that much of *your* coin. Entry is 0.05 SOL worth, +1 %
    every time the hill flips, plus the AI's tab, plus 5 % slop. One-time address; we don't hold your bags.
 3. `paid <quote-id>` — your coin's **real numbers** (liquidity, volume, holders, chart) become a monster card.
    The master shillbot shills the sitting king. The AI judge scores both pitches. Cards are context; the
    pitch wins.
-4. **Win:** the master token's metadata is rewritten on-chain to your coin. Your name on the crown.
-   **Lose:** the king stays. Your entry stays too.
+4. **Win:** the master token's metadata is rewritten on-chain to your coin. Your name on the crown. **And you take
+   the pot: half of every LP position in the vault**, sent to the wallet you named with `wallet <address>`.
+   **Lose:** the king stays. Your entry stays in the vault, in the pot for whoever takes the hill next.
+
+Every reply from the bot ends with the pot in dollars: half the vault's book value (every settled stake at entry
+price, minus what winners took).
 
 Where the money goes: half your entry is swapped into the master token, paired with your coin in a Raydium
-pool `<yourcoin>/MASTER`, and the LP is locked in a vault with **no withdraw instruction**. Every attempt is
-permanent liquidity for the crown, paired with your coin. Nobody can pull it, including us. The AI's cut goes
-to openzoo in `$TOKEN`. No website: it lives in Telegram, Discord and on X.
+pool `<yourcoin>/MASTER`, and the LP goes into the vault. The vault is the pot: there is no withdraw, LP leaves
+it only through `Award`, which the game's operator key uses to hand a winner half of everything in it. The other
+half keeps stacking. The AI's cut goes to openzoo in `$TOKEN`. No website: it lives in Telegram, Discord and on X.
 
 There is no website. The game exists as the bots (Telegram, Discord, an automated X account) and as
 three things on Solana:
@@ -28,14 +32,14 @@ three things on Solana:
 | thing | where | why it is this |
 |---|---|---|
 | the master shill token | Meteora **Dynamic Bonding Curve**, quoted in `$TOKEN` (`EVUL…pump`, Token-2022), bonds at **100M** | DBC's config has `tokenAuthorityOption = CreatorUpdateAuthority`: the program creates the metadata as **mutable** and hands the update authority to the pool creator inside `initialize_virtual_pool` (`TokenAuthorityOption::get_update_authority` in the program). So the launcher wallet can rewrite `name` / `symbol` / `uri` on chain, from day one, with a plain Metaplex `UpdateMetadataAccountV2` (or Token-2022 `UpdateField`). |
-| the play vault | `koth/program` — a **Pinocchio** program | A *play* is Raydium CPMM LP deposited into a program PDA, accepted only when the pool pairs the master token with something. No withdraw instruction: every attempt is permanent liquidity for `<token>/MASTER`. |
+| the play vault | `koth/program` — a **Pinocchio** program | A *play* is Raydium CPMM LP deposited into a program PDA, accepted only when the pool pairs the master token with something. No withdraw: LP leaves only through `Award`, admin-signed, half of a position at a time, to a winner. The vault is the pot. |
 | inference | **openzoo** (openzoo.fun) | Every model call — the judge, the master shillbot, the metadata remix — goes through the zoo's OpenAI-compatible, x402-paid gateway. The receipt (routed model, USD billed) is on the ledger. |
 
 ## The loop
 
 1. A player says `shill <mint> <pitch>` to a bot.
 2. They get a **one-time throwaway deposit address** and an exact amount of *their* token: the attempt
-   fee (**0.25 SOL worth, ×1.01 per successful takeover**) plus an inference estimate, both **+5 %**.
+   fee (**0.05 SOL worth, ×1.01 per successful takeover**) plus an inference estimate, both **+5 %**.
    No wallets are hosted for anyone; the throwaway key is deleted the moment the deposit is swept.
 3. They say `paid <quote-id>`. The operator sweeps the deposit, converts the inference share into
    `$TOKEN` / LEOS / USDC for the openzoo wallet, swaps **half** the stake into the master token on
@@ -66,7 +70,7 @@ src/play.ts       client for the play program (PDAs, instructions, decoders, poo
 src/commands.ts   king / hall / fee / shill / paid / help
 src/surfaces/     telegram.ts (Bot API long-poll), discord.ts (discord.js), x.ts (mentions -> threads + media, the Telegram mirror)
 src/bot.ts        the runner: surfaces + the /metadata + /assets static server + the shill cadence
-program/          koth-play (Pinocchio, no_std): Initialize / Play / SetMaster
+program/          koth-play (Pinocchio, no_std): Initialize / Play / SetMaster / Award (the pot, admin-signed)
 scripts/          create-config, launch-master, read-metadata, update-metadata, init-play, challenge, preflight
 ```
 

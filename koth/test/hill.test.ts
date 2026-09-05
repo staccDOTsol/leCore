@@ -26,10 +26,10 @@ function hill(opts: { now?: () => number } = {}) {
 }
 
 describe('attempt fee', () => {
-  it('starts at 0.25 SOL and compounds 1% per takeover', () => {
-    expect(attemptFeeSol(0)).toBe(0.25);
-    expect(attemptFeeSol(1)).toBe(0.2525);
-    expect(attemptFeeSol(10)).toBeCloseTo(0.25 * 1.01 ** 10, 6);
+  it('starts at 0.05 SOL and compounds 1% per takeover', () => {
+    expect(attemptFeeSol(0)).toBe(0.05);
+    expect(attemptFeeSol(1)).toBe(0.0505);
+    expect(attemptFeeSol(10)).toBeCloseTo(0.05 * 1.01 ** 10, 6);
     expect(attemptFeeSol(2, 1, 10)).toBeCloseTo(1.21, 6);
   });
 });
@@ -40,7 +40,7 @@ describe('hill', () => {
     const out = await h.challenge({ mint: A, pitch: 'alpha wins', author: 'p1', surface: 'telegram' });
     expect(out.record.result).toBe('won');
     expect(out.king?.reign).toBe(1);
-    expect(entry.calls[0]).toEqual({ player: 'p1', mint: A, feeSol: 0.25 });
+    expect(entry.calls[0]).toEqual({ player: 'p1', mint: A, feeSol: 0.05 });
     expect(chain.updates).toHaveLength(1);
     expect(chain.master.name).toBe('KING Alpha');
     expect(chain.master.symbol).toBe('KALPHA');
@@ -50,7 +50,7 @@ describe('hill', () => {
     expect(doc.properties.koth.king_mint).toBe(A);
     expect(doc.properties.koth.play_signature).toBe('play-1');
     expect(doc.attributes.find((a) => a.trait_type === 'HP')?.value).toBe(out.king?.card.stats.hp);
-    expect(h.attemptFee()).toBe(0.2525);
+    expect(h.attemptFee()).toBe(0.0505);
   });
 
   it('a weaker challenger loses, pays, and the king stays; a stronger one takes over and the old king enters the hall', async () => {
@@ -62,7 +62,7 @@ describe('hill', () => {
     expect(lost.record.playSignature).toBe('play-2');
     expect(h.king?.mint).toBe(A);
     expect(chain.updates).toHaveLength(1);
-    expect(entry.calls[1].feeSol).toBe(0.2525);
+    expect(entry.calls[1].feeSol).toBe(0.0505);
 
     const won = await h.challenge({ mint: C, pitch: 'gamma', author: 'p3', surface: 'x' });
     expect(won.record.result).toBe('won');
@@ -70,9 +70,27 @@ describe('hill', () => {
     expect(h.king?.reign).toBe(2);
     expect(h.hallOfFame.map((k) => k.mint)).toEqual([A]);
     expect(chain.master.name).toBe('KING Gamma');
-    expect(h.attemptFee()).toBeCloseTo(0.25 * 1.01 ** 2, 6);
+    expect(h.attemptFee()).toBeCloseTo(0.05 * 1.01 ** 2, 6);
     expect(h.snapshot.challenges).toHaveLength(3);
     expect(won.record.usage?.usd).toBeGreaterThan(0);
+  });
+
+  it('the pot: every stake adds to the vault, a winner takes half, the rest keeps stacking', async () => {
+    const { h } = hill();
+    expect(h.potUsd()).toBe(0);
+    // an empty hill: the first winner takes half of what is there (their own stake included)
+    const first = await h.challenge({ mint: B, pitch: 'beta', author: 'p1', surface: 'telegram' }, { prepaid: { playSignature: 's1', feeSol: 0.05, stakeUsd: 10 } });
+    expect(first.potUsd).toBe(5); expect(h.snapshot.vaultUsd).toBe(5); expect(h.potUsd()).toBe(2.5);
+    // a failed bid stays in the vault
+    const lost = await h.challenge({ mint: B, pitch: 'beta again', author: 'p2', surface: 'x' }, { prepaid: { playSignature: 's2', feeSol: 0.05, stakeUsd: 10 } });
+    expect(lost.record.result).toBe('lost'); expect(lost.potUsd).toBeNull(); expect(h.snapshot.vaultUsd).toBe(15); expect(h.potUsd()).toBe(7.5);
+    // the next winner takes half of everything on the address, the first winner's leftover included
+    const won = await h.challenge({ mint: C, pitch: 'gamma', author: 'p3', surface: 'x' }, { prepaid: { playSignature: 's3', feeSol: 0.0505, stakeUsd: 10 } });
+    expect(won.record.result).toBe('won'); expect(won.potUsd).toBe(12.5); expect(h.snapshot.vaultUsd).toBe(12.5);
+    expect(h.snapshot.awards.map((a) => [a.author, a.potUsd])).toEqual([['p1', 5], ['p3', 12.5]]);
+    // seeding only applies to a vault with no book value yet
+    h.seedVaultUsd(999); expect(h.snapshot.vaultUsd).toBe(12.5);
+    const fresh = hill().h; fresh.seedVaultUsd(101.5); expect(fresh.potUsd()).toBe(50.75);
   });
 
   it('reuses the master shillbot pitch within its ttl and rewrites it after', async () => {

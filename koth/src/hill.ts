@@ -2,7 +2,7 @@
  * The hill itself: who is king, what an attempt costs, and what happens when someone takes it.
  *
  * One challenge, in order:
- *   1. the attempt fee is quoted: 0.25 SOL worth of the player's token, x1.01 per takeover so far
+ *   1. the attempt fee is quoted: 0.05 SOL worth of the player's token, x1.01 per takeover so far
  *   2. the entry flow collects it (swap half to the master token, create/deposit the CPMM pool,
  *      lock the LP in the play vault) -- the player only sees "send X"; the LP is the receipt
  *   3. the challenger's token is profiled and turned into a card; so is the king's, fresh
@@ -48,6 +48,10 @@ export type ChallengeRecord = {
   surface: string;
   pitch: string;
   feeSol: number;
+  /** What this attempt put into the vault, in USD at entry. */
+  stakeUsd: number;
+  /** Set on a win: the pot this winner took, half the vault's book value at that moment. */
+  potUsd: number | null;
   result: 'won' | 'lost' | 'error';
   verdict: Verdict | null;
   usage: Usage | null;
@@ -64,14 +68,22 @@ export type HillState = {
   /** Successful takeovers so far; drives the fee schedule. */
   takeovers: number;
   masterShill: { reign: number; text: string; at: number } | null;
+  /**
+   * The vault's book value: every settled stake in USD at entry, minus what winners took. The pot
+   * shown everywhere is half of it, because a winner takes half of every LP position in the vault.
+   */
+  vaultUsd: number;
+  /** Every payout so far, newest last. */
+  awards: { at: number; reign: number; author: string; potUsd: number }[];
 };
 
 export function emptyState(): HillState {
-  return { king: null, hallOfFame: [], challenges: [], takeovers: 0, masterShill: null };
+  return { king: null, hallOfFame: [], challenges: [], takeovers: 0, masterShill: null, vaultUsd: 0, awards: [] };
 }
 
-/** 0.25 SOL worth, +1% per successful takeover (compounding), by directive. */
-export function attemptFeeSol(takeovers: number, baseSol = 0.25, growthPct = 1): number {
+/** 0.05 SOL worth, +1% per successful takeover (compounding), by directive. */
+export const BASE_FEE_SOL = 0.05;
+export function attemptFeeSol(takeovers: number, baseSol = BASE_FEE_SOL, growthPct = 1): number {
   return Number((baseSol * Math.pow(1 + growthPct / 100, Math.max(0, takeovers))).toFixed(6));
 }
 
@@ -128,7 +140,8 @@ export type HillDeps = {
   log?: (line: string) => void;
 };
 
-export type ChallengeOutcome = { record: ChallengeRecord; king: KingRecord | null; oneLiner: string; commentary: string };
+export type ChallengeOutcome = { record: ChallengeRecord; king: KingRecord | null; oneLiner: string; commentary: string; potUsd: number | null };
+export type Prepaid = { playSignature: string; feeSol: number; stakeUsd?: number };
 
 export class Hill {
   private state: HillState;
@@ -142,6 +155,15 @@ export class Hill {
   get king(): KingRecord | null { return this.state.king ? structuredClone(this.state.king) : null; }
   get hallOfFame(): KingRecord[] { return structuredClone(this.state.hallOfFame); }
   attemptFee(): number { return attemptFeeSol(this.state.takeovers, this.deps.baseFeeSol, this.deps.feeGrowthPct); }
+  get baseFeeSol(): number { return this.deps.baseFeeSol ?? BASE_FEE_SOL; }
+  /** The pot: half the vault's book value, what the next winner takes. */
+  potUsd(): number { return Math.round((this.state.vaultUsd / 2) * 100) / 100; }
+  /** First boot on a vault that predates the pot: take the settled stakes as the book value. */
+  seedVaultUsd(usd: number): void {
+    if (this.state.vaultUsd > 0 || usd <= 0) return;
+    this.state.vaultUsd = usd; this.save();
+    this.log(`vault book value seeded at $${usd.toFixed(2)} (pot $${this.potUsd().toFixed(2)})`);
+  }
 
   private now(): number { return this.deps.now ? this.deps.now() : Date.now(); }
   private log(line: string): void { (this.deps.log ?? (() => {}))(line); }
@@ -179,17 +201,18 @@ export class Hill {
    * Serialized: one battle at a time, so two challengers cannot both dethrone the same king.
    * `prepaid` carries the proof of an entry the bots already settled (throwaway deposit -> locked LP).
    */
-  challenge(shill: Shill, opts: { prepaid?: { playSignature: string; feeSol: number } } = {}): Promise<ChallengeOutcome> {
+  challenge(shill: Shill, opts: { prepaid?: Prepaid } = {}): Promise<ChallengeOutcome> {
     const run = this.busy.then(() => this.runChallenge(shill, opts));
     this.busy = run.catch(() => undefined);
     return run;
   }
 
-  private async runChallenge(shill: Shill, opts: { prepaid?: { playSignature: string; feeSol: number } }): Promise<ChallengeOutcome> {
+  private async runChallenge(shill: Shill, opts: { prepaid?: Prepaid }): Promise<ChallengeOutcome> {
     const id = randomBytes(6).toString('hex');
     const feeSol = opts.prepaid?.feeSol ?? this.attemptFee();
     const rec: ChallengeRecord = {
       id, at: this.now(), mint: shill.mint, author: shill.author, surface: shill.surface, pitch: shill.pitch, feeSol,
+      stakeUsd: opts.prepaid?.stakeUsd ?? 0, potUsd: null,
       result: 'error', verdict: null, usage: null, playSignature: null, error: null, challenger: null, incumbent: null,
     };
     const usages: Usage[] = [];
@@ -197,7 +220,8 @@ export class Hill {
       // 1-2. the fee, as locked LP (already settled by the bots when prepaid)
       const entry = opts.prepaid ?? await this.deps.entry.play({ player: shill.author, mint: shill.mint, feeSol });
       rec.playSignature = entry.playSignature || null;
-      this.log(`[${id}] entry ok fee=${feeSol} SOL play=${rec.playSignature ?? 'free'}`);
+      this.state.vaultUsd = Math.round((this.state.vaultUsd + rec.stakeUsd) * 100) / 100;   // the stake is in the vault now, win or lose
+      this.log(`[${id}] entry ok fee=${feeSol} SOL stake=$${rec.stakeUsd} play=${rec.playSignature ?? 'free'} vault=$${this.state.vaultUsd}`);
 
       // 3. cards
       const challenger = await this.contender(shill);
@@ -209,7 +233,7 @@ export class Hill {
         rec.result = 'won';
         rec.usage = usages.length ? sumUsage(usages) : null;
         this.finish(rec);
-        return { record: rec, king, oneLiner: `${king.name} takes the empty hill.`, commentary: 'Nobody was home.' };
+        return { record: rec, king, oneLiner: `${king.name} takes the empty hill.`, commentary: 'Nobody was home.', potUsd: rec.potUsd };
       }
 
       const incumbent = await this.contender({ mint: this.state.king.mint, pitch: this.state.king.pitch, author: this.state.king.author, surface: this.state.king.surface as Shill['surface'] });
@@ -227,12 +251,12 @@ export class Hill {
         rec.result = 'won';
         rec.usage = sumUsage(usages);
         this.finish(rec);
-        return { record: rec, king, oneLiner: j.verdict.one_liner, commentary: j.verdict.commentary };
+        return { record: rec, king, oneLiner: j.verdict.one_liner, commentary: j.verdict.commentary, potUsd: rec.potUsd };
       }
       rec.result = 'lost';
       rec.usage = sumUsage(usages);
       this.finish(rec);
-      return { record: rec, king: this.king, oneLiner: j.verdict.one_liner, commentary: j.verdict.commentary };
+      return { record: rec, king: this.king, oneLiner: j.verdict.one_liner, commentary: j.verdict.commentary, potUsd: null };
     } catch (e) {
       rec.result = 'error';
       rec.error = e instanceof Error ? e.message : String(e);
@@ -268,6 +292,12 @@ export class Hill {
     const fields: MetadataFields = { name: r.fields.name, symbol: r.fields.symbol, uri };
     const tx = await this.deps.chain.updateMasterMetadata(fields);
     this.log(`[${rec.id}] crowned reign ${reign}: "${fields.name}" $${fields.symbol} ${uri} tx=${tx.signature}`);
+
+    // the pot: half of everything in the vault goes to the winner (paid out by the bots via Award); the rest keeps stacking
+    rec.potUsd = this.potUsd();
+    this.state.vaultUsd = Math.round((this.state.vaultUsd - rec.potUsd) * 100) / 100;
+    this.state.awards.push({ at: crownedAt, reign, author: winner.shill.author, potUsd: rec.potUsd });
+    this.log(`[${rec.id}] pot $${rec.potUsd} to ${winner.shill.author}; vault now $${this.state.vaultUsd}`);
 
     if (this.state.king) this.state.hallOfFame.push(this.state.king);
     const king: KingRecord = {

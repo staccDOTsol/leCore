@@ -4,7 +4,7 @@
  * By directive:
  *   - no hosted wallets: every attempt gets a ONE-TIME throwaway deposit address whose key lives
  *     only until the deposit is swept, then is deleted
- *   - the quote is the play stake (0.25 SOL worth, x1.01 per takeover) PLUS an inference estimate,
+ *   - the quote is the play stake (0.05 SOL worth, x1.01 per takeover) PLUS an inference estimate,
  *     both marked up 5%, denominated in the player's own token
  *   - the people never see LP: after the deposit lands the operator sweeps it, converts the
  *     inference share to TOKEN (or USDC / LEOS) for the openzoo wallet, swaps half of the stake
@@ -31,7 +31,7 @@ import {
 } from '@raydium-io/raydium-sdk-v2';
 import { NATIVE_SOL_MINT, ZOO_TOKEN_MINT } from './dbc.js';
 import type { EntryLike } from './hill.js';
-import { createVaultLpAtaIx, decodePoolState, playIx } from './play.js';
+import { awardIx, createVaultLpAtaIx, decodePoolState, playIx, vaultPda } from './play.js';
 
 export const USDC_MINT = new PublicKey('EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v');
 export { ZOO_TOKEN_MINT };
@@ -456,6 +456,54 @@ export class Entry implements EntryLike {
       createTransferCheckedInstruction(src, mint, dst, op.publicKey, amount, decimals, [], program),
     );
     return sendAndConfirmTransaction(conn, tx, [op], { commitment: 'confirmed' });
+  }
+
+  /** Everything the vault holds, per LP mint: the pot. */
+  async vaultHoldings(): Promise<{ lpMint: PublicKey; amount: bigint }[]> {
+    const r = await this.d.connection.getParsedTokenAccountsByOwner(vaultPda(this.d.playProgramId)[0], { programId: TOKEN_PROGRAM_ID }, 'confirmed');
+    return r.value
+      .map((a) => ({ lpMint: new PublicKey(a.account.data.parsed.info.mint as string), amount: BigInt(a.account.data.parsed.info.tokenAmount.amount as string) }))
+      .filter((h) => h.amount > 0n);
+  }
+
+  /**
+   * The prize: half of every LP position in the vault, moved to the winner (the config admin, our
+   * operator key, signs `Award`). A few pools per transaction; each transfer is logged and returned.
+   */
+  async awardHalf(winner: PublicKey): Promise<{ lpMint: string; amount: string; signature: string }[]> {
+    const op = this.d.operator, conn = this.d.connection;
+    const holdings = (await this.vaultHoldings()).filter((h) => h.amount >= 2n);
+    const out: { lpMint: string; amount: string; signature: string }[] = [];
+    for (let i = 0; i < holdings.length; i += 3) {
+      const batch = holdings.slice(i, i + 3);
+      const tx = new Transaction().add(ComputeBudgetProgram.setComputeUnitLimit({ units: 60_000 * batch.length + 40_000 }));
+      for (const h of batch) {
+        const dst = getAssociatedTokenAddressSync(h.lpMint, winner, true);
+        tx.add(
+          createAssociatedTokenAccountIdempotentInstruction(op.publicKey, dst, winner, h.lpMint),
+          awardIx({ programId: this.d.playProgramId, admin: op.publicKey, lpMint: h.lpMint, destination: dst, amount: h.amount / 2n }),
+        );
+      }
+      const signature = await sendAndConfirmTransaction(conn, tx, [op], { commitment: 'confirmed' });
+      for (const h of batch) {
+        out.push({ lpMint: h.lpMint.toBase58(), amount: (h.amount / 2n).toString(), signature });
+        this.log(`award ${h.amount / 2n} of LP ${h.lpMint.toBase58()} -> ${winner.toBase58()}, tx ${signature}`);
+      }
+    }
+    return out;
+  }
+
+  /** What every settled attempt put into the vault, in USD at entry (backfills the pot's book value on first boot). */
+  settledStakeUsd(): number {
+    let usd = 0;
+    try {
+      for (const f of fs.readdirSync(this.quotesDir)) {
+        if (!f.endsWith('.json')) continue;
+        const q = JSON.parse(fs.readFileSync(path.join(this.quotesDir, f), 'utf8')) as Partial<Quote>;
+        if (q.status === 'settled' && typeof q.playFeeUsd === 'number') usd += q.playFeeUsd;
+      }
+    } catch { /* no quotes yet */ }
+    return Math.round(usd * 100) / 100;
   }
 
   /** LP of `lpMint` in the operator's associated account (where Raydium mints and deposits it). */

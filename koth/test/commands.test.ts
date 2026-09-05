@@ -24,6 +24,8 @@ class FakeEntry {
   }
   async checkDeposit(id: string) { const q = this.quotes.get(id)!; const paid = this.paid.has(id); return { quote: q, paid, balanceRaw: paid ? 26300000n : 0n }; }
   async settle(id: string): Promise<Quote> { const q = this.quotes.get(id)!; q.status = 'settled'; q.playSignature = `sig-${id}`; return q; }
+  awarded: string[] = [];
+  async awardHalf(winner: { toBase58(): string }) { this.awarded.push(winner.toBase58()); return [{ lpMint: 'LPMINT1', amount: '2596238674', signature: 'award-1' }]; }
 }
 
 function setup(entry: FakeEntry | null) {
@@ -63,8 +65,11 @@ describe('commands over the hill', () => {
     const { hill, commands } = setup(entry);
     const ctx = { surface: 'telegram' as const, author: '@alice', authorId: 'tg:1', text: '' };
     const t = async (text: string, over: Partial<typeof ctx> = {}) => { const r = await commands.handle({ ...ctx, ...over, text }); return { r, text: r ? plain(r.rich) : '' }; };
-    expect((await t('/king')).text).toMatch(/EMPTY/);
+    const king0 = await t('/king');
+    expect(king0.text).toMatch(/EMPTY/);
+    expect(king0.text).toMatch(/POT \$0\.00 · take the hill and win HALF THE VAULT/);          // every reply carries the pot
     const q = await t(`/shill ${A} sol is the chain the chain is sol`);
+    expect(q.text).toMatch(/no payout wallet yet/);
     expect(q.text).toMatch(/send exactly 26.3/); expect(q.text).toMatch(/DEPOSIT111/); expect(q.text).toMatch(/paid q1/);
     expect(q.r?.buttons?.[0]?.[0]?.copy).toBe('26.3');
     expect(q.r?.buttons?.[0]?.[1]?.copy).toBe('DEPOSIT111');
@@ -78,6 +83,14 @@ describe('commands over the hill', () => {
     const rt = plain(r!.rich);
     expect(rt).toMatch(/takes the empty hill/); expect(plain(r!.announce!)).toMatch(/master token is now/);
     expect(rt).toMatch(/play locked · tx: https:\/\/x\/sig-q1/);
+    // the win: the stake ($25) is in the vault, the winner takes half ($12.50), no wallet yet so it is held
+    expect(rt).toMatch(/YOU WIN THE POT ≈ \$12\.50/); expect(rt).toMatch(/held for you/); expect(rt).toMatch(/POT \$6\.25/);
+    expect(entry.awarded).toEqual([]);
+    const w = await t('wallet WzMaL78srutrF6CsxEkWuhMaDF5HZA6jNRaEPengqpb');
+    expect(w.text).toMatch(/payout wallet set/); expect(w.text).toMatch(/pot from reign 1 \(~\$12\.50\) is on its way/); expect(w.text).toMatch(/award-1/);
+    expect(entry.awarded).toEqual(['WzMaL78srutrF6CsxEkWuhMaDF5HZA6jNRaEPengqpb']);
+    expect((await t('wallet WzMaL78srutrF6CsxEkWuhMaDF5HZA6jNRaEPengqpb')).text).not.toMatch(/on its way/);   // nothing owed twice
+    expect((await t('wallet nope')).text).toMatch(/not a Solana address/);
     expect(hill.king?.mint).toBe(A);
     expect(hill.king?.playSignature).toBe('sig-q1');
     expect((await t('paid q1')).text).toMatch(/no open quote/);

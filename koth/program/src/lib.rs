@@ -4,8 +4,11 @@
 //! pool behind that LP pairs the master shill token with something else. The entry flow off chain
 //! (koth/src/entry.ts) turns a player's token into that LP: swap half to the master token on
 //! Jupiter, create the CPMM pool if it does not exist yet, deposit both halves, then call `Play`.
-//! The LP never leaves the vault: there is no withdraw instruction, so every attempt at the hill
-//! is permanent liquidity for a MASTER/<token> pair.
+//! The vault is the pot. There is no withdraw: LP leaves it only through `Award`, which the config
+//! admin (the game's operator key) uses to hand a winner their share -- half of everything the
+//! vault holds at that moment, per LP mint. The other half stays and keeps compounding with every
+//! failed bid, so every attempt at the hill is liquidity for a MASTER/<token> pair until someone
+//! takes the hill.
 //!
 //! Instructions (first byte is the tag):
 //!   0  Initialize { master_mint: [u8;32], cpmm_program: [u8;32] }
@@ -17,6 +20,9 @@
 //!         vault_authority (pda "vault"), token_program, system_program]
 //!   2  SetMaster { master_mint: [u8;32] }
 //!        [admin (signer), config]
+//!   3  Award { amount: u64 }
+//!        [admin (signer, == config.admin), config, lp_mint, vault_lp (owned by pda "vault"),
+//!         destination (winner's token account for lp_mint), vault_authority (pda "vault"), token_program]
 #![no_std]
 
 use pinocchio::{
@@ -172,6 +178,7 @@ pub enum Instruction {
     Initialize { master_mint: Pubkey, cpmm_program: Pubkey },
     Play { amount: u64 },
     SetMaster { master_mint: Pubkey },
+    Award { amount: u64 },
 }
 
 impl Instruction {
@@ -183,6 +190,7 @@ impl Instruction {
             }),
             Some((1, rest)) if rest.len() >= 8 => Ok(Instruction::Play { amount: read_u64(rest, 0) }),
             Some((2, rest)) if rest.len() >= 32 => Ok(Instruction::SetMaster { master_mint: read_pk(rest, 0) }),
+            Some((3, rest)) if rest.len() >= 8 => Ok(Instruction::Award { amount: read_u64(rest, 0) }),
             _ => Err(KothError::InvalidInstruction.into()),
         }
     }
@@ -196,6 +204,7 @@ pub fn process_instruction(program_id: &Pubkey, accounts: &[AccountInfo], data: 
         Instruction::Initialize { master_mint, cpmm_program } => process_initialize(accounts, &master_mint, &cpmm_program),
         Instruction::Play { amount } => process_play(accounts, amount),
         Instruction::SetMaster { master_mint } => process_set_master(accounts, &master_mint),
+        Instruction::Award { amount } => process_award(accounts, amount),
     }
 }
 
@@ -370,6 +379,61 @@ fn process_play(accounts: &[AccountInfo], amount: u64) -> ProgramResult {
     Ok(())
 }
 
+/// The pot pays out: the admin moves `amount` of one LP mint from the vault to a winner's token
+/// account. Off chain, `amount` is half of the vault's balance in that mint (koth/src/entry.ts
+/// `awardHalf`); on chain the only rules are the admin's signature and that the LP is really ours.
+fn process_award(accounts: &[AccountInfo], amount: u64) -> ProgramResult {
+    let [admin, config, lp_mint, vault_lp, destination, vault_authority, token_program] = accounts else {
+        return Err(ProgramError::NotEnoughAccountKeys);
+    };
+    if amount == 0 {
+        return Err(KothError::ZeroAmount.into());
+    }
+    if !admin.is_signer() {
+        return Err(KothError::MissingSigner.into());
+    }
+    if token_program.key() != &pinocchio_token::ID {
+        return Err(KothError::WrongProgram.into());
+    }
+    if !config.is_owned_by(&ID) || config.data_len() != CONFIG_LEN {
+        return Err(KothError::NotInitialized.into());
+    }
+    if config.key() != &find_program_address(&[CONFIG_SEED], &ID).0 {
+        return Err(KothError::InvalidPda.into());
+    }
+    {
+        let d = config.try_borrow_data()?;
+        if d[0] != CONFIG_DISC {
+            return Err(KothError::NotInitialized.into());
+        }
+        if &d[config::ADMIN..config::ADMIN + 32] != admin.key().as_ref() {
+            return Err(KothError::Unauthorized.into());
+        }
+    }
+    let (vault_pda, vault_bump) = find_program_address(&[VAULT_SEED], &ID);
+    if vault_authority.key() != &vault_pda {
+        return Err(KothError::InvalidPda.into());
+    }
+    {
+        let src = TokenAccount::from_account_info(vault_lp)?;
+        if src.mint() != lp_mint.key() || src.owner() != &vault_pda {
+            return Err(KothError::TokenAccountMismatch.into());
+        }
+        if src.amount() < amount {
+            return Err(ProgramError::InsufficientFunds);
+        }
+        let dst = TokenAccount::from_account_info(destination)?;
+        if dst.mint() != lp_mint.key() {
+            return Err(KothError::TokenAccountMismatch.into());
+        }
+    }
+    let bump = [vault_bump];
+    let seeds = [Seed::from(VAULT_SEED), Seed::from(&bump)];
+    Transfer { from: vault_lp, to: destination, authority: vault_authority, amount }.invoke_signed(&[Signer::from(&seeds)])?;
+    msg!("koth: awarded");
+    Ok(())
+}
+
 // ------------------------------------------------------------------------------------------- tests
 
 #[cfg(test)]
@@ -425,7 +489,11 @@ mod tests {
         let mut set = std::vec![2u8];
         set.extend_from_slice(&[5u8; 32]);
         assert_eq!(Instruction::unpack(&set).unwrap(), Instruction::SetMaster { master_mint: [5u8; 32] });
+        let mut award = std::vec![3u8];
+        award.extend_from_slice(&7u64.to_le_bytes());
+        assert_eq!(Instruction::unpack(&award).unwrap(), Instruction::Award { amount: 7 });
         assert!(Instruction::unpack(&[3u8]).is_err());
+        assert!(Instruction::unpack(&[4u8]).is_err());
         assert!(Instruction::unpack(&[1u8, 0, 0]).is_err());
         assert!(Instruction::unpack(&[]).is_err());
     }

@@ -33,6 +33,7 @@ export const BOT_COMMANDS = [
   { command: 'king', description: 'who holds the hill' },
   { command: 'shill', description: 'shill <mint> <pitch>: challenge the king' },
   { command: 'paid', description: 'paid <quote-id>: I sent it, fight' },
+  { command: 'wallet', description: 'wallet <address>: where your pot goes when you win' },
   { command: 'hall', description: 'the hall of fame' },
   { command: 'fee', description: 'what an attempt costs right now' },
   { command: 'help', description: 'how to play' },

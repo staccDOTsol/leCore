@@ -14,6 +14,9 @@ THE API (JSON in, JSON out)
   POST /capabilities/search  -- {"query": "..."} -> the capability homes that match, plain-English search.
   POST /sql                  -- {"sql": "..."} -> run a SQL statement against the service's VSA Database
                                 (CREATE TABLE / INSERT / SELECT ... -- the whole query layer, over HTTP).
+  GET  /doors                -- the curated MCP doors (holographic_mcp's tools: name, description, inputSchema).
+  POST /door                 -- {"name": "...", "arguments": {...}} -> run one MCP door IN-PROCESS over this
+                                node's own mind; the MCP result flattened to JSON, cost + receipt in _meta.
 
 Design: a tiny ROUTE REGISTRY (method, path) -> handler, so adding an endpoint is one line and the whole surface reads
 top to bottom. Extend `Service._register` to expose more faculties.
@@ -40,10 +43,12 @@ class Service:
     """Holds the standalone app's state (a VSA Database + the capability catalog) and the route table. One instance
     per running server."""
 
-    def __init__(self, token=None, persist_path=None, mind=None):
+    def __init__(self, token=None, persist_path=None, mind=None, memory_root=None):
         self.token = token
         self.persist_path = persist_path
         self._mind = mind                                   # the tool-interface mind (lazily built if left None)                    # if set: auto-load on start, auto-save after writes
+        self._memory_root = memory_root                     # the MCP doors' partition root (None: env / ./lecore_memory)
+        self._doors = {}                                    # tenant slug -> the MCPServer adapter POST /door runs (lazy)
         self.db = Database()
         self.db.add_namespace("user")                       # a ready-to-use writable namespace for SQL clients
         self.documents = []                                 # nested-object store for the GraphQL front door
@@ -55,6 +60,7 @@ class Service:
         self._games = {}                                    # world_id -> (ShardWorld, WorldStreamer): the live game rooms
         import threading as _threading
         self._game_lock = _threading.Lock()                 # one clock writer at a time (stream tick vs POSTed commands)
+        self._door_lock = _threading.Lock()                 # build each door adapter exactly once under serve(threads=True)
         self._register()
         if persist_path:
             self._load_from_disk()                          # restore a previous session's data if the file exists
@@ -80,6 +86,8 @@ class Service:
         self._routes[("POST", "/capabilities/search")] = self._capabilities_search
         self._routes[("GET", "/tools")] = self._tools           # the standard tool manifest (name, description, params)
         self._routes[("POST", "/invoke")] = self._invoke         # run one faculty: {name, args} -> its result
+        self._routes[("GET", "/doors")] = self._doors_list       # the curated MCP doors (holographic_mcp's tools)
+        self._routes[("POST", "/door")] = self._door             # run one MCP door in-process: {name, arguments}
         self._routes[("POST", "/frame")] = self._frame           # real-time frame serving: adaptive quality per session
         self._routes[("POST", "/game")] = self._game             # game rooms: create / submit commands / tick / snapshot
         self._routes[("GET", "/game/stream")] = self._game_stream_doc  # SSE push: per-client world deltas
@@ -116,6 +124,8 @@ class Service:
             return 404, {"ok": False, "error": "no such endpoint: %s %s" % (method, path)}
         try:
             return 200, handler(payload)
+        except _StatusError as e:                           # a handler that knows its own status (404 unknown door)
+            return e.status, {"ok": False, "error": str(e)}
         except QueryError as e:                             # expected, user-facing (bad SQL, unknown column, ...)
             return 400, {"ok": False, "error": str(e)}
         except Exception as e:                              # unexpected -- report the type, don't leak a traceback
@@ -255,6 +265,98 @@ class Service:
         except ValueError as e:
             return {"ok": False, "error": str(e)}
         return {"ok": True, "name": name, "result": _jsonable(result, self.refs)}
+
+    # ---- the MCP doors: holographic_mcp's curated tools, IN-PROCESS (GET /doors + POST /door) --------------
+    def door_adapter(self, tenant_id=None):
+        """The holographic_mcp adapter POST /door runs, built ONCE (lazily) per tenant over THIS service.
+
+        WHY IN-PROCESS AND WHY THIS SERVICE: an audit of the openzoo gateway found it consumed only
+        /tools + /invoke (+ the sidecar's hrr/memory) -- 35 of the adapter's 40 doors (corpus_bind/ask,
+        study, wisdom, void_explore, receipt_verify, the zoo ladder, ...) were reachable only by
+        spawning a stdio MCP host. The adapter's handle() is a plain dict -> dict method, so the HTTP
+        service can run it directly; passing `service=self` makes it wrap the mind /invoke already
+        owns instead of building a second one (measured: the first lecore_map on a cold mind costs
+        4.6 s -- paying that twice per process is the bug this avoids).
+
+        WHY PER TENANT: the adapter's corpus handles, external-memory partition and tool memo all
+        live under its memory_root, and the gateway forwards x-openzoo-namespace as tenant_id --
+        the same word the sidecar's /internal/v1/memory/* takes. One adapter per tenant, each
+        rooted at <memory_root>/tenants/<slug>, is the isolation the MCP docstring promises ("the
+        zoo passes one dir per tenant"), now enforced here rather than by the deployer. The mind is
+        still shared: zoo_* doors isolate per end user via their own user= argument, as before."""
+        import os
+        key = _tenant_slug(tenant_id)
+        with self._door_lock:
+            srv = self._doors.get(key)
+            if srv is None:
+                from holographic_mcp import MCPServer                   # lazy: the doors are optional
+                root = self._memory_root or os.environ.get("LECORE_MEMORY_ROOT", "./lecore_memory")
+                if key is not None:
+                    root = os.path.join(root, "tenants", key)
+                srv = MCPServer(service=self, memory_root=root)
+                self._doors[key] = srv
+        return srv
+
+    def _doors_list(self, _payload):
+        """The MCP doors POST /door can run: holographic_mcp's curated tools. Body: none. Returns: {ok, count, doors:[{name, description, inputSchema}]}."""
+        from holographic_mcp import _TOOLS
+        return {"ok": True, "count": len(_TOOLS),
+                "doors": [{"name": t["name"], "description": t.get("description", ""),
+                           "inputSchema": t.get("inputSchema", {})} for t in _TOOLS]}
+
+    def _door(self, payload):
+        """Run ONE MCP door in-process over this node's mind. Body: {name, arguments[, tenant_id]}. Returns: {ok, name, content:[...], isError, _meta:{lecore.cost, lecore.receipt}}.
+
+        The body is the MCP tools/call params; the reply is the MCP result FLATTENED (content blocks as
+        the adapter produced them, isError, and the adapter's _meta) -- so a client reads exactly what an
+        MCP host would, minus the JSON-RPC frame. ok mirrors `not isError`, the service-wide meaning of
+        ok. An unknown door is a 404 {error} and never builds the adapter; a malformed body is a 400.
+        tenant_id (top level, or inside arguments -- the gateway's convention) selects the partition and
+        is STRIPPED before the call: the doors' handlers take explicit keyword arguments, and a stray
+        tenant_id reached corpus_ask as `unexpected keyword argument` (measured) before this line.
+        WHAT THE PARTITION COVERS: corpus_*/study*/memory_* and the tool memo are per tenant (a handle bound
+        in one tenant is `unknown handle` in another -- pinned). The mind-backed doors are NOT: zoo_* and
+        wisdom_* run on the one shared mind, so a zoo_teach or wisdom_record in tenant A is served to tenant
+        B's zoo_ask / wisdom_ask (measured: A taught 'PURPLE-ELEPHANT-77', B's taught_only ask returned it
+        verbatim, via reflex-exact) unless the door's own user= argument is passed -- which the gateway
+        does not. A deployer who needs mind-level isolation must pass user= or run one front per tenant."""
+        import time
+        payload = payload or {}
+        name = payload.get("name", "")
+        args = payload.get("arguments", payload.get("args", {}))
+        if not isinstance(name, str) or not name:
+            raise QueryError("POST /door needs a JSON body {\"name\": \"<door>\", \"arguments\": {...}} "
+                             "(GET /doors lists the doors)")
+        if args is None:
+            args = {}
+        if not isinstance(args, dict):
+            raise QueryError("POST /door: \"arguments\" must be a JSON object")
+        from holographic_mcp import _TOOLS
+        if name not in {t["name"] for t in _TOOLS}:
+            raise _StatusError(404, "no such door: %r (GET /doors lists them)" % name)
+        args = dict(args)
+        tenant = payload.get("tenant_id")
+        stripped = args.pop("tenant_id", None)
+        if tenant is None:
+            tenant = stripped
+        t0 = time.perf_counter()
+        resp = self.door_adapter(tenant).handle({"jsonrpc": "2.0", "id": "door", "method": "tools/call",
+                                                 "params": {"name": name, "arguments": args}})
+        if not resp or "result" not in resp:
+            err = (resp or {}).get("error") or {}
+            raise _StatusError(404 if err.get("code") == -32602 else 500,
+                               err.get("message") or "door %r returned no result" % name)
+        result = resp["result"]
+        content = list(result.get("content") or [])
+        meta = dict(result.get("_meta") or {})
+        if "lecore.cost" not in meta:
+            # belt and braces: the adapter stamps cost on both its paths now, but a metered lane must
+            # never see a call without a price, so the HTTP boundary measures if the adapter did not.
+            meta["lecore.cost"] = {"elapsed_ms": round((time.perf_counter() - t0) * 1e3, 3),
+                                   "payload_bytes": sum(len(str(c.get("text", ""))) + len(str(c.get("data", "")))
+                                                        for c in content if isinstance(c, dict))}
+        is_error = bool(result.get("isError"))
+        return {"ok": not is_error, "name": name, "content": content, "isError": is_error, "_meta": meta}
 
     def _frame_stream_doc(self, _payload):
         """SSE PUSH channel (Server-Sent Events): GET /frame/stream?session=&target_fps=&frames= keeps the
@@ -758,6 +860,28 @@ def make_handler(service):
     return _Handler
 
 
+class _StatusError(Exception):
+    """An error whose HTTP status the handler chose (dispatch maps it verbatim). QueryError is always 400 and
+    anything else 500; an unknown door is neither -- it is a 404, like an unknown route."""
+
+    def __init__(self, status, message):
+        super().__init__(message)
+        self.status = status
+
+
+def _tenant_slug(tenant_id):
+    """A filesystem-safe, collision-free directory name for a tenant id (None/empty -> None, the shared default
+    partition). Readable prefix + a short content hash: the prefix is for a human reading the disk, the hash keeps
+    two ids that sanitize to the same prefix apart, and neither `..` nor a slash can survive the substitution."""
+    import hashlib
+    import re
+    if tenant_id is None or str(tenant_id) == "":
+        return None
+    raw = str(tenant_id)
+    return "%s-%s" % (re.sub(r"[^A-Za-z0-9_.-]", "_", raw)[:40].strip("."),
+                      hashlib.sha256(raw.encode("utf-8")).hexdigest()[:12])
+
+
 def _is_write(sql_result):
     """True if a run_db_sql result represents a write (so persistence knows to save). SELECT returns a list of rows;
     every write returns a dict with a telltale key."""
@@ -903,6 +1027,15 @@ def _selftest():
                       {"query": '{ objects(where: {material: "gold"}) { name } }'})[1]
     names = [o["name"] for o in gq["data"]["objects"]]
     assert names == ["ring", "coin"] and gq["ok"]
+
+    # the MCP doors: the listing is the adapter's curated tool list; an unknown door is a 404 that never builds the
+    # adapter; a malformed body is a 400 (the round trip through a door needs the mind -- tests/test_service_door.py)
+    doors = svc.dispatch("GET", "/doors", {})[1]
+    assert doors["ok"] and doors["count"] == len(doors["doors"]) >= 40
+    assert {"lecore_map", "corpus_ask", "receipt_verify"} <= {d["name"] for d in doors["doors"]}
+    assert svc.dispatch("POST", "/door", {"name": "no_such_door", "arguments": {}})[0] == 404 and svc._doors == {}
+    assert svc.dispatch("POST", "/door", {"arguments": {}})[0] == 400
+    assert svc.dispatch("POST", "/door", {"name": "lecore_map", "arguments": []})[0] == 400
 
     # errors: bad SQL 400, unknown route 404, missing body 400, no-WHERE update refused
     assert svc.dispatch("POST", "/sql", {"sql": "SELECT nope FROM user.t"})[0] == 400

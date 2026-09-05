@@ -579,8 +579,14 @@ class MCPServer:
     """The protocol frame around one Service. handle(dict) -> dict|None keeps the whole
     server testable in-process; serve_stdio() is just a line loop around it."""
 
-    def __init__(self, token=None, mind=None, memory_root=None):
-        self.service = Service(token=token, mind=mind)
+    def __init__(self, token=None, mind=None, memory_root=None, service=None):
+        # `service=`: wrap an EXISTING Service instead of building a private one. This is
+        # the seam holographic_service's POST /door uses, so the HTTP process serves the
+        # curated doors over the SAME mind its /invoke already runs on -- one catalog
+        # build (measured 4.6 s cold for lecore_map), one zoo ladder, one object-handle
+        # registry, instead of a second mind hiding behind the first. Default None keeps
+        # every existing caller (stdio host, selftest, tests) byte-identical.
+        self.service = service if service is not None else Service(token=token, mind=mind)
         self._corpora = {}                                # handle -> list of chunks
         # THE EXTERNAL-MEMORY PARTITION (Moose's picture, taken literally): a directory
         # assigned as the model's memory, managed as an ordinary leCore data structure --
@@ -1921,9 +1927,20 @@ class MCPServer:
                     if props:
                         err["expected_arguments"] = props
                         err["hint"] = "missing argument %s; this tool takes: %s" % (e, ", ".join(props))
+                err_text = _ej.dumps(err, default=str)
+                # COST RIDES THE ERROR PATH TOO. The success envelope has stamped
+                # _meta["lecore.cost"] since the metering hook landed; the error envelope
+                # never did, so a proxy billing on _meta saw `None` for exactly the calls
+                # (bad handle, missing argument, refused faculty) that still burned
+                # compute -- and the HTTP door bridge had nothing to log. Same two
+                # numbers, same names; no receipt, because an error is not a claim about
+                # a computed output that a re-run is meant to reproduce.
                 return {"jsonrpc": "2.0", "id": rid, "result": {
-                    "content": [{"type": "text", "text": _ej.dumps(err, default=str)}],
-                    "isError": True}}
+                    "content": [{"type": "text", "text": err_text}],
+                    "isError": True,
+                    "_meta": {"lecore.cost": {
+                        "elapsed_ms": round((_t.perf_counter() - _t0) * 1e3, 3),
+                        "payload_bytes": len(err_text)}}}}
         return {"jsonrpc": "2.0", "id": rid,
                 "error": {"code": -32601, "message": "method %r not found" % method}}
 

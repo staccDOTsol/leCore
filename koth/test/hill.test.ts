@@ -26,10 +26,10 @@ function hill(opts: { now?: () => number } = {}) {
 }
 
 describe('attempt fee', () => {
-  it('starts at 0.25 SOL and compounds 1% per takeover', () => {
-    expect(attemptFeeSol(0)).toBe(0.25);
-    expect(attemptFeeSol(1)).toBe(0.2525);
-    expect(attemptFeeSol(10)).toBeCloseTo(0.25 * 1.01 ** 10, 6);
+  it('starts at 0.05 SOL and compounds 1% per takeover', () => {
+    expect(attemptFeeSol(0)).toBe(0.05);
+    expect(attemptFeeSol(1)).toBe(0.0505);
+    expect(attemptFeeSol(10)).toBeCloseTo(0.05 * 1.01 ** 10, 6);
     expect(attemptFeeSol(2, 1, 10)).toBeCloseTo(1.21, 6);
   });
 });
@@ -40,7 +40,7 @@ describe('hill', () => {
     const out = await h.challenge({ mint: A, pitch: 'alpha wins', author: 'p1', surface: 'telegram' });
     expect(out.record.result).toBe('won');
     expect(out.king?.reign).toBe(1);
-    expect(entry.calls[0]).toEqual({ player: 'p1', mint: A, feeSol: 0.25 });
+    expect(entry.calls[0]).toEqual({ player: 'p1', mint: A, feeSol: 0.05 });
     expect(chain.updates).toHaveLength(1);
     expect(chain.master.name).toBe('KING Alpha');
     expect(chain.master.symbol).toBe('KALPHA');
@@ -50,7 +50,7 @@ describe('hill', () => {
     expect(doc.properties.koth.king_mint).toBe(A);
     expect(doc.properties.koth.play_signature).toBe('play-1');
     expect(doc.attributes.find((a) => a.trait_type === 'HP')?.value).toBe(out.king?.card.stats.hp);
-    expect(h.attemptFee()).toBe(0.2525);
+    expect(h.attemptFee()).toBe(0.0505);
   });
 
   it('a weaker challenger loses, pays, and the king stays; a stronger one takes over and the old king enters the hall', async () => {
@@ -62,7 +62,7 @@ describe('hill', () => {
     expect(lost.record.playSignature).toBe('play-2');
     expect(h.king?.mint).toBe(A);
     expect(chain.updates).toHaveLength(1);
-    expect(entry.calls[1].feeSol).toBe(0.2525);
+    expect(entry.calls[1].feeSol).toBe(0.0505);
 
     const won = await h.challenge({ mint: C, pitch: 'gamma', author: 'p3', surface: 'x' });
     expect(won.record.result).toBe('won');
@@ -70,7 +70,7 @@ describe('hill', () => {
     expect(h.king?.reign).toBe(2);
     expect(h.hallOfFame.map((k) => k.mint)).toEqual([A]);
     expect(chain.master.name).toBe('KING Gamma');
-    expect(h.attemptFee()).toBeCloseTo(0.25 * 1.01 ** 2, 6);
+    expect(h.attemptFee()).toBeCloseTo(0.05 * 1.01 ** 2, 6);
     expect(h.snapshot.challenges).toHaveLength(3);
     expect(won.record.usage?.usd).toBeGreaterThan(0);
   });

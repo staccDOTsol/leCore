@@ -2,7 +2,7 @@
  * The hill itself: who is king, what an attempt costs, and what happens when someone takes it.
  *
  * One challenge, in order:
- *   1. the attempt fee is quoted: 0.25 SOL worth of the player's token, x1.01 per takeover so far
+ *   1. the attempt fee is quoted: 0.05 SOL worth of the player's token, x1.01 per takeover so far
  *   2. the entry flow collects it (swap half to the master token, create/deposit the CPMM pool,
  *      lock the LP in the play vault) -- the player only sees "send X"; the LP is the receipt
  *   3. the challenger's token is profiled and turned into a card; so is the king's, fresh
@@ -74,8 +74,9 @@ export function emptyState(): HillState {
   return { king: null, hallOfFame: [], challenges: [], takeovers: 0, masterShill: null };
 }
 
-/** 0.25 SOL worth, +1% per successful takeover (compounding), by directive. */
-export function attemptFeeSol(takeovers: number, baseSol = 0.25, growthPct = 1): number {
+/** 0.05 SOL worth, +1% per successful takeover (compounding), by directive. */
+export const BASE_FEE_SOL = 0.05;
+export function attemptFeeSol(takeovers: number, baseSol = BASE_FEE_SOL, growthPct = 1): number {
   return Number((baseSol * Math.pow(1 + growthPct / 100, Math.max(0, takeovers))).toFixed(6));
 }
 
@@ -152,6 +153,7 @@ export class Hill {
   get king(): KingRecord | null { return this.state.king ? structuredClone(this.state.king) : null; }
   get hallOfFame(): KingRecord[] { return structuredClone(this.state.hallOfFame); }
   attemptFee(): number { return attemptFeeSol(this.state.takeovers, this.deps.baseFeeSol, this.deps.feeGrowthPct); }
+  get baseFeeSol(): number { return this.deps.baseFeeSol ?? BASE_FEE_SOL; }
 
   private now(): number { return this.deps.now ? this.deps.now() : Date.now(); }
 

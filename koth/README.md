@@ -9,7 +9,7 @@ on-chain** to whoever is holding the hill. Take it and the master token literall
 by the AI. Lose it and you're in the hall of fame.
 
 1. `shill <mint> <your pitch>` — any Jupiter-tradable coin. Sell it.
-2. You get a **burner address and a number**. Send that much of *your* coin. Entry is 0.25 SOL worth, +1 %
+2. You get a **burner address and a number**. Send that much of *your* coin. Entry is 0.05 SOL worth, +1 %
    every time the hill flips, plus the AI's tab, plus 5 % slop. One-time address; we don't hold your bags.
 3. `paid <quote-id>` — your coin's **real numbers** (liquidity, volume, holders, chart) become a monster card.
    The master shillbot shills the sitting king. The AI judge scores both pitches. Cards are context; the
@@ -35,7 +35,7 @@ three things on Solana:
 
 1. A player says `shill <mint> <pitch>` to a bot.
 2. They get a **one-time throwaway deposit address** and an exact amount of *their* token: the attempt
-   fee (**0.25 SOL worth, ×1.01 per successful takeover**) plus an inference estimate, both **+5 %**.
+   fee (**0.05 SOL worth, ×1.01 per successful takeover**) plus an inference estimate, both **+5 %**.
    No wallets are hosted for anyone; the throwaway key is deleted the moment the deposit is swept.
 3. They say `paid <quote-id>`. The operator sweeps the deposit, converts the inference share into
    `$TOKEN` / LEOS / USDC for the openzoo wallet, swaps **half** the stake into the master token on

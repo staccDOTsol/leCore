@@ -4,7 +4,7 @@
  * By directive:
  *   - no hosted wallets: every attempt gets a ONE-TIME throwaway deposit address whose key lives
  *     only until the deposit is swept, then is deleted
- *   - the quote is the play stake (0.25 SOL worth, x1.01 per takeover) PLUS an inference estimate,
+ *   - the quote is the play stake (0.05 SOL worth, x1.01 per takeover) PLUS an inference estimate,
  *     both marked up 5%, denominated in the player's own token
  *   - the people never see LP: after the deposit lands the operator sweeps it, converts the
  *     inference share to TOKEN (or USDC / LEOS) for the openzoo wallet, swaps half of the stake

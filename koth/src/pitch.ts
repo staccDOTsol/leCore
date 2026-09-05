@@ -9,7 +9,7 @@ One coin wears the crown. The crown is a real token on Solana (the master shill 
 HOW TO PLAY
 1. shill <mint> <your pitch>   any Jupiter-tradable coin. sell it.
 2. you get a burner address and a number. send that much of YOUR coin.
-   entry is 0.25 SOL worth, +1% every time the hill flips, plus the AI's tab, plus 5% slop.
+   entry is 0.05 SOL worth, +1% every time the hill flips, plus the AI's tab, plus 5% slop.
    one-time address. we don't hold your bags.
 3. paid <quote-id>   your coin's REAL numbers (liquidity, volume, holders, chart) become a monster card.
    the master shillbot shills the sitting king. the AI judge scores both pitches. cards are context; the pitch wins.

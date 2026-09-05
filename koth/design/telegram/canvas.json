@@ -86,7 +86,7 @@
       "x": 960,
       "y": -130,
       "w": 380,
-      "text": "One-time deposit address per attempt. Amount = the stake (grows 1% per takeover) + inference estimate, +5%, in the player's own coin. Address is copyable; the key is deleted after the sweep."
+      "text": "One-time deposit address per attempt. Amount = the stake (0.05 SOL worth, +1% per takeover) + inference estimate, +5%, in the player's own coin. Address is copyable; the key is deleted after the sweep."
     },
     {
       "id": "battle-note",

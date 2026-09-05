@@ -30,7 +30,7 @@ export type KothConfig = {
   pinataJwt: string;
   dataDir: string;
   publicUrl: string;
-  /** Base attempt fee, in SOL worth of the deposit token (0.25 by directive). */
+  /** Base attempt fee, in SOL worth of the deposit token (0.05 by directive). */
   entrySol: number;
   /** Per-takeover growth of the attempt fee, in percent (1 by directive). */
   entryGrowthPct: number;
@@ -102,7 +102,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): KothConfig {
     pinataJwt: env.PINATA_JWT || '',
     dataDir: env.KOTH_DATA_DIR || path.resolve('data'),
     publicUrl: (env.KOTH_PUBLIC_URL || 'http://localhost:8787').replace(/\/+$/, ''),
-    entrySol: Number(env.KOTH_ENTRY_SOL || 0.25),
+    entrySol: Number(env.KOTH_ENTRY_SOL || 0.05),
     entryGrowthPct: Number(env.KOTH_ENTRY_GROWTH_PCT || 1),
     erosionPerLoss: Number(env.KOTH_EROSION_PER_LOSS || 5),
     erosionMax: Number(env.KOTH_EROSION_MAX || 40),

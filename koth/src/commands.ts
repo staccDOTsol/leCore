@@ -175,7 +175,7 @@ export class Commands {
     const s = this.d.hill.snapshot;
     return {
       rich: (f) => [
-        `attempt fee: ${f.b(`${this.d.hill.attemptFee()} SOL`)} worth of any Jupiter-swappable coin ${f.muted(`(0.25 SOL × 1.01^${s.takeovers})`)}`,
+        `attempt fee: ${f.b(`${this.d.hill.attemptFee()} SOL`)} worth of any Jupiter-swappable coin ${f.muted(`(${this.d.hill.baseFeeSol} SOL × 1.01^${s.takeovers})`)}`,
         `+ inference ~$${this.d.hill.inferenceEstimateUsd().toFixed(3)} (paid to the zoo), +5% buffer, quoted in ${f.b('your')} coin`,
         f.muted('half the stake is swapped to the master token; the pair becomes permanent CPMM liquidity locked in the play vault.'),
       ].join('\n'),

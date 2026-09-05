@@ -82,6 +82,12 @@ export async function main(): Promise<void> {
   const port = Number(process.env.KOTH_PORT || 8787);
   http.createServer((req, res) => {
     const url = new URL(req.url ?? '/', 'http://x');
+    if (url.pathname === '/' || url.pathname === '/king') {
+      // the link-preview page: X / Telegram / Discord unfurl it into the king's card (og:image must be a bitmap)
+      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'public, max-age=60' });
+      res.end(kingPage(hill?.king ?? null, cfg.publicUrl, cfg.dataDir));
+      return;
+    }
     const m = url.pathname.match(/^\/(metadata|assets)\/([A-Za-z0-9_.-]+)$/);
     if (!m) { res.writeHead(404); res.end(); return; }
     const file = path.join(cfg.dataDir, m[1], m[2]);
@@ -100,9 +106,12 @@ export async function main(): Promise<void> {
     const dc = new DiscordSurface(commands, { token: cfg.discord.token, channelId: cfg.discord.channelId, log });
     surfaces.push(dc); await dc.start();
   }
-  if (cfg.x.bearer && cfg.x.apiKey && cfg.x.botUserId) {
-    const x = new XSurface(commands, { creds: cfg.x, dataDir: cfg.dataDir, log });
-    surfaces.push({ broadcast: (t) => x.post(t).then(() => undefined) }); void x.poll(); log('x: polling mentions');
+  if (cfg.x.apiKey && cfg.x.apiSecret && cfg.x.accessToken && cfg.x.accessSecret) {
+    const x = new XSurface(commands, {
+      creds: { ...cfg.x }, dataDir: cfg.dataDir, log,
+      maxChars: Number(process.env.X_MAX_CHARS || 4000), pollMs: Number(process.env.X_POLL_SECONDS || 90) * 1000,
+    });
+    if (await x.start()) { surfaces.push(x); void x.poll(); log('x: polling mentions'); }
   }
   if (!surfaces.length) log('no surface credentials set: only the metadata server is running');
 
@@ -120,6 +129,28 @@ export async function main(): Promise<void> {
   };
   setInterval(() => void cadence(), everyMs).unref();
   if (process.env.KOTH_SHILL_ON_START === '1') void cadence();
+}
+
+/** Minimal HTML whose Open Graph / Twitter Card tags point at the king's PNG, so a link to the game unfurls as the card. */
+export function kingPage(k: { name: string; symbol: string; image?: string | null; reign: number; pitch?: string } | null, publicUrl: string, dataDir: string): string {
+  const esc = (s: string) => s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c] as string));
+  const base = publicUrl.replace(/\/+$/, '');
+  let image = k?.image ?? null;
+  if (image?.endsWith('.svg')) {   // crawlers ignore SVG; use the PNG the provider writes beside it when it exists
+    const png = image.replace(/\.svg$/, '.png');
+    if (fs.existsSync(path.join(dataDir, 'assets', path.basename(png)))) image = png;
+  }
+  const title = k ? `${k.name} ($${k.symbol}) is KING OF THE HILL · reign ${k.reign}` : 'KING OF THE HILL · the hill is empty';
+  const desc = k ? (k.pitch ?? '').slice(0, 200) || 'Shill your coin. Beat the king. The master token becomes yours.' : 'First to pay takes it. Shill your coin to the bot.';
+  const og = [
+    ['og:type', 'website'], ['og:title', title], ['og:description', desc], ['og:url', `${base}/king`],
+    ...(image ? [['og:image', image], ['twitter:card', 'summary_large_image'], ['twitter:image', image]] : [['twitter:card', 'summary']]),
+    ['twitter:title', title], ['twitter:description', desc],
+  ].map(([p, c]) => `<meta property="${p}" name="${p}" content="${esc(c)}">`).join('\n');
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>${esc(title)}</title>\n${og}\n<meta name="viewport" content="width=device-width,initial-scale=1"></head>` +
+    `<body style="margin:0;background:#0d0f14;color:#e6e8ec;font:16px system-ui;display:grid;place-items:center;min-height:100vh"><main style="max-width:640px;padding:24px;text-align:center">` +
+    (image ? `<img src="${esc(image)}" alt="${esc(title)}" style="max-width:100%;border-radius:16px">` : '') +
+    `<h1 style="font-size:22px">${esc(title)}</h1><p>${esc(desc)}</p><p style="opacity:.7">Say <code>king</code> to the bot on Telegram or mention it on X.</p></main></body></html>`;
 }
 
 const isMain = process.argv[1] && path.resolve(process.argv[1]) === path.resolve(new URL(import.meta.url).pathname);

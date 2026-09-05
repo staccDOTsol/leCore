@@ -62,3 +62,19 @@ describe('cards', () => {
     for (let i = 0; i < 100; i++) { const x = a(); expect(x).toBe(b()); expect(x).toBeGreaterThanOrEqual(0); expect(x).toBeLessThan(1); }
   });
 });
+
+describe('card images', async () => {
+  const { FileImageProvider, svgToPng } = await import('../src/assets.js');
+  const fs = await import('node:fs');
+  const os = await import('node:os');
+  const path = await import('node:path');
+  it('rasterizes the SVG card to a PNG beside it and returns the PNG url', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'koth-img-'));
+    const card = cardFromMetrics(metrics({ name: 'Bonk', symbol: 'BONK', liquidityUsd: 1e6, volume24hUsd: 2e5, holders: 1000, marketCapUsd: 1e7 }));
+    const url = await new FileImageProvider(dir, 'https://host/').image(card, 3);
+    expect(url).toBe('https://host/assets/3.png');
+    expect(fs.readFileSync(path.join(dir, 'assets', '3.png')).subarray(0, 8).toString('hex')).toBe('89504e470d0a1a0a');
+    expect(fs.existsSync(path.join(dir, 'assets', '3.svg'))).toBe(true);
+    expect((await svgToPng('<svg xmlns="http://www.w3.org/2000/svg" width="4" height="4"/>'))?.length).toBeGreaterThan(30);
+  });
+});

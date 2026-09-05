@@ -56,7 +56,7 @@ src/dbc.ts        Meteora DBC: config (creator keeps metadata authority; quote =
 src/metadata.ts   read + rewrite name/symbol/uri (Metaplex and Token-2022), byte-limit clamps
 src/metrics.ts    Birdeye (key) / DexScreener (keyless) / RPC facts -> TokenMetrics
 src/cards.ts      metrics -> deterministic card + creature spec
-src/assets.ts     SVG card, and the leCore PNG bridge (render_asset.py)
+src/assets.ts     SVG card, resvg rasterizer (PNG for Telegram / X / link previews), and the leCore PNG bridge (render_asset.py)
 src/openzoo.ts    the inference lane: chat completions + receipts (x402.billedUsd)
 src/judge.ts      master shillbot, arbiter (typed verdict), metadata remix
 src/hill.ts       the state machine: fee schedule, challenge, crown, hall of fame (JSON store)
@@ -64,7 +64,7 @@ src/uri.ts        hosting for the uri JSON: files served by the bot, or Pinata
 src/entry.ts      throwaway quotes, deposit detection, sweep, Jupiter half-swap, CPMM pool, lock
 src/play.ts       client for the play program (PDAs, instructions, decoders, pool discovery, proofs)
 src/commands.ts   king / hall / fee / shill / paid / help
-src/surfaces/     telegram.ts (Bot API long-poll), discord.ts (discord.js), x.ts (openzoo-xbot shape)
+src/surfaces/     telegram.ts (Bot API long-poll), discord.ts (discord.js), x.ts (mentions -> threads + media, the Telegram mirror)
 src/bot.ts        the runner: surfaces + the /metadata + /assets static server + the shill cadence
 program/          koth-play (Pinocchio, no_std): Initialize / Play / SetMaster
 scripts/          create-config, launch-master, read-metadata, update-metadata, init-play, challenge, preflight
@@ -101,6 +101,18 @@ KOTH_DRY_RUN=1 KOTH_MOCK_JUDGE=1 npm run bot      # rehearsal: in-memory master 
 `launch-master` needs no arguments: the genesis identity ("Master Shill" / `SHILL`, uri = `koth/genesis/genesis.json`
 served raw from GitHub) is the placeholder the first king overwrites. Override with `KOTH_MASTER_NAME` /
 `KOTH_MASTER_SYMBOL` / `KOTH_MASTER_URI` or positional args.
+
+### X (the mirror of Telegram)
+
+Same game, X's shape: mentions are the commands (`@openzoobot king`, `@openzoobot shill <mint> <pitch>`, `@openzoobot paid <quote-id>`),
+every reply is the same message Telegram gets, threaded when it is longer than one post, with the king's card attached as native
+media (the SVG card is rasterized to PNG with resvg). Takeovers and the master shillbot's cadence posts are standalone posts with
+the card. X cannot edit a post, so a settlement is one "SETTLING…" reply that the outcome threads under. `/king` on the bot's
+public url is a link-preview page (Open Graph + Twitter Card pointing at the PNG), so a link to the game unfurls as the card.
+
+Keys, from the app on developer.x.com with user authentication set to **Read and Write** (set that first, then generate the
+access token as the bot account): `X_API_KEY`, `X_API_SECRET`, `X_ACCESS_TOKEN`, `X_ACCESS_SECRET`. `X_BEARER_TOKEN` and
+`X_BOT_USER_ID` are optional. `X_MAX_CHARS` defaults to 4000 (Premium); set 280 on a plain account. `X_POLL_SECONDS` paces the mention poll (429s are honoured).
 
 ### Deploy (fly.io)
 

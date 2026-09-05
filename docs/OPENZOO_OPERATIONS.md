@@ -127,7 +127,9 @@ no gateway route reaches it. Two facts an operator must NOT infer from "integrat
   sidecar (`/internal/v1/hrr/bind|recall`); nothing in the gateway suite calls
   `/v1/hrr/*`, `/v1/lecore/*` or `/v1/memory/*`. An earlier version of this section
   said "tested there"; it was not.
-- **All of them are free** (no 402; each logs `status: "free"`) and tenant-scoped by
+- **All of them are free** (no 402 anywhere in the block; `/v1/hrr/bind`, `/v1/lecore/*` and
+  `/v1/memory/*` log `status: "free"`, while `/v1/hrr/delta` and `/v1/hrr/recall` log their
+  own `delta_probe|delta_bound|delta_failed` / `recalled|recall_failed`) and tenant-scoped by
   `x-openzoo-namespace` (`/v1/memory/*` reports `namespace.isolated` on every reply).
   `/v1/hrr/recall` is protected only by the unguessability of the `context_id`: a
   leaked id is a leaked corpus, and free recall makes reading one cost nothing.

@@ -62,7 +62,7 @@ _ST_DTYPES = {
 
 
 # DeepSeek-V4 Flash ships these; each decodes to float32 (see _decode_st_payload).
-_F8_DTYPES = ("BF16", "F8_E8M0", "F8_E4M3", "F8_E5M2")
+_F8_DTYPES = ("BF16", "F8_E8M0", "F8_E8M0FNU", "F8_E4M3", "F8_E4M3FN", "F8_E5M2")
 
 
 def _decode_bf16(raw_u16):

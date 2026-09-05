@@ -4,8 +4,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { makeState, handleRequest, startGateway, staticCandidates, resolveDest, routePhases, etagOf, BODY_LIMIT } from '../lib/gateway.js';
-import { MANIFEST_PATH, FORWARDED_HEADERS } from '../lib/wire.js';
+import { makeState, handleRequest, startGateway, staticCandidates, resolveDest, routePhases, etagOf, BODY_LIMIT, PACKET_DATA_SIZE, NONCE_HEADER_BYTES, invokeTxOverhead, invokeBudget, safeResponseHeaders } from '../lib/gateway.js';
+import { MANIFEST_PATH, FORWARDED_HEADERS, encodeInvoke } from '../lib/wire.js';
 import { connect, deployProgram, putAsset, getProgramInfo } from '../lib/solana.js';
 import { loadWallet } from '../lib/wallet.js';
 
@@ -199,14 +199,81 @@ test('param headers from the pattern groups (direct + via rewrite), client-suppl
 
 test('413 above the on-chain body limit, exact limit passes', async () => {
   const { state, calls } = unitState();
+  // The transaction budget is measured, not guessed: 252 B of envelope with no KV accounts, +33 B per account.
+  assert.equal(invokeTxOverhead(0), 252);
+  assert.equal(invokeTxOverhead(1), 285);
+  assert.equal(invokeTxOverhead(3), 351);
+  assert.equal(invokeBudget(0, false), PACKET_DATA_SIZE - 252);
+  assert.equal(invokeBudget(1, true), PACKET_DATA_SIZE - 285 - NONCE_HEADER_BYTES);
+
   const big = await handleRequest(state, req('POST', '/api/counter', { body: Buffer.alloc(BODY_LIMIT + 1, 0x61) }));
   assert.equal(big.status, 413);
   assert.equal(parse(big).limit, 900);
   assert.match(parse(big).message, /transaction/);
   assert.equal(calls.length, 0);
-  const ok = await handleRequest(state, req('POST', '/api/counter', { body: Buffer.alloc(BODY_LIMIT, 0x61) }));
-  assert.equal(ok.status, 200);
+
+  // /api/counter is a mutating route with one KV account: the exact limit is the tx budget minus the
+  // 25-byte event framing for its path, not the coarse 900.
+  const envelope = encodeInvoke({ route: 1, method: 'POST', path: '/api/counter', query: '', headers: {}, body: '' }).length;
+  assert.equal(envelope, 25);
+  const maxBody = invokeBudget(1, true) - envelope;
+  assert.equal(maxBody, 890);
+  const over = await handleRequest(state, req('POST', '/api/counter', { body: Buffer.alloc(maxBody + 1, 0x61) }));
+  assert.equal(over.status, 413, 'one byte over the transaction budget');
+  assert.equal(parse(over).maxBody, maxBody);
+  assert.equal(parse(over).envelope, envelope);
+  assert.match(parse(over).message, /1 KV account/);
+  assert.equal(calls.length, 0);
+  const ok = await handleRequest(state, req('POST', '/api/counter', { body: Buffer.alloc(maxBody, 0x61) }));
+  assert.equal(ok.status, 200, 'exactly at the budget passes');
   assert.equal(calls.length, 1);
+  assert.equal(calls[0].event.body.length, maxBody);
+
+  // A read route with no KV accounts and no headers has room for the full coarse limit.
+  const readOk = await handleRequest(state, req('GET', '/api/hello', { body: Buffer.alloc(BODY_LIMIT, 0x61) }));
+  assert.equal(readOk.status, 200);
+
+  // Headers count too: enough x-* headers leave no room for any body.
+  const flood = {}; for (let i = 0; i < 25; i++) flood['x-h' + i] = 'v'.repeat(40);
+  const hdr = await handleRequest(state, req('GET', '/api/hello', { headers: flood }));
+  assert.equal(hdr.status, 413);
+  assert.equal(parse(hdr).maxBody, 0);
+  assert.equal(calls.length, 2);
+
+  // If the handler discovers more KV accounts than the manifest declares, web3's "too large" is still a 413, not a 502.
+  state.invoke = async () => { throw new Error('Transaction too large: 1240 > 1232'); };
+  const late = await handleRequest(state, req('POST', '/api/counter', { body: Buffer.alloc(maxBody, 0x61) }));
+  assert.equal(late.status, 413);
+  assert.match(parse(late).message, /more accounts/);
+});
+
+test('peer address: x-real-ip is the socket, a client x-forwarded-for gets the peer appended', async () => {
+  const { state, calls } = unitState();
+  await handleRequest(state, { method: 'GET', url: '/api/hello', headers: { 'x-real-ip': '9.9.9.9', 'x-forwarded-for': '1.2.3.4' }, body: null, remoteAddress: '::ffff:127.0.0.1' });
+  assert.equal(calls.at(-1).event.headers['x-real-ip'], '127.0.0.1', 'client cannot choose its own address');
+  assert.equal(calls.at(-1).event.headers['x-forwarded-for'], '1.2.3.4, 127.0.0.1');
+  await handleRequest(state, { method: 'GET', url: '/api/hello', headers: {}, body: null, remoteAddress: '10.0.0.7' });
+  assert.equal(calls.at(-1).event.headers['x-real-ip'], '10.0.0.7');
+  assert.equal('x-forwarded-for' in calls.at(-1).event.headers, false, 'no bytes spent on x-forwarded-for unless the client sent one');
+  await handleRequest(state, req('GET', '/api/hello', { headers: { 'x-real-ip': '9.9.9.9' } }));
+  assert.equal(calls.at(-1).event.headers['x-real-ip'], '9.9.9.9', 'without a socket (unit tests) headers pass as-is');
+});
+
+test('response hygiene: framing headers and bad chars from the program are dropped, out-of-range status is 502', async () => {
+  assert.deepEqual(safeResponseHeaders({ 'Content-Length': '5', 'Transfer-Encoding': 'chunked', Connection: 'close', 'X-Ok': 'yes', 'bad name': 'x', 'x-nl': 'a\r\nb', 'set-cookie': ['a=1', 'b=2'] }),
+    { 'x-ok': 'yes', 'set-cookie': 'a=1, b=2' });
+  const { state } = unitState();
+  const base = state.invoke;
+  state.invoke = async (a) => ({ ...(await base(a)), status: 0 });
+  const zero = await handleRequest(state, req('GET', '/api/hello'));
+  assert.equal(zero.status, 502);
+  assert.equal(zero.headers['x-zoo-bad-status'], '0');
+  state.invoke = async (a) => ({ ...(await base(a)), status: 65535 });
+  assert.equal((await handleRequest(state, req('GET', '/api/hello'))).status, 502);
+  state.invoke = async (a) => ({ ...(await base(a)), status: 204 });
+  assert.equal((await handleRequest(state, req('GET', '/api/hello'))).status, 204);
+  state.invoke = async (a) => ({ ...(await base(a)), status: undefined });
+  assert.equal((await handleRequest(state, req('GET', '/api/hello'))).status, 200);
 });
 
 test('402 for mutating requests without a gateway keypair; reads still work', async () => {
@@ -389,6 +456,23 @@ test('e2e: deploy sample_site.so, put assets + manifest, serve through the gatew
 
   const big = await fetch(`${gw.url}/api/counter`, { method: 'POST', body: 'x'.repeat(2000) });
   assert.equal(big.status, 413);
+
+  // The exact boundary on the real chain: the 413 says how much body fits next to fetch's own
+  // headers; exactly that many bytes land as a signed tx, one more is refused before any RPC.
+  const probe = await fetch(`${gw.url}/api/counter`, { method: 'POST', body: 'x'.repeat(1000) });
+  assert.equal(probe.status, 413);
+  const { maxBody, envelope } = await probe.json();
+  assert.ok(maxBody > 700 && maxBody < BODY_LIMIT, `maxBody ${maxBody} (envelope ${envelope})`);
+  const fit = await fetch(`${gw.url}/api/counter`, { method: 'POST', body: 'x'.repeat(maxBody) });
+  assert.equal(fit.status, 200, `body of exactly ${maxBody} bytes must fit in the transaction: ${await fit.clone().text()}`);
+  assert.equal(fit.headers.get('x-zoo-simulated'), 'false');
+  assert.equal(Number(fit.headers.get('content-length')), Buffer.byteLength(await fit.text()));
+  const over = await fetch(`${gw.url}/api/counter`, { method: 'POST', body: 'x'.repeat(maxBody + 1) });
+  assert.equal(over.status, 413, 'never a 502 "Transaction too large" from web3');
+  assert.equal((await over.json()).maxBody, maxBody);
+  const browserish = await fetch(`${gw.url}/api/counter`, { method: 'POST', body: 'x'.repeat(800), headers: { 'content-type': 'application/json', 'user-agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0 Safari/537.36', accept: '*/*' } });
+  assert.equal(browserish.status, 413, '800 B with browser headers does not fit: say so with 413');
+  t.diagnostic(`exact body boundary on chain: ${maxBody} B fits (envelope ${envelope} B), ${maxBody + 1} B → 413`);
 
   // An unsigned gateway on the same program: reads work, writes are 402.
   const ro = await startGateway({ programId, cluster: RPC, port: 0, connection, quiet: true });

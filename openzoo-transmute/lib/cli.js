@@ -137,7 +137,9 @@ async function cmdServe(p, f, log) {
     catch (e) { if (typeof f.keypair === 'string') throw e; log(`no wallet found (${String(e.message).split(';')[0]}); mutating requests will answer 402`); }
   }
   const port = f.port != null ? Number(f.port) : DEFAULT_PORT;
-  const gw = await startGateway({ programId, cluster: f.cluster, port, host: f.host || '127.0.0.1', keypair, log, quiet: !!f.quiet });
+  const host = f.host || '127.0.0.1';
+  if (keypair && !/^(127\.0\.0\.1|localhost|::1|\[::1\])$/.test(host)) log(`warning: binding ${host} with a signer: anyone who can reach this gateway can send transactions paid by ${keypair.publicKey.toBase58()}; use --no-keypair unless that is intended`);
+  const gw = await startGateway({ programId, cluster: f.cluster, port, host, keypair, log, quiet: !!f.quiet });
   const m = gw.state.manifest;
   log(`openzoo-transmute gateway → ${gw.url}/  (explorer ${gw.url}/.zoo/, manifest ${gw.url}${MANIFEST_PATH})`);
   log(`program ${programId} on ${gw.state.cluster} · ${m.routes.length} function(s), ${m.static ? m.static.length : '?'} asset(s) · signer ${keypair ? keypair.publicKey.toBase58() + (walletPath ? ` (${walletPath})` : '') : 'none (reads only)'}`);

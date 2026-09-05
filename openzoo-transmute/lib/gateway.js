@@ -14,14 +14,18 @@
 // `node:http`.
 import http from 'node:http';
 import { createHash } from 'node:crypto';
-import { PublicKey } from '@solana/web3.js';
-import { FORWARDED_HEADERS, MANIFEST_PATH, assetPda, decodeAsset } from './wire.js';
-import { connect, invoke as chainInvoke, readManifest, getProgramInfo } from './solana.js';
+import { PublicKey, Transaction, TransactionInstruction, ComputeBudgetProgram, SystemProgram } from '@solana/web3.js';
+import { FORWARDED_HEADERS, MANIFEST_PATH, assetPda, decodeAsset, encodeInvoke } from './wire.js';
+import { connect, invoke as chainInvoke, readManifest, getProgramInfo, DEFAULT_CU, DEFAULT_HEAP } from './solana.js';
 import { rpcUrl } from './wallet.js';
 
 export const DEFAULT_PORT = 4402;
-/** Bytes of request body that fit in one transaction next to path/query/headers. */
+/** Coarse cap on the request body (checked while the body streams in, before any RPC). */
 export const BODY_LIMIT = 900;
+/** A serialized Solana transaction may not exceed this many bytes. */
+export const PACKET_DATA_SIZE = 1232;
+/** Bytes `invoke` appends for the `x-zoo-nonce:<hex>\n` header on mutating requests. */
+export const NONCE_HEADER_BYTES = 32;
 /** Methods that never mutate: served by `simulateTransaction`, no signer needed. */
 export const READ_METHODS = ['GET', 'HEAD', 'OPTIONS'];
 export const ALL_METHODS = ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS', 'HEAD'];
@@ -261,7 +265,42 @@ function parseUrl(url) {
 
 function mergeQuery(a, b) { return [a, b].filter(Boolean).join('&'); }
 
+// ---------------------------------------------------------------- tx budget
+
+const overheadByKv = new Map();
+/**
+ * Bytes of a serialized invoke transaction that are not instruction data:
+ * signature, message header, the payer/system/compute-budget/program keys,
+ * `kvCount` KV accounts, blockhash, and the heap + CU instructions `invoke`
+ * always adds. Measured by serializing the same shape once per `kvCount`
+ * (252 B for no KV accounts, +33 B per account).
+ */
+export function invokeTxOverhead(kvCount = 0) {
+  kvCount = Math.max(0, kvCount | 0);
+  if (overheadByKv.has(kvCount)) return overheadByKv.get(kvCount);
+  const key = (i) => new PublicKey(Buffer.alloc(32, i + 1));
+  const keys = [{ pubkey: key(0), isSigner: true, isWritable: true }, { pubkey: SystemProgram.programId, isSigner: false, isWritable: false }];
+  for (let i = 0; i < kvCount; i++) keys.push({ pubkey: key(2 + i), isSigner: false, isWritable: true });
+  const tx = new Transaction();
+  if (DEFAULT_HEAP) tx.add(ComputeBudgetProgram.requestHeapFrame({ bytes: DEFAULT_HEAP }));
+  tx.add(ComputeBudgetProgram.setComputeUnitLimit({ units: DEFAULT_CU }));
+  const probe = 128; // ≥128 so the compact-u16 data length takes its 2-byte form, as it will for any real request
+  tx.add(new TransactionInstruction({ programId: key(1), keys, data: Buffer.alloc(probe) }));
+  tx.feePayer = key(0);
+  tx.recentBlockhash = '11111111111111111111111111111111';
+  const n = tx.serialize({ requireAllSignatures: false, verifySignatures: false }).length - probe;
+  overheadByKv.set(kvCount, n);
+  return n;
+}
+
+/** Instruction-data bytes (path + query + headers + body + framing) one invoke may carry. */
+export function invokeBudget(kvCount = 0, mutate = false) {
+  return PACKET_DATA_SIZE - invokeTxOverhead(kvCount) - (mutate ? NONCE_HEADER_BYTES : 0);
+}
+
 // ---------------------------------------------------------------- functions
+
+function normalizeIp(a) { return typeof a === 'string' ? a.replace(/^::ffff:/i, '') : null; }
 
 function forwardedHeaders(req, params) {
   const out = {};
@@ -269,6 +308,14 @@ function forwardedHeaders(req, params) {
     const name = k.toLowerCase();
     if (name.startsWith('x-zoo-param-')) continue; // never trust client-supplied params
     if (FORWARDED_HEADERS.includes(name) || name.startsWith('x-')) out[name] = Array.isArray(v) ? v.join(', ') : String(v);
+  }
+  // The client cannot pick its own address: `x-real-ip` is always the socket
+  // peer, and a client-supplied `x-forwarded-for` gets the peer appended the
+  // way any proxy does (so the last hop is the trustworthy one).
+  const peer = normalizeIp(req.remoteAddress);
+  if (peer) {
+    out['x-real-ip'] = peer;
+    if (out['x-forwarded-for']) out['x-forwarded-for'] = `${out['x-forwarded-for']}, ${peer}`;
   }
   for (const [k, v] of Object.entries(params)) out['x-zoo-param-' + k.toLowerCase().replace(/[^a-z0-9]+/g, '-')] = v;
   return out;
@@ -293,15 +340,38 @@ async function serveFunction(state, hit, req, pathname, query, extraHeaders = {}
   const { route, params } = hit;
   const method = req.method;
   const body = req.body == null ? Buffer.alloc(0) : Buffer.isBuffer(req.body) ? req.body : Buffer.from(String(req.body));
-  if (body.length > state.bodyLimit) {
+  // Coarse cut first: nothing above a whole packet can ever fit. Anything
+  // smaller gets the exact budget below, which also tells the caller how much
+  // body DOES fit next to its own headers (maxBody).
+  if (body.length > PACKET_DATA_SIZE) {
     return json(413, {
       error: 'payload too large',
       limit: state.bodyLimit,
       received: body.length,
-      message: `request bodies travel inside a Solana transaction (1232 bytes total, ${state.bodyLimit} for the body); send less, or put large payloads in an asset and reference it`,
+      message: `request bodies travel inside a Solana transaction (${PACKET_DATA_SIZE} bytes total, at most ${state.bodyLimit} for the body); send less, or put large payloads in an asset and reference it`,
     }, { 'x-zoo-program': state.programIdStr });
   }
   const mutate = !READ_METHODS.includes(method);
+  const headers = forwardedHeaders(req, params);
+  const event = { route: route.index, method, path: pathname, query, headers, body };
+  // The exact check: the whole event (framing, path, query, forwarded headers,
+  // body) plus the KV accounts the route declares must fit in one transaction.
+  const data = encodeInvoke(event);
+  const kvCount = Array.isArray(route.kv) ? route.kv.length : 0;
+  const budget = invokeBudget(kvCount, mutate);
+  if (data.length > budget) {
+    const envelope = data.length - body.length;
+    const maxBody = Math.max(0, Math.min(state.bodyLimit, budget - envelope));
+    return json(413, {
+      error: 'payload too large',
+      limit: state.bodyLimit,
+      maxBody,
+      received: body.length,
+      envelope,
+      budget,
+      message: `the request must fit in one ${PACKET_DATA_SIZE}-byte Solana transaction: path, query and forwarded headers take ${envelope} bytes and ${kvCount} KV account(s) are reserved, leaving ${maxBody} for the body (got ${body.length}); send fewer/shorter headers or a smaller body`,
+    }, { 'x-zoo-program': state.programIdStr });
+  }
   if (mutate && !state.keypair) {
     return json(402, {
       error: 'payment required',
@@ -311,7 +381,6 @@ async function serveFunction(state, hit, req, pathname, query, extraHeaders = {}
     }, { 'x-zoo-program': state.programIdStr, 'x-zoo-needs-signer': 'true' });
   }
   const payer = await readPayerFor(state);
-  const event = { route: route.index, method, path: pathname, query, headers: forwardedHeaders(req, params), body };
   state.stats.invokes++;
   let r;
   try {
@@ -319,19 +388,24 @@ async function serveFunction(state, hit, req, pathname, query, extraHeaders = {}
   } catch (e) {
     const msg = String(e?.message || e);
     if (/signing keypair is required/i.test(msg)) return json(402, { error: 'payment required', message: msg, method, path: pathname }, { 'x-zoo-program': state.programIdStr });
+    // The handler touched more KV accounts than the manifest declared and the tx outgrew the packet: still the client's payload, not the chain.
+    if (/transaction too large/i.test(msg)) return json(413, { error: 'payload too large', limit: state.bodyLimit, received: body.length, message: `${msg.split('\n')[0]}; the handler needs more accounts than the manifest declares, send a smaller body or fewer headers` }, { 'x-zoo-program': state.programIdStr });
     state.log(`invoke ${method} ${pathname} failed: ${msg.split('\n')[0]}`);
     return json(502, { error: 'invoke failed', message: msg.split('\n')[0], route: route.routePath, logs: (e?.logs || []).slice(-25) }, { 'x-zoo-program': state.programIdStr });
   }
   if (r.simulated === false) state.stats.signed++; else state.stats.simulated++;
-  const headers = { ...extraHeaders };
-  for (const [k, v] of Object.entries(r.headers || {})) headers[k.toLowerCase()] = v;
-  headers['x-zoo-program'] = state.programIdStr;
-  headers['x-zoo-route'] = String(route.index);
-  headers['x-zoo-simulated'] = r.simulated === false ? 'false' : 'true';
-  if (r.signature) headers['x-zoo-signature'] = r.signature;
-  if (r.unitsConsumed != null) headers['x-zoo-cu'] = String(r.unitsConsumed);
+  const outHeaders = { ...extraHeaders };
+  for (const [k, v] of Object.entries(r.headers || {})) outHeaders[k.toLowerCase()] = v;
+  outHeaders['x-zoo-program'] = state.programIdStr;
+  outHeaders['x-zoo-route'] = String(route.index);
+  outHeaders['x-zoo-simulated'] = r.simulated === false ? 'false' : 'true';
+  if (r.signature) outHeaders['x-zoo-signature'] = r.signature;
+  if (r.unitsConsumed != null) outHeaders['x-zoo-cu'] = String(r.unitsConsumed);
   const out = r.body == null ? Buffer.alloc(0) : Buffer.isBuffer(r.body) ? r.body : Buffer.from(String(r.body));
-  return { status: r.status || 200, headers, body: out };
+  // The wire status is a u16; anything HTTP cannot express is the program's bug, not a valid reply.
+  const status = r.status == null ? 200 : Number.isInteger(r.status) && r.status >= 100 && r.status <= 599 ? r.status : 502;
+  if (status === 502 && r.status !== 502) outHeaders['x-zoo-bad-status'] = String(r.status);
+  return { status, headers: outHeaders, body: out };
 }
 
 // ---------------------------------------------------------------- /.zoo/*
@@ -428,7 +502,7 @@ async function maybeRefreshManifest(state, force = false) {
 // ---------------------------------------------------------------- the request loop
 
 /**
- * Route one request. `req` is `{method, url, headers, body}` (body: Buffer|string|null).
+ * Route one request. `req` is `{method, url, headers, body, remoteAddress?}` (body: Buffer|string|null).
  * Returns `{status, headers, body}`; the http wrapper writes it out.
  */
 export async function handleRequest(state, req) {
@@ -550,6 +624,23 @@ async function resolveFilesystem(state, p, method, lastMatch, originalPath) {
 
 // ---------------------------------------------------------------- http
 
+const HEADER_NAME = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
+/** Hop-by-hop and framing headers the gateway owns; a handler's values must not reach the socket. */
+const OWNED_HEADERS = new Set(['content-length', 'transfer-encoding', 'connection', 'keep-alive', 'upgrade', 'proxy-connection', 'te', 'trailer']);
+
+/** Drop headers a program could use to break HTTP framing or that node would refuse to write. */
+export function safeResponseHeaders(headers) {
+  const out = {};
+  for (const [k, v] of Object.entries(headers || {})) {
+    const name = String(k).toLowerCase();
+    if (OWNED_HEADERS.has(name) || !HEADER_NAME.test(name)) continue;
+    const val = Array.isArray(v) ? v.map(String).join(', ') : String(v ?? '');
+    if (/[\r\n\0]/.test(val)) continue;
+    out[name] = val;
+  }
+  return out;
+}
+
 function readBody(req, limit) {
   return new Promise((resolve, reject) => {
     const chunks = [];
@@ -583,13 +674,13 @@ export async function startGateway({ programId, cluster, port = DEFAULT_PORT, ho
   const server = http.createServer(async (req, res) => {
     const t0 = Date.now();
     try {
-      const { body, truncated, length } = await readBody(req, state.bodyLimit);
+      const { body, truncated, length } = await readBody(req, PACKET_DATA_SIZE);
       const r = truncated
-        ? json(413, { error: 'payload too large', limit: state.bodyLimit, received: length, message: `request bodies travel inside a Solana transaction; ${state.bodyLimit} bytes max` })
-        : await handleRequest(state, { method: req.method, url: req.url, headers: req.headers, body });
+        ? json(413, { error: 'payload too large', limit: state.bodyLimit, received: length, message: `request bodies travel inside a Solana transaction (${PACKET_DATA_SIZE} bytes); at most ${state.bodyLimit} bytes of body` })
+        : await handleRequest(state, { method: req.method, url: req.url, headers: req.headers, body, remoteAddress: req.socket?.remoteAddress });
       const out = Buffer.isBuffer(r.body) ? r.body : Buffer.from(String(r.body ?? ''));
-      const headers = { ...r.headers };
-      if (!('content-length' in headers)) headers['content-length'] = String(out.length);
+      const headers = safeResponseHeaders(r.headers);
+      headers['content-length'] = String(out.length);
       res.writeHead(r.status, headers);
       res.end(req.method === 'HEAD' ? undefined : out);
       if (!quiet) log(`${req.method} ${req.url} → ${r.status} ${out.length}B ${Date.now() - t0}ms${headers['x-zoo-signature'] ? ' sig=' + headers['x-zoo-signature'].slice(0, 12) : ''}`);

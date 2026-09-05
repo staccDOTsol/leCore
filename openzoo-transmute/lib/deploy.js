@@ -37,6 +37,22 @@ export function isMainnet(cluster, rpc) {
   return /mainnet/i.test(c) || /mainnet/i.test(rpc || '');
 }
 
+/** Genesis hashes of the public clusters: the one signal an RPC URL cannot disguise. */
+export const GENESIS_HASHES = {
+  mainnet: '5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d',
+  devnet: 'EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG',
+  testnet: '4uhcVJyU9pJkvQyS88uRDiswHXSCkY3zQawwpjk2NsNY',
+};
+
+/** Which public cluster the connection actually serves, by genesis hash; null for a local/unknown one or when unreachable. */
+export async function genesisCluster(connection) {
+  try {
+    const h = await connection.getGenesisHash();
+    for (const [name, hash] of Object.entries(GENESIS_HASHES)) if (h === hash) return name;
+  } catch { /* unreachable: the URL heuristic stands alone */ }
+  return null;
+}
+
 export function clusterLabel(cluster) {
   const c = cluster || process.env.OPENZOO_CLUSTER || 'mainnet';
   if (/^https?:\/\//.test(c)) return /127\.0\.0\.1|localhost/.test(c) ? 'localnet' : c;
@@ -70,8 +86,11 @@ export async function deploy(o = {}) {
 
   const rpc = o.connection?.rpcEndpoint || rpcUrl(o.cluster);
   const cluster = clusterLabel(o.cluster);
-  const mainnet = isMainnet(o.cluster, rpc);
   const connection = o.connection || connect(rpc);
+  // The URL heuristic can miss a private mainnet RPC; the genesis hash cannot. Never weakens the guard.
+  let mainnet = isMainnet(o.cluster, rpc);
+  const genesis = await genesisCluster(connection);
+  if (genesis === 'mainnet' && !mainnet) { mainnet = true; log(`note: ${rpc.replace(/\?.*$/, '')} serves mainnet (genesis hash); treating it as mainnet`); }
   const wallet = o.wallet || loadWallet({ keypair: o.keypair });
   const payer = wallet.keypair;
   log(`cluster ${cluster} (${rpc.replace(/\?.*$/, '')}) · payer ${payer.publicKey.toBase58()}${wallet.path ? ` (${wallet.path})` : ''}`);
@@ -133,7 +152,10 @@ export async function deploy(o = {}) {
   const onProgress = (d, n) => { if (d === n || d - progress >= Math.max(1, Math.floor(n / 10))) { progress = d; log(`  program bytes ${d}/${n} chunks`); } };
   const t0 = Date.now();
   if (upgrade) {
-    const r = await upgradeProgram(connection, { payer, programId, so, onProgress });
+    const r = await upgradeProgram(connection, { payer, programId, so, onProgress }).catch((e) => {
+      if (/exceeds the program's max data len/.test(String(e?.message))) throw new Error(`${e.message}; to deploy a fresh program remove ${path.join(zooDir, 'program-keypair.json')} and run deploy again`);
+      throw e;
+    });
     signatures.program = r.signature;
     log(`upgraded ${programId.toBase58()} in ${((Date.now() - t0) / 1000).toFixed(1)}s (${r.signature})`);
   } else {

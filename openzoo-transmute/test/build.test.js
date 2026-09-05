@@ -11,7 +11,8 @@ import {
   estimateCost, formatCostTable, probeConnection, RUNTIME_PATH, INSTALL_HINT, LAMPORTS_PER_BYTE, ACCOUNT_OVERHEAD_BYTES,
 } from '../lib/build.js';
 import { parseArgs, run, inspectText, USAGE } from '../lib/cli.js';
-import { resolveOutDir, isMainnet, clusterLabel, programKeypairFor } from '../lib/deploy.js';
+import { resolveOutDir, isMainnet, clusterLabel, programKeypairFor, genesisCluster, GENESIS_HASHES, deploy } from '../lib/deploy.js';
+import { Keypair } from '@solana/web3.js';
 import { readDeployment } from '../lib/vercel.js';
 import { ASSET_FIXED_HEADER } from '../lib/wire.js';
 
@@ -189,6 +190,27 @@ test('deploy helpers: mainnet detection and cluster labels', () => {
   assert.equal(isMainnet('https://eu.fluxrpc.com?key=x'), true);
   assert.equal(clusterLabel('http://127.0.0.1:8899'), 'localnet');
   assert.equal(clusterLabel('devnet'), 'devnet');
+});
+
+test('deploy: a private RPC that serves mainnet is caught by its genesis hash, before anything is built or spent', async () => {
+  assert.equal(await genesisCluster({ getGenesisHash: async () => GENESIS_HASHES.mainnet }), 'mainnet');
+  assert.equal(await genesisCluster({ getGenesisHash: async () => GENESIS_HASHES.devnet }), 'devnet');
+  assert.equal(await genesisCluster({ getGenesisHash: async () => 'anything-else' }), null);
+  assert.equal(await genesisCluster({ getGenesisHash: async () => { throw new Error('down'); } }), null);
+  const real = await probeConnection('localnet', { timeoutMs: 2000 });
+  if (!real) return; // needs the local validator for the reads that precede the guard
+  const mainnetLooking = new Proxy(real, { get: (t, k) => k === 'getGenesisHash' ? async () => GENESIS_HASHES.mainnet : typeof t[k] === 'function' ? t[k].bind(t) : t[k] });
+  const root = makeFixture();
+  const b = await build(root, { skipCargo: true, transmute: stubTransmute(), connection: null, log: () => {} });
+  const logs = [];
+  const opts = { outDir: b.outDir, cluster: real.rpcEndpoint, connection: mainnetLooking, wallet: { keypair: Keypair.generate(), path: null }, log: (s) => logs.push(String(s)) };
+  assert.equal(isMainnet(real.rpcEndpoint, real.rpcEndpoint), false, 'the URL alone looks local');
+  await assert.rejects(deploy(opts), /refusing to touch mainnet without --yes/);
+  assert.match(logs.join('\n'), /serves mainnet \(genesis hash\)/);
+  assert.match(logs.join('\n'), /TOTAL/, 'the cost table is printed before the refusal');
+  assert.ok(!logs.some((l) => /cargo build-sbf/.test(l)), 'nothing built before the refusal');
+  assert.ok(!fs.existsSync(path.join(b.zooDir, 'deploy.json')), 'nothing deployed');
+  assert.equal(fs.statSync(path.join(b.zooDir, 'program-keypair.json')).mode & 0o777, 0o600, 'program keypair is private');
 });
 
 test('cli: parseArgs', () => {

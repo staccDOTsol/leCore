@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { MemoryChain } from '../src/chain.js';
-import { Commands, html, plain } from '../src/commands.js';
+import { Commands, html, plain, type Ctx } from '../src/commands.js';
 import { Hill, MemoryStore } from '../src/hill.js';
 import { MockJudge } from '../src/judge.js';
 import { MemoryUriProvider } from '../src/uri.js';
@@ -65,11 +65,13 @@ describe('commands over the hill', () => {
   it('quotes, refuses unpaid, then settles and fights on paid', async () => {
     const entry = new FakeEntry();
     const { hill, commands } = setup(entry);
-    const ctx = { surface: 'telegram' as const, author: '@alice', authorId: 'tg:1', text: '' };
+    const ctx: Ctx = { surface: 'telegram', author: '@alice', authorId: 'tg:1', text: '' };
     const t = async (text: string, over: Partial<typeof ctx> = {}) => { const r = await commands.handle({ ...ctx, ...over, text }); return { r, text: r ? plain(r.rich) : '' }; };
     const king0 = await t('/king');
     expect(king0.text).toMatch(/EMPTY/);
     expect(king0.text).toMatch(/POT \$0\.00 · take the hill and win HALF THE VAULT/);          // every reply carries the pot, from chain
+    expect(king0.text).toMatch(/THIS is how you play: https:\/\/t\.me\/theTokenonsolana\/37167/);   // and the surface's explainer post
+    expect((await t('/king', { surface: 'x' })).text).toMatch(/THIS is how you play: https:\/\/x\.com\/STACCoverflow\/status\/2096102767702016152/);
     potOnChain = 12.5;
     const q = await t(`/shill ${A} sol is the chain the chain is sol`);
     expect(q.text).toMatch(/no payout wallet yet/);

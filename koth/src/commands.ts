@@ -84,6 +84,14 @@ const BTN = {
   hall: { label: 'Hall of fame', data: 'cmd:hall' }, challenge: { label: 'Challenge the king', data: 'cmd:challenge' },
 };
 
+/** The post that explains the game, per surface: every reply on that surface points at it. Override with KOTH_HOWTO_X / KOTH_HOWTO_TELEGRAM / KOTH_HOWTO_DISCORD. */
+export const HOWTO: Record<string, string> = {
+  x: process.env.KOTH_HOWTO_X || 'https://x.com/STACCoverflow/status/2096102767702016152',
+  telegram: process.env.KOTH_HOWTO_TELEGRAM || 'https://t.me/theTokenonsolana/37167',
+  discord: process.env.KOTH_HOWTO_DISCORD || '',
+  cli: '',
+};
+
 export class Commands {
   private pending: Record<string, Pending> = {};
   private wallets: Record<string, string> = {};
@@ -127,12 +135,18 @@ export class Commands {
     return `🏆 ${f.b(`POT $${pot.toFixed(2)}`)} · ${f.muted('take the hill and win HALF THE VAULT: half of every bid locked in it so far (every failed shill\'s liquidity). the other half keeps stacking for the next king.')}`;
   }
 
+  /** "THIS is how you play" + the surface's own explainer post; every reply on X and Telegram ends with it. */
+  howtoLine(f: Fmt, surface: string): string {
+    const url = HOWTO[surface] ?? '';
+    return url ? `👉 ${f.b('THIS is how you play')}: ${f.link(url, url)}` : '';
+  }
+
   async handle(ctx: Ctx): Promise<Reply | null> {
     const r = await this.handleInner(ctx);
     if (!r) return null;
     const pot = await this.d.hill.potUsd();
     const inner = r.rich;
-    return { ...r, rich: (f) => `${inner(f)}\n\n${this.potLine(f, pot)}` };
+    return { ...r, rich: (f) => [inner(f), '', this.potLine(f, pot), this.howtoLine(f, ctx.surface)].filter((l, i) => i < 2 || l).join('\n') };
   }
 
   private async handleInner(ctx: Ctx): Promise<Reply | null> {

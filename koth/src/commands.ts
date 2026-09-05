@@ -110,7 +110,7 @@ export class Commands {
     if (pitch.length < 12) return { text: 'give the pitch at least a sentence. usage: shill <mint> <your pitch>' };
     const shill: Shill = { mint, pitch: pitch.slice(0, 2000), author: ctx.author, surface: ctx.surface };
     if (!this.d.entry) {
-      // no play program configured: free play (dry runs, devnet)
+      // no play program configured: free play (dry runs)
       const out = await this.d.hill.challenge(shill);
       return this.outcome(out, null);
     }

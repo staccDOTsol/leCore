@@ -14,11 +14,11 @@
     "read-metadata": "tsx scripts/read-metadata.ts",
     "update-metadata": "tsx scripts/update-metadata.ts",
     "challenge": "tsx scripts/challenge.ts",
-    "devnet-e2e": "tsx scripts/devnet-e2e.ts",
     "bot": "tsx src/bot.ts",
     "init-play": "tsx scripts/init-play.ts",
     "build-program": "cargo build-sbf --manifest-path program/Cargo.toml",
-    "test-program": "cargo test --manifest-path program/Cargo.toml --lib"
+    "test-program": "cargo test --manifest-path program/Cargo.toml --lib",
+    "preflight": "tsx scripts/preflight.ts"
   },
   "engines": {
     "node": ">=20"

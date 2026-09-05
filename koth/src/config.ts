@@ -43,7 +43,8 @@ export type KothConfig = {
   };
 };
 
-const RAYDIUM_CPMM_MAINNET = 'CPMMoo8L3F4NbTegBCKVNunggL7H1ZpdTHKxQB5qKP1C';
+/** Mainnet only, by directive. */
+export const RAYDIUM_CPMM_PROGRAM = 'CPMMoo8L3F4NbTegBCKVNunggL7H1ZpdTHKxQB5qKP1C';
 export const ZOO_TOKEN = 'EVULoNF4DeMBN4dGiZiDfpiiTfNZgoCvXWWgaV3epump';
 export const LEOS = '5xgsnby6P9zqGK71J7H4yJLxzqPvNbC7rDZxNzjHmj7e';
 export const USDC = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
@@ -61,7 +62,6 @@ export function resolveZooWallet(env: NodeJS.ProcessEnv = process.env): PublicKe
   } catch { /* no wallet on this machine */ }
   return null;
 }
-export const RAYDIUM_CPMM_DEVNET = 'CPMDWBwJDtYax9qW7AyRuVC19Cc4L4Vcy4n2BHAbHkCW';
 
 function pk(v: string | undefined): PublicKey | null {
   return v && v.trim() ? new PublicKey(v.trim()) : null;
@@ -69,19 +69,17 @@ function pk(v: string | undefined): PublicKey | null {
 
 /**
  * The RPC endpoint. Either a full SOLANA_RPC_URL (a `{key}` placeholder is substituted), or just a
- * SOLANA_RPC_KEY, which is assumed to be a Helius key for the cluster named by SOLANA_CLUSTER.
+ * SOLANA_RPC_KEY, which is assumed to be a Helius key. Mainnet only.
  */
 export function resolveRpcUrl(env: NodeJS.ProcessEnv = process.env): string {
   const key = env.SOLANA_RPC_KEY || env.solana_rpc_key || '';
-  const cluster = (env.SOLANA_CLUSTER || 'mainnet').toLowerCase();
   if (env.SOLANA_RPC_URL) return env.SOLANA_RPC_URL.replace('{key}', key);
-  if (key) return `https://${cluster === 'devnet' ? 'devnet' : 'mainnet'}.helius-rpc.com/?api-key=${key}`;
-  return cluster === 'devnet' ? 'https://api.devnet.solana.com' : 'https://api.mainnet-beta.solana.com';
+  if (key) return `https://mainnet.helius-rpc.com/?api-key=${key}`;
+  return 'https://api.mainnet-beta.solana.com';
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): KothConfig {
   const rpcUrl = resolveRpcUrl(env);
-  const devnet = /devnet/i.test(rpcUrl) || /devnet/i.test(env.SOLANA_CLUSTER || '');
   return {
     rpcUrl,
     birdeyeApiKey: env.BIRDEYE_API_KEY || env.birdeye_api_key || '',
@@ -101,9 +99,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): KothConfig {
     entryGrowthPct: Number(env.KOTH_ENTRY_GROWTH_PCT || 1),
     model: env.KOTH_MODEL || 'claude-opus-5',
     playProgramId: pk(env.KOTH_PLAY_PROGRAM_ID),
-    raydiumCpmmProgramId: new PublicKey(
-      env.RAYDIUM_CPMM_PROGRAM_ID || (devnet ? RAYDIUM_CPMM_DEVNET : RAYDIUM_CPMM_MAINNET),
-    ),
+    raydiumCpmmProgramId: new PublicKey(env.RAYDIUM_CPMM_PROGRAM_ID || RAYDIUM_CPMM_PROGRAM),
     telegram: { token: env.TELEGRAM_BOT_TOKEN || '', chatId: env.TELEGRAM_CHAT_ID || '' },
     discord: { token: env.DISCORD_BOT_TOKEN || '', channelId: env.DISCORD_CHANNEL_ID || '' },
     x: {

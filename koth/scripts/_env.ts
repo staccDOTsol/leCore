@@ -20,9 +20,8 @@ export function boot(): { cfg: KothConfig; connection: Connection } {
   return { cfg, connection: new Connection(cfg.rpcUrl, 'confirmed') };
 }
 
-export function explorer(sig: string, rpcUrl: string): string {
-  const cluster = /devnet/i.test(rpcUrl) ? '?cluster=devnet' : '';
-  return `https://solscan.io/tx/${sig}${cluster}`;
+export function explorer(sig: string, _rpcUrl?: string): string {
+  return `https://solscan.io/tx/${sig}`;
 }
 
 export { loadKeypair };

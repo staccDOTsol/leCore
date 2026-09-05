@@ -37,8 +37,7 @@ export async function main(): Promise<void> {
   loadDotenv();
   const cfg = loadConfig();
   const dry = process.env.KOTH_DRY_RUN === '1';
-  const cluster: 'mainnet' | 'devnet' = /devnet/i.test(cfg.rpcUrl) ? 'devnet' : 'mainnet';
-  const explorer = (sig: string) => `https://solscan.io/tx/${sig}${cluster === 'devnet' ? '?cluster=devnet' : ''}`;
+  const explorer = (sig: string) => `https://solscan.io/tx/${sig}`;
   fs.mkdirSync(cfg.dataDir, { recursive: true });
 
   // inference: the zoo, always. A mock only for rehearsal.
@@ -56,12 +55,12 @@ export async function main(): Promise<void> {
     const connection = new Connection(cfg.rpcUrl, 'confirmed');
     const operator = loadKeypair(cfg.keypairPath);
     chain = new MasterChain(connection, operator, cfg.masterMint, { birdeyeApiKey: cfg.birdeyeApiKey });
-    log(`operator ${operator.publicKey.toBase58()} master ${cfg.masterMint.toBase58()} on ${cluster}`);
+    log(`operator ${operator.publicKey.toBase58()} master ${cfg.masterMint.toBase58()} on mainnet`);
     if (cfg.playProgramId) {
       // the hill is built below; the entry reads its inference estimate lazily through this closure
       entry = new Entry({
         connection, operator, masterMint: cfg.masterMint, playProgramId: cfg.playProgramId, cpmmProgramId: cfg.raydiumCpmmProgramId,
-        cluster, dataDir: cfg.dataDir, zooWallet: cfg.zooWallet, inferencePayMint: cfg.inferencePayMint,
+        dataDir: cfg.dataDir, zooWallet: cfg.zooWallet, inferencePayMint: cfg.inferencePayMint,
         estimateInferenceUsd: () => hill?.inferenceEstimateUsd() ?? 0.05, log,
       });
       entryLike = entry;

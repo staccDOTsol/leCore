@@ -47,7 +47,7 @@ src/commands.ts   king / hall / fee / shill / paid / help
 src/surfaces/     telegram.ts (Bot API long-poll), discord.ts (discord.js), x.ts (openzoo-xbot shape)
 src/bot.ts        the runner: surfaces + the /metadata + /assets static server + the shill cadence
 program/          koth-play (Pinocchio, no_std): Initialize / Play / SetMaster
-scripts/          create-config, launch-master, read-metadata, update-metadata, init-play, challenge, devnet-e2e
+scripts/          create-config, launch-master, read-metadata, update-metadata, init-play, challenge, preflight
 ```
 
 ## Run it
@@ -77,17 +77,19 @@ keypair means changing that line and rebuilding.
 ```bash
 npm test                        # vitest: cards, metadata builders, openzoo client + judge, hill, play client, entry math, commands
 npm run test-program            # cargo: PoolState offsets, instruction decoding, layouts
-npm run devnet-e2e              # the on-chain proof: quote mint -> config -> launch -> rewrite -> read back (needs devnet SOL)
+npm run preflight               # read-only mainnet checks: operator balance, $TOKEN mint, master metadata authority
 ```
 
-The Raydium CPMM `PoolState` offsets the program trusts (discriminator `f7ede3f5d7c3de46`, `lp_mint` @136,
-`token_0_mint` @168, `token_1_mint` @200, length 637) were verified against live pools on mainnet and devnet.
+Mainnet only: there is no devnet path. The on-chain proof is the launch itself — `create-config`,
+`launch-master`, then `update-metadata` and `read-metadata` show the rewrite. The Raydium CPMM `PoolState`
+offsets the program trusts (discriminator `f7ede3f5d7c3de46`, `lp_mint` @136, `token_0_mint` @168,
+`token_1_mint` @200, length 637) were verified against live mainnet pools.
 
 ## Config
 
 See `.env.example`. Notable:
 
-- `SOLANA_RPC_KEY` (+ `SOLANA_CLUSTER`) or a full `SOLANA_RPC_URL`; `BIRDEYE_API_KEY` for holder counts.
+- `SOLANA_RPC_KEY` (Helius) or a full `SOLANA_RPC_URL`, mainnet only; `BIRDEYE_API_KEY` for holder counts.
 - `KOTH_QUOTE_MINT` — the curve's quote mint, `$TOKEN` by default.
 - `KOTH_INFERENCE_PAY` — `TOKEN` | `LEOS` | `USDC`: what the inference share of each quote becomes.
 - `OPENZOO_BASE_URL`, `KOTH_MODEL` (`openzoo/auto` lets the zoo route), `OPENZOO_WALLET_ADDRESS`.

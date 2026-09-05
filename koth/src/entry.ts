@@ -27,8 +27,7 @@ import {
   createTransferCheckedInstruction, getAccount, getAssociatedTokenAddressSync, getMint,
 } from '@solana/spl-token';
 import {
-  CREATE_CPMM_POOL_FEE_ACC, CREATE_CPMM_POOL_PROGRAM, DEVNET_PROGRAM_ID, Percent, Raydium, TxVersion, getCpmmPdaAmmConfigId,
-  getCpmmPdaPoolId, type ApiCpmmConfigInfo,
+  CREATE_CPMM_POOL_FEE_ACC, CREATE_CPMM_POOL_PROGRAM, Percent, Raydium, TxVersion, getCpmmPdaPoolId, type ApiCpmmConfigInfo,
 } from '@raydium-io/raydium-sdk-v2';
 import { NATIVE_SOL_MINT, ZOO_TOKEN_MINT } from './dbc.js';
 import type { EntryLike } from './hill.js';
@@ -142,7 +141,6 @@ export type EntryDeps = {
   masterMint: PublicKey;
   playProgramId: PublicKey;
   cpmmProgramId: PublicKey;
-  cluster: 'mainnet' | 'devnet';
   dataDir: string;
   /** Where the inference share goes: the openzoo burner wallet's owner. */
   zooWallet: PublicKey | null;
@@ -343,18 +341,15 @@ export class Entry implements EntryLike {
 
   private async getRaydium(): Promise<Raydium> {
     if (!this.raydium) {
-      this.raydium = Raydium.load({ connection: this.d.connection, owner: this.d.operator, cluster: this.d.cluster, disableLoadToken: true, disableFeatureCheck: true });
+      this.raydium = Raydium.load({ connection: this.d.connection, owner: this.d.operator, cluster: 'mainnet', disableLoadToken: true, disableFeatureCheck: true });
     }
     return this.raydium;
   }
 
-  /** Raydium's CPMM fee configs, with ids remapped for devnet (its API only knows mainnet ids). */
+  /** Raydium's CPMM fee configs; the lowest index is the standard tier. */
   async cpmmFeeConfig(): Promise<ApiCpmmConfigInfo> {
     const raydium = await this.getRaydium();
     const configs = await raydium.api.getCpmmConfigs();
-    if (this.d.cluster === 'devnet') {
-      for (const c of configs) c.id = getCpmmPdaAmmConfigId(DEVNET_PROGRAM_ID.CREATE_CPMM_POOL_PROGRAM, c.index).publicKey.toBase58();
-    }
     const cfg = configs.sort((a, b) => a.index - b.index)[0];
     if (!cfg) throw new Error('no CPMM fee config');
     return cfg;
@@ -380,10 +375,8 @@ export class Entry implements EntryLike {
     };
 
     if (!info) {
-      const programId = this.d.cluster === 'devnet' ? DEVNET_PROGRAM_ID.CREATE_CPMM_POOL_PROGRAM : CREATE_CPMM_POOL_PROGRAM;
-      const poolFeeAccount = this.d.cluster === 'devnet' ? DEVNET_PROGRAM_ID.CREATE_CPMM_POOL_FEE_ACC : CREATE_CPMM_POOL_FEE_ACC;
       const { execute, extInfo } = await raydium.cpmm.createPool({
-        programId, poolFeeAccount,
+        programId: CREATE_CPMM_POOL_PROGRAM, poolFeeAccount: CREATE_CPMM_POOL_FEE_ACC,
         mintA: { address: mint.toBase58(), decimals: tokenDecimals, programId: program.toBase58() },
         mintB: { address: this.d.masterMint.toBase58(), decimals: masterDecimals, programId: masterProgram.toBase58() },
         mintAAmount: new BN(tokenRaw.toString()), mintBAmount: new BN(masterRaw.toString()),

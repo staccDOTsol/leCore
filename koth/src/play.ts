@@ -3,8 +3,8 @@
  * permanently locked Raydium CPMM liquidity for a MASTER/<token> pair.
  *
  * Layout constants mirror program/src/lib.rs exactly; the Raydium offsets were verified against
- * live pools on mainnet and devnet (discriminator f7ede3f5d7c3de46, lp_mint @136, token_0 @168,
- * token_1 @200, account length 637).
+ * live mainnet pools (discriminator f7ede3f5d7c3de46, lp_mint @136, token_0 @168, token_1 @200,
+ * account length 637).
  */
 import { Connection, PublicKey, SystemProgram, TransactionInstruction, type VersionedTransactionResponse } from '@solana/web3.js';
 import { ASSOCIATED_TOKEN_PROGRAM_ID, TOKEN_PROGRAM_ID, createAssociatedTokenAccountIdempotentInstruction, getAssociatedTokenAddressSync } from '@solana/spl-token';

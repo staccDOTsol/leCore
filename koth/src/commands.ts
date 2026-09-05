@@ -15,6 +15,7 @@ import { cardLine, type Card } from './cards.js';
 import type { Entry, Quote } from './entry.js';
 import type { ChallengeOutcome, Hill, KingRecord } from './hill.js';
 import type { Shill } from './judge.js';
+import { PITCH } from './pitch.js';
 
 export type Surface = Shill['surface'];
 export type Ctx = { surface: Surface; author: string; authorId: string; text: string };
@@ -63,13 +64,7 @@ export class Commands {
   }
 
   help(): Reply {
-    return { text: [
-      'KING OF THE HILL. Shill your token; beat the king; the master token becomes yours.',
-      'king  - who holds the hill', 'hall  - the hall of fame', 'fee   - what an attempt costs right now',
-      'shill <mint> <your pitch>  - get a one-time deposit address and the exact amount',
-      'paid <quote-id>            - after you sent it: we fight',
-      'Every attempt is permanent liquidity for <your token>/MASTER. Loser pays. Winner wears the crown on chain.',
-    ].join('\n') };
+    return { text: `${PITCH}\n\nCOMMANDS: king · hall · fee · shill <mint> <pitch> · paid <quote-id>` };
   }
 
   king(): Reply {

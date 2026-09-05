@@ -8,11 +8,13 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { Keypair, PublicKey } from '@solana/web3.js';
+import bs58 from 'bs58';
 
 export type KothConfig = {
   rpcUrl: string;
   /** Birdeye key for token metrics (DexScreener is the keyless fallback). */
   birdeyeApiKey: string;
+  /** KOTH_KEYPAIR verbatim: bs58, JSON byte array, or a file path (see parseKeypair). */
   keypairPath: string;
   dbcConfig: PublicKey | null;
   masterMint: PublicKey | null;
@@ -83,7 +85,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): KothConfig {
   return {
     rpcUrl,
     birdeyeApiKey: env.BIRDEYE_API_KEY || env.birdeye_api_key || '',
-    keypairPath: env.KOTH_KEYPAIR || '',
+    keypairPath: env.KOTH_KEYPAIR || env.koth_keypair || '',
     dbcConfig: pk(env.KOTH_DBC_CONFIG),
     masterMint: pk(env.KOTH_MASTER_MINT),
     masterPool: pk(env.KOTH_MASTER_POOL),
@@ -110,9 +112,34 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): KothConfig {
   };
 }
 
-/** Load a solana-keygen JSON keypair. Throws a readable error instead of a JSON parse trace. */
-export function loadKeypair(file: string): Keypair {
-  if (!file) throw new Error('KOTH_KEYPAIR is not set (path to a solana-keygen JSON file)');
-  const raw = JSON.parse(fs.readFileSync(file, 'utf8')) as number[];
-  return Keypair.fromSecretKey(Uint8Array.from(raw));
+/**
+ * The operator keypair, from KOTH_KEYPAIR in whichever form is at hand:
+ *   - a bs58 string (what Phantom / Solflare export)             KOTH_KEYPAIR=4vJ9...
+ *   - the JSON uint8 array solana-keygen writes                   KOTH_KEYPAIR=[12,34,...]
+ *   - a path to that JSON file                                    KOTH_KEYPAIR=./keys/operator.json
+ * A 64-byte value is the full secret key; a 32-byte value is treated as the seed.
+ */
+export function parseKeypair(value: string): Keypair {
+  const v = value.trim();
+  if (!v) throw new Error('KOTH_KEYPAIR is empty');
+  let bytes: Uint8Array;
+  if (v.startsWith('[')) {
+    bytes = Uint8Array.from(JSON.parse(v) as number[]);
+  } else if (fs.existsSync(v)) {
+    bytes = Uint8Array.from(JSON.parse(fs.readFileSync(v, 'utf8')) as number[]);
+  } else {
+    try {
+      bytes = bs58.decode(v);
+    } catch {
+      throw new Error('KOTH_KEYPAIR is neither a file path, a JSON byte array, nor a bs58 secret key');
+    }
+  }
+  if (bytes.length === 64) return Keypair.fromSecretKey(bytes);
+  if (bytes.length === 32) return Keypair.fromSeed(bytes);
+  throw new Error(`KOTH_KEYPAIR decodes to ${bytes.length} bytes; expected 64 (secret key) or 32 (seed)`);
+}
+
+export function loadKeypair(value: string): Keypair {
+  if (!value) throw new Error('KOTH_KEYPAIR is not set (bs58 secret, JSON byte array, or path to a solana-keygen file)');
+  return parseKeypair(value);
 }

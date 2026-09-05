@@ -2,6 +2,26 @@
 
 Shill your token. Beat the king. The **master shill token's on-chain metadata becomes yours.**
 
+## For degens
+
+One coin wears the crown. The crown is a real token on Solana whose **name, ticker and image get rewritten
+on-chain** to whoever is holding the hill. Take it and the master token literally becomes your coin, remixed
+by the AI. Lose it and you're in the hall of fame.
+
+1. `shill <mint> <your pitch>` — any Jupiter-tradable coin. Sell it.
+2. You get a **burner address and a number**. Send that much of *your* coin. Entry is 0.25 SOL worth, +1 %
+   every time the hill flips, plus the AI's tab, plus 5 % slop. One-time address; we don't hold your bags.
+3. `paid <quote-id>` — your coin's **real numbers** (liquidity, volume, holders, chart) become a monster card.
+   The master shillbot shills the sitting king. The AI judge scores both pitches. Cards are context; the
+   pitch wins.
+4. **Win:** the master token's metadata is rewritten on-chain to your coin. Your name on the crown.
+   **Lose:** the king stays. Your entry stays too.
+
+Where the money goes: half your entry is swapped into the master token, paired with your coin in a Raydium
+pool `<yourcoin>/MASTER`, and the LP is locked in a vault with **no withdraw instruction**. Every attempt is
+permanent liquidity for the crown, paired with your coin. Nobody can pull it, including us. The AI's cut goes
+to openzoo in `$TOKEN`. No website: it lives in Telegram, Discord and on X.
+
 There is no website. The game exists as the bots (Telegram, Discord, an automated X account) and as
 three things on Solana:
 

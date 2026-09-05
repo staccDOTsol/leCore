@@ -56,13 +56,13 @@ describe('telegram surface', () => {
     expect(seen[0]).toMatchObject({ surface: 'telegram', author: '@alice', authorId: 'tg:7', text: 'king' });
     const photo = calls.find((c) => c.method === 'sendPhoto')!;
     expect(photo.body).toMatchObject({ chat_id: 42, photo: 'https://img/king.png', parse_mode: 'HTML', reply_to_message_id: 5 });
-    expect(photo.body.caption).toBe('<b>KING</b> <x>');
+    expect(photo.body.caption).toBe('<a href="tg://user?id=7">@alice</a>\n<b>KING</b> <x>');   // group: addressed to the player
     expect((photo.body.reply_markup as { inline_keyboard: unknown[][] }).inline_keyboard[0][0]).toEqual({ text: 'Hall', callback_data: 'cmd:hall' });
     expect(calls[0].body).toMatchObject({ offset: 0, allowed_updates: ['message', 'callback_query', 'my_chat_member'] });
 
     expect(await tg.pollOnce(0)).toBe(1);
     expect(calls.find((c) => c.method === 'answerCallbackQuery')?.body).toEqual({ callback_query_id: 'cb1' });
-    expect(calls.filter((c) => c.method === 'sendMessage').at(-1)?.body).toMatchObject({ chat_id: 42, text: 'fee is 0.25', parse_mode: 'HTML' });
+    expect(calls.filter((c) => c.method === 'sendMessage').at(-1)?.body).toMatchObject({ chat_id: 42, text: '<a href="tg://user?id=7">@alice</a>\nfee is 0.25', parse_mode: 'HTML', reply_to_message_id: 6 });
     expect(calls.filter((c) => c.method === 'getUpdates').at(-1)?.body.offset).toBe(2);
 
     expect(await tg.pollOnce(0)).toBe(1);

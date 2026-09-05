@@ -125,6 +125,14 @@ export class TelegramSurface {
     return { author: u.username ? `@${u.username}` : u.first_name ?? String(u.id), authorId: `tg:${u.id}` };
   }
 
+  /** In a group every reply opens by naming who it is for: a tappable mention, so two players never read each other's lines. */
+  private addressed(reply: Reply, u: TgUser, chat: TgChat): Reply {
+    if (chat.type === 'private') return reply;
+    const label = u.username ? `@${u.username}` : (u.first_name ?? String(u.id));
+    const mention: Rich = (f) => f.html ? `<a href="tg://user?id=${u.id}">${f.esc(label)}</a>` : label;
+    return { ...reply, rich: (f) => `${mention(f)}\n${reply.rich(f)}` };
+  }
+
   /** Send a reply: photo + caption when there is an image, else a text message. Returns the message id. */
   async send(chatId: string | number, reply: Reply, replyTo?: number): Promise<number | undefined> {
     const text = html(reply.rich);
@@ -162,15 +170,17 @@ export class TelegramSurface {
     }
   }
 
-  private async dispatch(chatId: number, u: TgUser, text: string, replyTo?: number): Promise<void> {
+  private async dispatch(chat: TgChat, u: TgUser, text: string, replyTo?: number): Promise<void> {
+    const chatId = chat.id;
     let statusId: number | undefined;
     const progress = async (rich: Rich) => {
-      if (statusId === undefined) statusId = await this.send(chatId, { rich }, replyTo);
-      else await this.edit(chatId, statusId, rich);
+      const r = this.addressed({ rich }, u, chat);
+      if (statusId === undefined) statusId = await this.send(chatId, r, replyTo);
+      else await this.edit(chatId, statusId, r.rich);
     };
     const reply = await this.commands.handle({ surface: 'telegram', ...this.author(u), text, progress });
     if (!reply) return;
-    await this.send(chatId, reply, replyTo);
+    await this.send(chatId, this.addressed(reply, u, chat), replyTo);
     // a takeover is news everywhere the bot lives, except the chat that just watched it happen
     if (reply.announce) await this.broadcast(reply.announce, reply.image, reply.announceButtons, chatId);
   }
@@ -192,9 +202,9 @@ export class TelegramSurface {
         if (u.callback_query) {
           const cq = u.callback_query;
           await this.api('answerCallbackQuery', { callback_query_id: cq.id });
-          if (cq.data && cq.message) await this.dispatch(cq.message.chat.id, cq.from, cq.data, cq.message.message_id);
+          if (cq.data && cq.message) await this.dispatch(cq.message.chat, cq.from, cq.data, cq.message.message_id);
         } else if (u.message?.text && u.message.from) {
-          await this.dispatch(u.message.chat.id, u.message.from, u.message.text, u.message.chat.type === 'private' ? undefined : u.message.message_id);
+          await this.dispatch(u.message.chat, u.message.from, u.message.text, u.message.chat.type === 'private' ? undefined : u.message.message_id);
         }
       } catch (e) {
         this.o.log?.(`telegram update ${u.update_id} failed: ${e instanceof Error ? e.message : e}`);

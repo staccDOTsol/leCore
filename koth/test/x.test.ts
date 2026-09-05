@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { XSurface, chunkPost, oauth1Header, renderForX } from '../src/surfaces/x.js';
+import { XSurface, chunkPost, imageCandidates, oauth1Header, oneCashtag, renderForX } from '../src/surfaces/x.js';
 import type { Commands, Ctx, Reply } from '../src/commands.js';
 
 const creds = { apiKey: 'k', apiSecret: 's', accessToken: 't', accessSecret: 'ts', bearer: '', botUserId: '' };
@@ -43,6 +43,11 @@ describe('x helpers', () => {
     expect(chunkPost('abcdefgh', 3)).toEqual(['abc', 'def', 'gh']);
     expect(chunkPost('short', 280)).toEqual(['short']);
     expect(chunkPost('', 280)).toEqual(['']);
+  });
+  it('keeps one cashtag per post and offers other ipfs gateways', () => {
+    expect(oneCashtag('Token $TOKEN beats $BONK for $25.46 · $SHILL')).toBe('Token $TOKEN beats BONK for $25.46 · SHILL');
+    expect(imageCandidates('https://ipfs.io/ipfs/bafyabc')).toEqual(['https://ipfs.io/ipfs/bafyabc', 'https://dweb.link/ipfs/bafyabc', 'https://cloudflare-ipfs.com/ipfs/bafyabc', 'https://gateway.pinata.cloud/ipfs/bafyabc', 'https://nftstorage.link/ipfs/bafyabc']);
+    expect(imageCandidates('https://host/assets/1.png')).toEqual(['https://host/assets/1.png']);
   });
   it('renders url buttons as lines and drops the rest', () => {
     expect(renderForX((f) => f.b('hi'), [[{ label: 'Copy', copy: 'X' }, { label: 'Solscan', url: 'https://s/1' }]])).toBe('hi\nSolscan: https://s/1');
@@ -112,6 +117,43 @@ describe('x surface', () => {
     const x = new XSurface(commands, { creds: { ...creds, botUserId: '99' }, dataDir: fs.mkdtempSync(path.join(os.tmpdir(), 'koth-x-')), fetchImpl: f });
     await x.pollOnce();
     expect(seen.length - before).toBe(1);
+  });
+
+  it('falls back to another gateway on 429, reuses the media id, strips extra cashtags, and retries a mention that posted nothing', async () => {
+    let tweetFails = 1, ipfsHits = 0;
+    const calls: { url: string; body?: unknown }[] = [];
+    let n = 0;
+    const f = (async (input: unknown, init?: RequestInit) => {
+      const url = String(input);
+      if (url.startsWith('https://ipfs.io/')) { ipfsHits++; return new Response('slow down', { status: 429 }); }
+      if (url.startsWith('https://dweb.link/')) return new Response(PNG, { headers: { 'content-type': 'image/png' } });
+      if (url.includes('/mentions')) return Response.json({ data: [], meta: {} });
+      if (url.endsWith('/2/media/upload')) { calls.push({ url }); return Response.json({ data: { id: `m${++n}` } }); }
+      if (url.endsWith('/2/tweets')) {
+        if (tweetFails-- > 0) return Response.json({ detail: 'nope', status: 403 }, { status: 403 });
+        calls.push({ url, body: JSON.parse(String(init?.body)) }); return Response.json({ data: { id: String(++n) } });
+      }
+      throw new Error(`unexpected ${url}`);
+    }) as typeof fetch;
+    const cmds = { handle: async (): Promise<Reply> => ({ rich: () => 'king is $A and $B', image: 'https://ipfs.io/ipfs/bafy1' }) } as unknown as Commands;
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'koth-x-'));
+    const x = new XSurface(cmds, { creds: { ...creds, botUserId: '99' }, dataDir, fetchImpl: f });
+    const t = { id: '5', text: '@openzoobot king', author_id: '7', username: 'alice' };
+    await x.dispatch(t);                                  // 403 on the post: nothing went out, so it is queued
+    let state = JSON.parse(fs.readFileSync(path.join(dataDir, 'x-state.json'), 'utf8')) as { answered: Record<string, number>; retry: unknown[]; media: Record<string, unknown> };
+    expect(state.answered['5']).toBeUndefined();
+    expect(state.retry).toHaveLength(1);
+    expect(Object.keys(state.media)).toEqual(['https://ipfs.io/ipfs/bafy1']);
+    await x.pollOnce();                                    // the retry goes first and succeeds
+    state = JSON.parse(fs.readFileSync(path.join(dataDir, 'x-state.json'), 'utf8')) as typeof state;
+    expect(state.answered['5']).toBeDefined();
+    expect(state.retry).toHaveLength(0);
+    const tweets = calls.filter((c) => c.url.endsWith('/2/tweets')).map((c) => c.body as { text: string; media?: { media_ids: string[] } });
+    expect(tweets).toHaveLength(1);
+    expect(tweets[0].text).toBe('king is $A and B');
+    expect(tweets[0].media?.media_ids).toEqual(['m1']);   // one upload, reused on the retry
+    expect(calls.filter((c) => c.url.endsWith('/2/media/upload'))).toHaveLength(1);
+    expect(ipfsHits).toBe(1);
   });
 
   it('uses OAuth user context for mentions when no bearer is set', async () => {

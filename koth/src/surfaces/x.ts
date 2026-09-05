@@ -72,8 +72,27 @@ export function renderForX(rich: Rich, buttons?: Button[][]): string {
   return [plain(rich).trim(), ...links].join('\n').trim();
 }
 
-type XState = { sinceId: string | null; answered: Record<string, number> };
+/** X allows one cashtag per post: the first `$SYMBOL` keeps its dollar sign, the rest lose it (the symbol stays readable). */
+export function oneCashtag(text: string): string {
+  let seen = false;
+  return text.replace(/\$(?=[A-Za-z])/g, () => { if (seen) return ''; seen = true; return '$'; });
+}
+
+/** The same image on other gateways when it is an IPFS url; public gateways rate-limit bots (429) unpredictably. */
+export function imageCandidates(url: string): string[] {
+  const m = url.match(/^https?:\/\/[^/]+\/ipfs\/([A-Za-z0-9]+)(\/.*)?$/) ?? url.match(/^ipfs:\/\/([A-Za-z0-9]+)(\/.*)?$/);
+  if (!m) return [url];
+  const rest = m[2] ?? '';
+  const alts = ['https://ipfs.io', 'https://dweb.link', 'https://cloudflare-ipfs.com', 'https://gateway.pinata.cloud', 'https://nftstorage.link'].map((g) => `${g}/ipfs/${m[1]}${rest}`);
+  return [url, ...alts.filter((a) => a !== url)];
+}
+
+type Mention = { id: string; text: string; author_id: string; username: string; created_at?: string };
+type XState = { sinceId: string | null; answered: Record<string, number>; media?: Record<string, { id: string; at: number }>; retry?: { t: Mention; attempts: number }[] };
 const ANSWERED_TTL_MS = 7 * 24 * 3600_000;
+/** X media ids are good for about a day; reuse one for the same image url within that. */
+const MEDIA_TTL_MS = 20 * 3600_000;
+const MAX_ATTEMPTS = 3;
 
 export class XSurface {
   private state: XState;
@@ -81,6 +100,8 @@ export class XSurface {
   private stopped = false;
   private f: typeof fetch;
   private username = '';
+  /** Posts made so far; a failed mention is retried only when nothing was posted for it. */
+  private posted = 0;
 
   constructor(private commands: Commands, private o: XOpts) {
     this.f = o.fetchImpl ?? fetch;
@@ -91,6 +112,7 @@ export class XSurface {
   private save(): void {
     const cutoff = Date.now() - ANSWERED_TTL_MS;
     for (const [id, t] of Object.entries(this.state.answered)) if (t < cutoff) delete this.state.answered[id];
+    for (const [u, m] of Object.entries(this.state.media ?? {})) if (m.at < Date.now() - MEDIA_TTL_MS) delete this.state.media![u];
     fs.mkdirSync(this.o.dataDir, { recursive: true });
     fs.writeFileSync(this.file, JSON.stringify(this.state, null, 2));
   }
@@ -114,13 +136,27 @@ export class XSurface {
     return { id: me.id, username: this.username };
   }
 
-  /** Upload one image as post media. SVGs are rasterized to PNG first; X only takes bitmaps. */
+  /** Fetch the image bytes, trying the other IPFS gateways when the first answers 429/5xx or times out. */
+  private async fetchImage(imageUrl: string): Promise<{ bytes: Buffer; type: string }> {
+    let last = 'no candidates';
+    for (const url of imageCandidates(imageUrl)) {
+      try {
+        const r = await this.f(url, { signal: AbortSignal.timeout(20_000), headers: { accept: 'image/*' } });
+        if (!r.ok) { last = `${url} -> ${r.status}`; continue; }
+        const bytes = Buffer.from(await r.arrayBuffer());
+        const type = r.headers.get('content-type')?.split(';')[0] || (url.endsWith('.png') ? 'image/png' : url.endsWith('.svg') ? 'image/svg+xml' : 'image/jpeg');
+        return { bytes, type };
+      } catch (e) { last = `${url} -> ${e instanceof Error ? e.message : e}`; }
+    }
+    throw new Error(`fetch ${last}`);
+  }
+
+  /** Upload one image as post media. SVGs are rasterized to PNG first; X only takes bitmaps. A media id is reused for the same url for a day. */
   async uploadMedia(imageUrl: string): Promise<string | null> {
+    const cached = this.state.media?.[imageUrl];
+    if (cached && cached.at > Date.now() - MEDIA_TTL_MS) return cached.id;
     try {
-      const r = await this.f(imageUrl, { signal: AbortSignal.timeout(30_000) });
-      if (!r.ok) throw new Error(`fetch ${r.status}`);
-      let bytes: Buffer = Buffer.from(await r.arrayBuffer());
-      let type = r.headers.get('content-type')?.split(';')[0] || (imageUrl.endsWith('.png') ? 'image/png' : imageUrl.endsWith('.svg') ? 'image/svg+xml' : 'image/jpeg');
+      let { bytes, type } = await this.fetchImage(imageUrl);
       if (type === 'image/svg+xml' || bytes.subarray(0, 5).toString() === '<?xml' || bytes.subarray(0, 4).toString() === '<svg') {
         const png = await svgToPng(bytes.toString('utf8'));
         if (!png) throw new Error('no rasterizer for svg');
@@ -135,6 +171,7 @@ export class XSurface {
       const j = await this.json(res);
       const id = (j.data as { id?: string } | undefined)?.id ?? (j.media_id_string as string | undefined);
       if (!res.ok || !id) throw new Error(`${res.status} ${JSON.stringify(j).slice(0, 200)}`);
+      (this.state.media ??= {})[imageUrl] = { id, at: Date.now() }; this.save();
       return id;
     } catch (e) {
       this.o.log?.(`x media upload failed (${e instanceof Error ? e.message : e}); posting without the image`);
@@ -145,7 +182,7 @@ export class XSurface {
   /** One post. Returns its id. */
   async post(text: string, opts: { inReplyTo?: string; mediaIds?: string[] } = {}): Promise<string> {
     const url = 'https://api.x.com/2/tweets';
-    const body: Record<string, unknown> = { text: text.slice(0, this.max) };
+    const body: Record<string, unknown> = { text: oneCashtag(text.slice(0, this.max)) };
     if (opts.inReplyTo) body.reply = { in_reply_to_tweet_id: opts.inReplyTo };
     if (opts.mediaIds?.length) body.media = { media_ids: opts.mediaIds };
     const res = await this.f(url, {
@@ -156,6 +193,7 @@ export class XSurface {
     });
     const j = await this.json(res);
     if (!res.ok) throw new Error(`x post ${res.status}: ${JSON.stringify(j).slice(0, 200)}`);
+    this.posted++;
     return (j.data as { id?: string } | undefined)?.id ?? '';
   }
 
@@ -208,10 +246,31 @@ export class XSurface {
       .map((t) => ({ ...t, username: users.get(t.author_id) ?? t.author_id }));
   }
 
-  /** Answer one mention: reply thread, and a standalone post for a takeover. Exposed so tests can drive it. */
-  async dispatch(t: { id: string; text: string; author_id: string; username: string }): Promise<void> {
+  /**
+   * Answer one mention: reply thread, and a standalone post for a takeover. Marked answered before
+   * anything is posted so a crash mid-thread cannot double-post; when the failure happened before
+   * any post went out, the mention is queued and retried on later polls (up to MAX_ATTEMPTS).
+   * Exposed so tests can drive it.
+   */
+  async dispatch(t: Mention, attempt = 1): Promise<void> {
     if (this.state.answered[t.id] || t.author_id === this.o.creds.botUserId) return;
-    this.state.answered[t.id] = Date.now(); this.save();   // first, so a crash mid-reply cannot double-post
+    this.state.answered[t.id] = Date.now(); this.save();
+    const before = this.posted;
+    try {
+      await this.answer(t);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      if (this.posted === before && attempt < MAX_ATTEMPTS) {
+        delete this.state.answered[t.id];
+        (this.state.retry ??= []).push({ t, attempts: attempt }); this.save();
+        this.o.log?.(`x mention ${t.id} failed (attempt ${attempt}, will retry): ${msg}`);
+      } else {
+        this.o.log?.(`x mention ${t.id} failed for good: ${msg}`);
+      }
+    }
+  }
+
+  private async answer(t: Mention): Promise<void> {
     let anchor: string = t.id;
     let acked = false;
     const progress = async (rich: Rich) => {
@@ -228,10 +287,11 @@ export class XSurface {
   }
 
   async pollOnce(): Promise<number> {
+    const queued = (this.state.retry ?? []).splice(0);
+    if (queued.length) this.save();
+    for (const q of queued) await this.dispatch(q.t, q.attempts + 1);
     const ts = await this.mentions();
-    for (const t of ts) {
-      try { await this.dispatch(t); } catch (e) { this.o.log?.(`x mention ${t.id} failed: ${e instanceof Error ? e.message : e}`); }
-    }
+    for (const t of ts) await this.dispatch(t);
     return ts.length;
   }
 

@@ -29,9 +29,11 @@ SECURITY (kept honest, same spirit as the farm)
   * The SQL surface is the hand-rolled subset (no string-concatenated SQL), so classic injection is N/A; but a caller
     can still create/insert/select freely -- treat the endpoint as trusted-client only unless you add per-route auth.
 """
+import hashlib
 import json
 import platform
 import sys
+import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 from holographic.agents_and_reasoning.holographic_query import Database, run_db_sql, QueryError
@@ -747,7 +749,17 @@ def make_handler(service):
             payload = {} if method == "GET" else self._read_json()
             if payload is None:
                 return self._reply(400, {"ok": False, "error": "request body was not valid JSON"})
+            t0 = time.perf_counter()
             status, obj = service.dispatch(method, self.path, payload)
+            # THE METERING HOOK ON THE WIRE (the same _meta the MCP adapter stamps on every
+            # tools/call, see cost_meta): an x402 proxy in front of this door bills the two
+            # measured numbers and can dispute the receipt by re-invoking. Stamped HERE, not in
+            # dispatch(), on purpose -- the MCP adapter calls dispatch("POST", "/invoke") in-process
+            # and receipts the RESULT; a wall-clock elapsed_ms nested inside that text would make
+            # its own output_sha256 unreproducible. In-process callers therefore see the payload
+            # byte-identical to before; only the HTTP response grows the one extra key.
+            if status == 200 and self.path in _METERED_PATHS and isinstance(obj, dict):
+                obj = dict(obj, _meta=cost_meta(self.path, payload, json.dumps(obj, default=_json_default), t0))
             self._reply(status, obj)
 
         def do_GET(self):
@@ -955,6 +967,38 @@ def _jsonable(o, refs=None):
         # Scene-document faculty was listed in /tools and impossible to invoke. See holographic_objectref.
         summary["ref"] = refs.put(o)
     return summary
+
+
+# The two HTTP doors an x402 proxy meters. GET /tools + POST /invoke are what lecoreCall() in the
+# gateway consumes; every other route is infrastructure (SQL, jobs, bus) and stays unmetered.
+_METERED_PATHS = ("/tools", "/invoke")
+
+
+def cost_meta(tool, arguments, text, t0):
+    """The metering hook + receipt every metered call carries, SHARED by the MCP adapter (tools/call) and the
+    HTTP doors (/tools, /invoke) so a proxy sees one shape on both wires. Returns the `_meta` dict:
+      {"lecore.cost":    {elapsed_ms, payload_bytes},
+       "lecore.receipt": {input_sha256, output_sha256, deterministic}}
+
+    COST (measured, per call): compute ms + payload chars of `text` (the JSON the caller receives, BEFORE this
+    _meta is attached), because the cost census (docs/ZOO.md section 4) showed compute and wire diverge by 400:1
+    on some faculties (bind: 0.025 ms CPU, ~10 KB JSON) -- a flat per-call price would be fiction. `text` is
+    ensure_ascii JSON, so its char count IS its UTF-8 byte count. A proxy bills these two numbers directly.
+
+    RECEIPT (proof-of-inference, the deterministic dividend): the engine's outputs are functions of
+    (tool, arguments) alone, so a sha256 pair over the canonical request and the response text is a complete,
+    re-verifiable claim about what was computed -- 'don't trust, re-run'. Any party disputes it by re-invoking
+    and comparing 64 hex chars. Wall-clock lives in cost, NOT the receipt: time is the one thing an honest
+    re-run will not reproduce. For the HTTP doors `tool` is the path ("/invoke") and `arguments` the posted
+    body, the exact analog of the MCP tool name + its arguments."""
+    meta = {"elapsed_ms": round((time.perf_counter() - t0) * 1e3, 3),
+            "payload_bytes": len(text)}
+    canon = json.dumps({"tool": tool, "arguments": arguments}, sort_keys=True,
+                       separators=(",", ":"), default=str)
+    receipt = {"input_sha256": hashlib.sha256(canon.encode()).hexdigest(),
+               "output_sha256": hashlib.sha256(text.encode()).hexdigest(),
+               "deterministic": True}
+    return {"lecore.cost": meta, "lecore.receipt": receipt}
 
 
 def serve(host="127.0.0.1", port=8080, token=None, persist_path=None, mind=None, threads=False):

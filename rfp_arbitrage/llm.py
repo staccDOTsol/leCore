@@ -23,6 +23,22 @@ class LLMError(RuntimeError):
     pass
 
 
+# USD per million tokens (input, output) -- first-party list prices; gateways may mark up
+PRICES: dict[str, tuple[float, float]] = {
+    "claude-fable-5-1": (10.0, 50.0), "claude-fable-5": (10.0, 50.0), "claude-opus-5": (5.0, 25.0), "claude-opus-4-8": (5.0, 25.0),
+    "claude-opus-4-7": (5.0, 25.0), "claude-opus-4-6": (5.0, 25.0), "claude-sonnet-5": (2.0, 10.0), "claude-sonnet-4-6": (3.0, 15.0),
+    "claude-haiku-4-5": (1.0, 5.0),
+}
+
+
+def price_of(model: str) -> tuple[float, float]:
+    m = model.split("/")[-1]
+    for k, v in PRICES.items():
+        if m.startswith(k):
+            return v
+    return (5.0, 25.0)   # assume frontier when unknown: the cap errs on the safe side
+
+
 def _extract_json(text: str) -> dict[str, Any]:
     text = text.strip()
     m = re.search(r"```(?:json)?\s*(\{.*\})\s*```", text, re.S)
@@ -66,6 +82,15 @@ class LLM:
             self.extra_headers.setdefault("x-openzoo-session", os.environ["OPENZOO_SESSION"])
         self.calls = 0
         self.usage: dict[str, int] = {"input": 0, "output": 0}
+        self.budget_usd: float | None = float(os.environ["RFP_LLM_BUDGET_USD"]) if os.environ.get("RFP_LLM_BUDGET_USD") else None
+
+    @property
+    def spent_usd(self) -> float:
+        i, o = price_of(self.model)
+        return self.usage["input"] / 1e6 * i + self.usage["output"] / 1e6 * o
+
+    def over_budget(self) -> bool:
+        return self.budget_usd is not None and self.spent_usd >= self.budget_usd
 
     @property
     def name(self) -> str:
@@ -73,6 +98,8 @@ class LLM:
 
     # -- public --------------------------------------------------------------------
     def json(self, system: str, user: str, schema: dict[str, Any], max_tokens: int = 4000) -> dict[str, Any]:
+        if self.over_budget():
+            raise LLMError(f"LLM budget exhausted: ${self.spent_usd:.2f} of ${self.budget_usd:.2f} (RFP_LLM_BUDGET_USD)")
         self.calls += 1
         if self.provider == "anthropic":
             return self._anthropic_json(system, user, schema, max_tokens)

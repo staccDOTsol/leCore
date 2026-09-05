@@ -281,8 +281,12 @@ def cmd_report(args) -> int:
 def cmd_pump(args) -> int:
     """fetch + gate + price + match/report as concurrent workers, cumulative, while a crawl lands rows."""
     from .pump import Pump
+    from .llm import LLM
     cfg = settings()
     llm = _llm(args)
+    factory = None
+    if llm is None and not getattr(args, "no_llm", False):
+        factory = lambda: LLM(provider=getattr(args, "provider", None), model=getattr(args, "model", None))  # noqa: E731
     if args.talent:
         from .talent.csv_source import load
         st = Store(args.db or cfg.db_path)
@@ -293,7 +297,7 @@ def cmd_pump(args) -> int:
         st.close()
     pump = Pump(args.db or cfg.db_path, threshold=args.threshold, interval=args.interval, batch=args.batch, llm=llm,
                 max_docs=args.max_docs, benchmark=not args.no_benchmark, out_dir=args.out_dir, report_limit=args.limit, cfg=cfg,
-                fetch_workers=args.fetch_workers)
+                fetch_workers=args.fetch_workers, llm_factory=factory)
     counts = pump.run(watch=args.watch)
     print(f"[pump] finished: {json.dumps(counts)}")
     return 0

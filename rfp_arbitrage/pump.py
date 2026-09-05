@@ -18,7 +18,7 @@ import sys
 import threading
 import time
 from pathlib import Path
-from typing import Callable
+from typing import Any, Callable
 
 from .config import Settings, settings as _settings
 from .models import Opportunity
@@ -31,8 +31,9 @@ class Pump:
     def __init__(self, db: str | Path, threshold: float = 0.6, interval: float = 30.0, batch: int = 25,
                  llm=None, max_docs: int = 6, benchmark: bool = True, out_dir: str | Path = ".",
                  report_limit: int = 40, log: Callable[[str], None] = print, cfg: Settings | None = None,
-                 fetch_workers: int = 4):
+                 fetch_workers: int = 4, llm_factory: Callable[[], Any] | None = None):
         self.db = str(db)
+        self.llm_factory = llm_factory      # re-tried every round while the LLM is unavailable (unfunded wallet, proxy down)
         self.fetch_workers = max(1, fetch_workers)
         self.threshold = threshold
         self.interval = interval
@@ -64,14 +65,25 @@ class Pump:
         # a heuristic verdict is re-done once an LLM is available
         cond = "key NOT IN (SELECT opportunity_key FROM verdicts)" if self.llm is None else \
                "key NOT IN (SELECT opportunity_key FROM verdicts WHERE method LIKE 'llm:%')"
-        return st.opportunities(
-            f"intellectual_score >= ? AND (deadline='' OR deadline >= date('now')) AND key IN "
-            f"(SELECT DISTINCT opportunity_key FROM documents) AND {cond}", (self.threshold,), limit=self.batch)
+        rows = st.conn.execute(
+            f"SELECT o.* FROM opportunities o LEFT JOIN pricing p ON p.opportunity_key=o.key "
+            f"WHERE o.intellectual_score >= ? AND (o.deadline='' OR o.deadline >= date('now')) AND o.key IN "
+            f"(SELECT DISTINCT opportunity_key FROM documents) AND {cond} "
+            f"ORDER BY COALESCE(p.ask_value, 0) DESC, o.posted DESC LIMIT ?", (self.threshold, self.batch)).fetchall()
+        return [Opportunity.from_row(dict(r)) for r in rows]
 
     def pending_price(self, st: Store) -> list[Opportunity]:
-        return st.opportunities(
-            "key IN (SELECT opportunity_key FROM verdicts WHERE viable=1) AND key NOT IN (SELECT opportunity_key FROM pricing)",
-            (), limit=self.batch)
+        if self.llm is None:
+            return st.opportunities(
+                "key IN (SELECT opportunity_key FROM verdicts WHERE viable=1) AND key NOT IN (SELECT opportunity_key FROM pricing)",
+                (), limit=self.batch)
+        # with an LLM: price what has an LLM verdict and no LLM-scoped pricing yet, biggest first
+        rows = st.conn.execute(
+            "SELECT o.* FROM opportunities o JOIN verdicts v ON v.opportunity_key=o.key AND v.viable=1 AND v.method LIKE 'llm:%' "
+            "LEFT JOIN pricing p ON p.opportunity_key=o.key "
+            "WHERE p.opportunity_key IS NULL OR json_extract(p.payload, '$.scope_basis') NOT LIKE 'llm:%' "
+            "ORDER BY COALESCE(p.ask_value, 0) DESC LIMIT ?", (self.batch,)).fetchall()
+        return [Opportunity.from_row(dict(r)) for r in rows]
 
     # -- workers ---------------------------------------------------------------------
     def _loop(self, name: str, step: Callable[[Store], int]) -> None:
@@ -157,7 +169,19 @@ class Pump:
                 self.counts["priced"] += 1
         return len(opps)
 
+    def _retry_llm(self) -> None:
+        if self.llm is not None or self.llm_factory is None:
+            return
+        cand = self.llm_factory()
+        why = cand.available() if cand is not None else "no factory result"
+        if why is None:
+            self.llm = cand
+            self.log(f"[pump] LLM now available: {cand.name} -- heuristic verdicts will be re-gated, biggest asks first")
+        else:
+            self.log(f"[pump] LLM still unavailable: {why[:160]}")
+
     def step_report(self, st: Store) -> int:
+        self._retry_llm()
         from .match import build_matches
         from .report import match_report, gate_report, live_report
         opps = st.opportunities("key IN (SELECT opportunity_key FROM pricing)")
@@ -177,9 +201,13 @@ class Pump:
             self.counts["matched"] = len(ms)
             self.counts["rounds"] += 1
         s = st.stats()
+        llm_note = ""
+        if self.llm is not None:
+            llm_verdicts = st.conn.execute("SELECT COUNT(*) FROM verdicts WHERE method LIKE 'llm:%'").fetchone()[0]
+            llm_note = f" llm-verdicts {llm_verdicts} spent ${self.llm.spent_usd:.2f}" + (f"/${self.llm.budget_usd:.0f}" if self.llm.budget_usd else "")
         self.log(f"[pump] round {self.counts['rounds']}: opps {s['opportunities']} intellectual {s['intellectual']} "
                  f"fetched {self.counts['fetched']} docs {s['documents']} gated {s['verdicts']} viable {s['viable']} "
-                 f"priced {s['priced']} talent {s['talent']} matches {len(ms)} -> {self.out_dir / 'shortlist.md'}")
+                 f"priced {s['priced']} talent {s['talent']} matches {len(ms)}{llm_note} -> {self.out_dir / 'shortlist.md'}")
         return len(ms)
 
     # -- run -------------------------------------------------------------------------

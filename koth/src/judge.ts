@@ -30,14 +30,42 @@ export type Contender = {
 const score = z.coerce.number().min(0).max(100);
 const SideScore = z.object({ persuasion: score, originality: score, coherence: score, degeneracy: score });
 
+/** How a side's total is built: the pitch (the four axes, averaged) at 80 %, the card (liquidity and stats, as power) at 20 %. */
+const Totals = z.object({ pitch: z.number(), fundamentals: z.number(), total: z.number() });
+
 export const Verdict = z.object({
   winner: z.enum(['challenger', 'incumbent']),
   challenger: SideScore,
   incumbent: SideScore,
   commentary: z.string(),
   one_liner: z.string(),
+  /** Filled in by `decide`: the weighted totals the winner was actually picked from (absent on older ledger rows). */
+  scores: z.object({ challenger: Totals, incumbent: Totals }).optional(),
 });
 export type Verdict = z.infer<typeof Verdict>;
+export type SideScore = z.infer<typeof SideScore>;
+
+export const WEIGHTS = { pitch: 0.8, fundamentals: 0.2 } as const;
+
+/** The pitch score: the four axes, averaged. */
+export function pitchScore(s: SideScore): number {
+  return (s.persuasion + s.originality + s.coherence + s.degeneracy) / 4;
+}
+
+/**
+ * The verdict the game actually uses: the model scores the pitches, the card supplies the
+ * fundamentals (its power, from real liquidity/turnover/distribution/volatility/buy pressure), and
+ * the winner is the higher 80/20 total. Ties go to the king. The model's own `winner` is advice.
+ */
+export function decide(v: Verdict, challengerPower: number, incumbentPower: number): Verdict {
+  const side = (s: SideScore, power: number) => {
+    const pitch = pitchScore(s), fundamentals = Math.max(0, Math.min(100, power));
+    return { pitch: round1(pitch), fundamentals: round1(fundamentals), total: round1(WEIGHTS.pitch * pitch + WEIGHTS.fundamentals * fundamentals) };
+  };
+  const challenger = side(v.challenger, challengerPower), incumbent = side(v.incumbent, incumbentPower);
+  return { ...v, winner: challenger.total > incumbent.total ? 'challenger' : 'incumbent', scores: { challenger, incumbent } };
+}
+const round1 = (n: number) => Math.round(n * 10) / 10;
 
 export const Remix = z.object({
   name: z.string(),
@@ -96,12 +124,14 @@ export class Judge implements JudgeLike {
   async judge(challenger: Contender, incumbent: Contender, incumbentPitch: string): Promise<{ verdict: Verdict; usage: Usage }> {
     const inc: Contender = { ...incumbent, shill: { ...incumbent.shill, pitch: incumbentPitch, author: 'the master shillbot' } };
     const r = await this.zoo.chatJson(this.msgs(
-      `Judge this battle for the hill. Score both sides 0-100 on each axis, then pick the winner: the higher total wins, ` +
-      `but a challenger only takes the hill if it clearly beats the incumbent (ties go to the king). The cards' power is ` +
-      `context, not the verdict. Reply with ONLY a JSON object shaped exactly like:\n${VERDICT_SHAPE}\n\n` +
+      `Judge this battle for the hill. Score both sides 0-100 on each axis for the PITCH alone (persuasion, originality, ` +
+      `coherence, degeneracy); do not fold the card or the numbers into those scores. The final result is computed from your ` +
+      `scores: the pitch counts ${Math.round(WEIGHTS.pitch * 100)} %, the card's power (liquidity and stats) ${Math.round(WEIGHTS.fundamentals * 100)} %, ` +
+      `and the higher total wins, ties to the king. Name the winner you expect, and write the commentary and one-liner as if ` +
+      `that is the result. Reply with ONLY a JSON object shaped exactly like:\n${VERDICT_SHAPE}\n\n` +
       `== CHALLENGER ==\n${describeContender(challenger)}\n\n== INCUMBENT (king) ==\n${describeContender(inc)}`,
     ), Verdict, { maxTokens: 900 });
-    return { verdict: r.value, usage: r.usage };
+    return { verdict: decide(r.value, challenger.card.power, incumbent.card.power), usage: r.usage };
   }
 
   async remixMetadata(king: Contender, master: { name: string; symbol: string }): Promise<{ remix: Remix; fields: Omit<MetadataFields, 'uri'>; usage: Usage }> {
@@ -125,16 +155,17 @@ export class MockJudge implements JudgeLike {
     return { text: `${c.card.name} sits on the hill with ${c.card.stats.hp} HP of liquidity. Come and take it.`, usage: this.usage() };
   }
   async judge(challenger: Contender, incumbent: Contender): Promise<{ verdict: Verdict; usage: Usage }> {
-    const cw = this.bias === 'challenger' || (this.bias === 'power' && challenger.card.power > incumbent.card.power);
+    // 'power': the pitch axes mirror the card's power, so the 80/20 total is the power and the stronger card wins
+    const bump = this.bias === 'challenger' ? 100 : this.bias === 'incumbent' ? -100 : 0;
     const side = (p: number) => ({ persuasion: p, originality: p, coherence: p, degeneracy: p });
-    return {
-      verdict: {
-        winner: cw ? 'challenger' : 'incumbent', challenger: side(challenger.card.power), incumbent: side(incumbent.card.power),
-        commentary: `${challenger.card.name} (${challenger.card.power}) vs ${incumbent.card.name} (${incumbent.card.power}).`,
-        one_liner: cw ? `${challenger.card.name} takes the hill!` : `${incumbent.card.name} holds the hill.`,
-      },
-      usage: this.usage(),
+    const base: Verdict = {
+      winner: 'incumbent', challenger: side(Math.max(0, Math.min(100, challenger.card.power + bump))), incumbent: side(incumbent.card.power),
+      commentary: `${challenger.card.name} (${challenger.card.power}) vs ${incumbent.card.name} (${incumbent.card.power}).`,
+      one_liner: '',
     };
+    const v = decide(base, this.bias === 'challenger' ? 100 : this.bias === 'incumbent' ? 0 : challenger.card.power, incumbent.card.power);
+    v.one_liner = v.winner === 'challenger' ? `${challenger.card.name} takes the hill!` : `${incumbent.card.name} holds the hill.`;
+    return { verdict: v, usage: this.usage() };
   }
   async remixMetadata(king: Contender): Promise<{ remix: Remix; fields: Omit<MetadataFields, 'uri'>; usage: Usage }> {
     const remix: Remix = { name: `KING ${king.card.name}`, symbol: `K${king.card.symbol}`, description: `${king.card.name} rules the hill.`, tagline: 'long live the king' };

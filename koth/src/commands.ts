@@ -271,12 +271,13 @@ export class Commands {
     const c = out.record.challenger as Card | null;
     const k = out.record.incumbent as Card | null;
     const v = out.record.verdict;
-    const score = (f: Fmt, label: string, s: { persuasion: number; originality: number; coherence: number; degeneracy: number }) =>
-      `${f.muted(label)}\n${f.code(`persuasion ${pad(s.persuasion)}  originality ${pad(s.originality)}\ncoherence  ${pad(s.coherence)}  degeneracy  ${pad(s.degeneracy)}`)}`;
+    const score = (f: Fmt, label: string, s: { persuasion: number; originality: number; coherence: number; degeneracy: number }, t?: { pitch: number; fundamentals: number; total: number }) =>
+      `${f.muted(label)}\n${f.code(`persuasion ${pad(s.persuasion)}  originality ${pad(s.originality)}\ncoherence  ${pad(s.coherence)}  degeneracy  ${pad(s.degeneracy)}`)}` +
+      (t ? `\n${f.code(`pitch ${t.pitch} ×80% + card ${t.fundamentals} ×20% = ${t.total}`)}` : '');
     const rich: Rich = (f) => [
       c && k ? `${f.b(c.name)} vs ${f.b('KING ' + k.name)}` : '',
-      v && c ? score(f, `CHALLENGER · ${c.name} · power ${c.power}`, v.challenger) : c ? f.code(cardLine(c)) : '',
-      v && k ? score(f, `KING · ${k.name} · power ${k.power}`, v.incumbent) : '',
+      v && c ? score(f, `CHALLENGER · ${c.name} · power ${c.power}`, v.challenger, v.scores?.challenger) : c ? f.code(cardLine(c)) : '',
+      v && k ? score(f, `KING · ${k.name} · power ${k.power}`, v.incumbent, v.scores?.incumbent) : '',
       '',
       f.b(out.oneLiner),
       f.esc(out.commentary),

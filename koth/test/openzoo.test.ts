@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { OpenzooClient, extractJson, receiptOf } from '../src/openzoo.js';
-import { Judge } from '../src/judge.js';
+import { Judge, WEIGHTS, decide } from '../src/judge.js';
 import { cardFromMetrics } from '../src/cards.js';
 import { emptyMetrics } from '../src/metrics.js';
 
@@ -71,8 +71,31 @@ describe('judge over openzoo', () => {
     expect((await j.shillFor(c)).text).toBe('a shill');
     const v = await j.judge(c, c, 'the king pitch');
     expect(v.verdict.winner).toBe('challenger'); expect(v.usage.usd).toBe(0.002);
+    // same card both sides: the 20 % cancels and the pitch (75 vs 35) decides
+    expect(v.verdict.scores).toEqual({
+      challenger: { pitch: 75, fundamentals: card.power, total: Math.round((0.8 * 75 + 0.2 * card.power) * 10) / 10 },
+      incumbent: { pitch: 35, fundamentals: card.power, total: Math.round((0.8 * 35 + 0.2 * card.power) * 10) / 10 },
+    });
     const r = await j.remixMetadata(c, { name: 'Master Shill', symbol: 'SHILL' });
     expect(Buffer.byteLength(r.fields.name)).toBeLessThanOrEqual(32);
     expect(r.fields.symbol).toBe('KINGBONKER');
+  });
+});
+
+describe('decide: pitch 80 %, card 20 %', () => {
+  const side = (p: number) => ({ persuasion: p, originality: p, coherence: p, degeneracy: p });
+  const base = { commentary: '', one_liner: '', winner: 'challenger' as const };
+  it('weights exactly 80/20 and overrides the model', () => {
+    expect(WEIGHTS).toEqual({ pitch: 0.8, fundamentals: 0.2 });
+    // a great pitch on a weak coin beats a flat pitch on a strong coin: 0.8*90+0.2*10 = 74 vs 0.8*50+0.2*100 = 60
+    const v = decide({ ...base, winner: 'incumbent', challenger: side(90), incumbent: side(50) }, 10, 100);
+    expect(v.winner).toBe('challenger');
+    expect(v.scores).toEqual({ challenger: { pitch: 90, fundamentals: 10, total: 74 }, incumbent: { pitch: 50, fundamentals: 100, total: 60 } });
+    // but a merely better pitch cannot outrun a huge card gap: 0.8*60+0.2*0 = 48 vs 0.8*50+0.2*100 = 70
+    expect(decide({ ...base, challenger: side(60), incumbent: side(50) }, 0, 100).winner).toBe('incumbent');
+  });
+  it('gives ties to the king and clamps power into 0..100', () => {
+    expect(decide({ ...base, challenger: side(50), incumbent: side(50) }, 50, 50).winner).toBe('incumbent');
+    expect(decide({ ...base, challenger: side(50), incumbent: side(50) }, 500, 50).scores?.challenger.fundamentals).toBe(100);
   });
 });

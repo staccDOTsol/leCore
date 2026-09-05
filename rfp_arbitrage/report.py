@@ -82,5 +82,36 @@ def gate_report(store: Store, limit: int = 200) -> str:
     return "\n".join(lines)
 
 
+def live_report(store: Store, limit: int = 500) -> str:
+    """Every OPEN, intellectual, gate-viable opportunity: deadline, buyer, link, the comparable
+    price distribution, the margin at the best matched team when there is one."""
+    import json as _json
+    rows = store.conn.execute(
+        """SELECT o.key, o.title, o.buyer, o.jurisdiction, o.tier, o.region, o.deadline, o.url, o.notice_type, o.intellectual_score,
+                  v.payload AS verdict, p.payload AS pricing,
+                  (SELECT payload FROM matches m WHERE m.opportunity_key=o.key ORDER BY score DESC LIMIT 1) AS best
+           FROM opportunities o JOIN verdicts v ON v.opportunity_key=o.key AND v.viable=1
+           LEFT JOIN pricing p ON p.opportunity_key=o.key
+           WHERE o.intellectual_score >= 0.6 AND (o.deadline='' OR o.deadline >= date('now'))
+           ORDER BY (p.ask_value IS NULL), COALESCE(p.ask_value, 0) DESC, o.deadline LIMIT ?""", (limit,)).fetchall()
+    lines = ["# Live biddable opportunities", "",
+             f"{len(rows)} open, intellectual-work, gate-viable solicitations. Price = distribution of comparable bids/awards "
+             "(min / p25 / median / mean / p75 / max, n) or the stated value. Margin = at the best matched team's rates.", "",
+             "| deadline | ask (USD) | basis | min | median | mean | max | n | margin | gate | title | buyer | where | link |",
+             "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
+    for r in rows:
+        pr = _json.loads(r["pricing"]) if r["pricing"] else {}
+        b = pr.get("benchmark") or {}
+        v = _json.loads(r["verdict"]) if r["verdict"] else {}
+        best = _json.loads(r["best"]) if r["best"] else None
+        fmt = lambda x: _money(x) if isinstance(x, (int, float)) else ""  # noqa: E731
+        gate = f"{v.get('delegation', '')[:12]}/{v.get('ai_use', '')[:10]} {v.get('confidence', 0):.1f}"
+        lines.append(f"| {(r['deadline'] or '')[:10]} | {fmt(pr.get('ask_value'))} | {(pr.get('ask_basis') or '')[:30]} | {fmt(b.get('min'))} | "
+                     f"{fmt(b.get('median'))} | {fmt(b.get('mean'))} | {fmt(b.get('max'))} | {b.get('n', '')} | "
+                     f"{(str(round(best['margin'] * 100)) + '%') if best else ''} | {gate} | {r['title'][:80].replace('|', '/')} | "
+                     f"{(r['buyer'] or '')[:40].replace('|', '/')} | {r['jurisdiction']}/{r['tier']} {(r['region'] or '')[:18]} | {r['url']} |")
+    return "\n".join(lines)
+
+
 def summary(store: Store) -> dict[str, Any]:
     return store.stats()

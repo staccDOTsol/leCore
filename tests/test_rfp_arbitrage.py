@@ -379,3 +379,29 @@ def test_pump_streams_cumulatively(tmp_path, monkeypatch):
     assert counts["matched"] >= 1 and (tmp_path / "out" / "shortlist.md").exists() and (tmp_path / "out" / "gate.md").exists()
     assert "t:2" not in " ".join(m.opportunity_key for m in st3.matches())
     assert st3.stats()["documents"] == 0                              # sentinels are not documents
+
+
+def test_awards_index_benchmark_and_live_report(tmp_path):
+    from rfp_arbitrage.awards import AwardIndex, Award
+    from rfp_arbitrage.report import live_report
+    st = Store(tmp_path / "a.sqlite3")
+    idx = AwardIndex(st)
+    aws = [Award("t", f"c{i}", "CA", "municipal", "Services professionnels en architecture", 100_000 + 10_000 * i, "CAD", unspsc="81101500")
+           for i in range(10)]
+    aws.append(Award("t", "junk", "CA", "municipal", "Gaz naturel", 23_000_000, "CAD", unspsc="83101601"))     # not intellectual
+    aws.append(Award("t", "tiny", "CA", "municipal", "Consulting", 100, "CAD", unspsc="80101500"))              # below band
+    assert idx.upsert(aws) == 11
+    o = _opp("t:9", "Services professionnels en architecture pour un centre communautaire", jurisdiction=Jurisdiction.CA, unspsc=["81101508"])
+    b = idx.benchmark(o)
+    assert b["n"] == 10 and b["how"].startswith("unspsc:8110") and b["min"] < b["median"] < b["max"] and b["source"] == "awards-index"
+    # keyword fallback when the code family is thin
+    o2 = _opp("t:10", "Architecture professionnels services", jurisdiction=Jurisdiction.CA)
+    assert idx.benchmark(o2)["n"] == 10 and idx.benchmark(o2)["how"].startswith("keywords")
+    # priced from the distribution, reported live
+    st.upsert_opportunities([o]); st.set_intellectual(o.key, 0.9, "t")
+    st.put_verdict(ClauseVerdict(o.key, DelegationStatus.SILENT, AIStatus.SILENT, confidence=0.6, method="heuristic"))
+    p = price(o, "", None, b)
+    assert p["ask_basis"].startswith("bids:awards-index") and p["ask_value"] == b["median"]
+    st.put_pricing(o.key, p)
+    rep = live_report(st)
+    assert "1 open" in rep and "bids:awards-index" in rep and o.url in rep

@@ -57,7 +57,7 @@ class Pump:
     def pending_fetch(self, st: Store) -> list[Opportunity]:
         return st.opportunities(
             "intellectual_score >= ? AND (deadline='' OR deadline >= date('now')) AND key NOT IN "
-            "(SELECT DISTINCT opportunity_key FROM documents WHERE NOT (kind='mark' AND error='in progress'))",
+            "(SELECT DISTINCT opportunity_key FROM documents WHERE NOT (kind='mark' AND error='in progress' AND fetched < datetime('now', '-30 minutes')))",
             (self.threshold,), limit=self.batch * self.fetch_workers)
 
     def pending_gate(self, st: Store) -> list[Opportunity]:
@@ -98,7 +98,8 @@ class Pump:
             if cur.rowcount == 1:
                 return True
             # a sentinel left 'in progress' by a killed run: take it over once
-            cur = c.execute("UPDATE documents SET error='claimed' WHERE opportunity_key=? AND url=? AND error='in progress'", (key, FETCHED_MARK))
+            cur = c.execute("UPDATE documents SET error='claimed', fetched=CURRENT_TIMESTAMP WHERE opportunity_key=? AND url=? "
+                            "AND error='in progress' AND fetched < datetime('now', '-30 minutes')", (key, FETCHED_MARK))
             return cur.rowcount == 1
 
     def step_fetch(self, st: Store) -> int:
@@ -127,13 +128,21 @@ class Pump:
 
     def step_price(self, st: Store) -> int:
         from .pricing import price
+        from .awards import AwardIndex
         opps = self.pending_price(st)
         us = None
         if self.benchmark:
             from .sources.usaspending import UsaSpending
             us = UsaSpending()
+        idx = AwardIndex(st)
         cache: dict[str, dict] = {}
         for o in opps:
+            bench = idx.benchmark(o)
+            if bench.get("n", 0) >= 8:
+                st.put_pricing(o.key, price(o, st.full_text(o.key), self.llm, bench, self.cfg))
+                with self._lock:
+                    self.counts["priced"] += 1
+                continue
             bench = None
             if us and o.jurisdiction.value == "US" and o.naics:
                 k = o.naics[0]
@@ -150,7 +159,7 @@ class Pump:
 
     def step_report(self, st: Store) -> int:
         from .match import build_matches
-        from .report import match_report, gate_report
+        from .report import match_report, gate_report, live_report
         opps = st.opportunities("key IN (SELECT opportunity_key FROM pricing)")
         verdicts = st.verdicts()
         pricing = {o.key: st.pricing(o.key) for o in opps}
@@ -162,7 +171,8 @@ class Pump:
         st.put_matches(ms)
         self.out_dir.mkdir(parents=True, exist_ok=True)
         (self.out_dir / "shortlist.md").write_text(match_report(st, self.report_limit), encoding="utf-8")
-        (self.out_dir / "gate.md").write_text(gate_report(st, 1000), encoding="utf-8")
+        (self.out_dir / "gate.md").write_text(gate_report(st, 5000), encoding="utf-8")
+        (self.out_dir / "live.md").write_text(live_report(st, 5000), encoding="utf-8")
         with self._lock:
             self.counts["matched"] = len(ms)
             self.counts["rounds"] += 1

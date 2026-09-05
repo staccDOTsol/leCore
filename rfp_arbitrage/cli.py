@@ -175,12 +175,16 @@ def cmd_price(args) -> int:
     if args.viable_only:
         viable = store.verdicts(viable_only=True)
         opps = [o for o in opps if o.key in viable]
+    from .awards import AwardIndex
+    idx = AwardIndex(store)
     n = 0
     for o in opps:
         if not args.refresh and store.pricing(o.key):
             continue
-        bench = None
-        if us and o.jurisdiction.value == "US" and o.naics:
+        bench = idx.benchmark(o)
+        if bench.get("n", 0) < 8:
+            bench = None
+        if bench is None and us and o.jurisdiction.value == "US" and o.naics:
             k = o.naics[0]
             if k not in bench_cache:
                 try:
@@ -263,7 +267,8 @@ def cmd_match(args) -> int:
 def cmd_report(args) -> int:
     from .report import match_report, gate_report
     store = _store(args)
-    text = gate_report(store) if args.kind == "gate" else match_report(store, args.limit)
+    from .report import live_report
+    text = gate_report(store) if args.kind == "gate" else live_report(store, args.limit) if args.kind == "live" else match_report(store, args.limit)
     if args.out:
         with open(args.out, "w", encoding="utf-8") as f:
             f.write(text)
@@ -299,6 +304,16 @@ def cmd_ingest(args) -> int:
     from .ingest import loop
     loop(fast_every=args.fast_every * 3600, slow_every=args.slow_every * 3600, sam_every=args.sam_every * 3600,
          sam_days=args.sam_days, max_pages=args.max_pages, discover=not args.no_discover, watch=args.watch)
+    return 0
+
+
+def cmd_awards(args) -> int:
+    """build / refresh the comparable-awards index (the price side)."""
+    from .awards import build, naics_in_use
+    store = _store(args)
+    naics = None if args.no_usaspending else naics_in_use(store)[: args.naics_limit]
+    counts = build(store, seao_months=args.seao_months, naics=naics)
+    print(f"[awards] index: {json.dumps(counts)}")
     return 0
 
 
@@ -376,7 +391,7 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--include-blocked", action="store_true", help="also match opportunities that failed the gate (for review)")
 
     s = sub.add_parser("report", help="markdown dossier"); s.set_defaults(fn=cmd_report)
-    s.add_argument("--kind", choices=["matches", "gate"], default="matches"); s.add_argument("--limit", type=int, default=25); s.add_argument("--out")
+    s.add_argument("--kind", choices=["matches", "gate", "live"], default="matches"); s.add_argument("--limit", type=int, default=25); s.add_argument("--out")
 
     s = sub.add_parser("pump", help="fetch+gate+price+match+report concurrently and cumulatively (streaming)"); s.set_defaults(fn=cmd_pump)
     llm_opts(s); s.add_argument("--threshold", type=float, default=0.6); s.add_argument("--interval", type=float, default=30.0)
@@ -393,6 +408,10 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--sam-every", type=float, default=24.0, help="hours between SAM.gov crawls (public key: 10 req/day)")
     s.add_argument("--sam-days", type=int, default=7); s.add_argument("--max-pages", type=int, default=40)
     s.add_argument("--no-discover", action="store_true"); s.add_argument("--watch", action="store_true", help="loop forever")
+
+    s = sub.add_parser("awards", help="build the comparable bids/awards index used to price asks"); s.set_defaults(fn=cmd_awards)
+    s.add_argument("--seao-months", type=int, default=3); s.add_argument("--naics-limit", type=int, default=40)
+    s.add_argument("--no-usaspending", action="store_true")
 
     s = sub.add_parser("stats"); s.set_defaults(fn=cmd_stats)
 

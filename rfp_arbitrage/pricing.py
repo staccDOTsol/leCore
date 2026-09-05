@@ -128,7 +128,8 @@ def price(opp: Opportunity, text: str, llm: LLM | None, benchmark: dict[str, Any
         if scope.get("basis", "").startswith("llm") or sb >= 0.1 * market_cost or not have_bench:
             ask, basis = sb, "stated:text" if scope.get("basis", "").startswith("llm") else "stated:text(regex)"
     if ask is None and have_bench:
-        ask, basis = float(benchmark["median"]), f"benchmark:usaspending n={benchmark['n']}"
+        src = benchmark.get("source") or "usaspending"
+        ask, basis = float(benchmark["median"]), f"bids:{src} n={benchmark['n']} {benchmark.get('how', '')}".strip()
     overpriced_ratio = (ask / (market_cost * (1 + cfg.overhead_rate))) if ask and market_cost else None
     return {
         "ask_value": ask, "ask_basis": basis, "hours_low": scope["hours_low"], "hours_high": scope["hours_high"],

@@ -95,6 +95,15 @@ export function isTransient(status: number): boolean {
 }
 
 /**
+ * The gateway's "x402 door for <model> failed": it shopped every upstream door for that model and none
+ * could be paid. That is deterministic for the model and, worse, the gateway settles our payment
+ * before it finds out -- so retrying the same model only pays again for the same failure. Move on.
+ */
+export function isDoorFailure(message: string): boolean {
+  return /x402 door for .+ failed|no door quoted/i.test(message);
+}
+
+/**
  * Where a completion goes when the configured model's doors cannot be paid: the auto router, then
  * one strong model per provider, so a dead door on one side of the zoo does not decide a fight.
  */
@@ -141,7 +150,7 @@ export class OpenzooClient {
         } catch (e) {
           last = e instanceof Error ? e : new Error(String(e));
           const status = (e as { status?: number }).status ?? 0;
-          const transient = status === 0 || isTransient(status);
+          const transient = !isDoorFailure(last.message) && (status === 0 || isTransient(status));
           this.log(`openzoo ${model} attempt ${i}/${this.attempts} failed${transient ? '' : ' (not retrying this model)'}: ${last.message.slice(0, 200)}`);
           if (!transient) break;
           if (i < this.attempts) await this.sleep(Math.min(15_000, 1000 * 2 ** (i - 1)));

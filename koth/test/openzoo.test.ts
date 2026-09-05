@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
-import { OpenzooClient, isTransient, extractJson, receiptOf } from '../src/openzoo.js';
+import { OpenzooClient, isDoorFailure, isTransient, extractJson, receiptOf } from '../src/openzoo.js';
 import { Judge, WEIGHTS, decide } from '../src/judge.js';
 import { cardFromMetrics } from '../src/cards.js';
 import { emptyMetrics } from '../src/metrics.js';
@@ -52,7 +52,7 @@ describe('openzoo client', () => {
   it('retries transient failures with backoff and falls through to the auto router', async () => {
     const calls: { url: string; body: Record<string, unknown>; headers: Record<string, string> }[] = [];
     const replies: [number, unknown][] = [
-      [502, { error: { message: 'x402 door for claude-opus-5 failed (502): upstream refused payment' } }],
+      [502, { error: { message: 'upstream hiccup' } }],
       [502, { error: { message: 'again' } }],
       [502, { error: { message: 'again' } }],
       [502, { error: { message: 'again' } }],
@@ -71,6 +71,18 @@ describe('openzoo client', () => {
     expect(slept).toEqual([1000, 2000, 4000]);
     expect(new OpenzooClient({ model: 'openzoo/auto', fetchImpl: f }).fallbacks).toEqual(['anthropic/claude-sonnet-5', 'openai/gpt-5.6-auto', 'google/gemini-3.6-flash', 'x-ai/grok-4.6', 'deepseek/deepseek-v4-pro']);
     expect(isTransient(402)).toBe(true); expect(isTransient(503)).toBe(true); expect(isTransient(400)).toBe(false);
+  });
+  it('does not pay twice for a door failure: one try per model, straight down the ladder', async () => {
+    const models: string[] = [];
+    const f = (async (_u: unknown, init?: RequestInit) => {
+      const m = (JSON.parse(String(init?.body)) as { model: string }).model; models.push(m);
+      return m === 'x-ai/grok-4.6' ? Response.json(completion('ok'))
+        : Response.json({ error: { message: `x402 door for ${m} failed (503): no door quoted ${m}: https://token4u.ai: permit2; not falling back to OpenRouter`, code: 502 } }, { status: 502 });
+    }) as typeof fetch;
+    const zoo = new OpenzooClient({ model: 'openzoo/auto', fetchImpl: f, sleep: async () => {} });
+    expect((await zoo.chat([{ role: 'user', content: 'hi' }])).text).toBe('ok');
+    expect(models).toEqual(['openzoo/auto', 'anthropic/claude-sonnet-5', 'openai/gpt-5.6-auto', 'google/gemini-3.6-flash', 'x-ai/grok-4.6']);
+    expect(isDoorFailure('upstream https://agent402.tools refused payment')).toBe(false);
   });
   it('does not retry a definitive refusal on the same model, but still tries the fallback', async () => {
     const models: string[] = [];

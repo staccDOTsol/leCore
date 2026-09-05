@@ -7,7 +7,7 @@ COPY src ./src
 COPY scripts ./scripts
 COPY genesis ./genesis
 COPY start.sh ./start.sh
-ENV NODE_ENV=production KOTH_DATA_DIR=/data KOTH_PORT=8787 OPENZOO_TUNNEL=0
+ENV NODE_ENV=production KOTH_DATA_DIR=/data KOTH_PORT=8787 OPENZOO_NO_TUNNEL=1
 VOLUME ["/data"]
 EXPOSE 8787
 CMD ["sh", "./start.sh"]

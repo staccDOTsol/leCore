@@ -108,9 +108,11 @@ fly secrets set KOTH_KEYPAIR=... SOLANA_RPC_KEY=... BIRDEYE_API_KEY=... TELEGRAM
 fly deploy
 ```
 
-The container runs `src/bot.ts`; `/data` holds the hill ledger, quotes, hosted metadata and card images. Point
-`KOTH_PUBLIC_URL` at the app's https url so the on-chain `uri` resolves. The openzoo proxy must be reachable from the
-container (`OPENZOO_BASE_URL`); running `npx openzoo` as a sidecar or on the same machine is the simplest.
+The container runs `start.sh`: the openzoo x402 proxy on `:8402` (its burner wallet at `/data/openzoo-wallet.json`,
+created on first boot; the logs print the funding address, and every model call is paid from it in TOKEN / USDC /
+LEOS) and then `src/bot.ts`. `/data` also holds the hill ledger, quotes, hosted metadata and card images. Point
+`KOTH_PUBLIC_URL` at the app's https url so the on-chain `uri` resolves. Keep it to ONE machine (`--ha=false`): the
+bot long-polls Telegram and owns the ledger.
 
 `declare_id!` in `program/src/lib.rs` is `EWhj4iLpFxnD4w2ULdK1dgsbbGJ9s7L281rpSXgLGUmG`; deploying with a different
 keypair means changing that line and rebuilding.

@@ -54,6 +54,8 @@ export type Reply = {
   /** Broadcast to the group/channel/feed (takeovers). */
   announce?: Rich | null;
   announceButtons?: Button[][];
+  /** A page on the bot's public url with this reply's addresses and copy buttons (X cannot carry raw addresses on a fresh app). */
+  page?: string;
 };
 export const plain = (r: Rich) => r(PLAIN);
 export const html = (r: Rich) => r(HTML);
@@ -149,7 +151,7 @@ export class Commands {
         `attempt fee ${f.b(`${fee} SOL`)} worth + inference ~$${this.d.hill.inferenceEstimateUsd().toFixed(2)}, +5%`,
         f.i(k.pitch.slice(0, 300)),
       ].join('\n'),
-      image: k.image, buttons,
+      image: k.image, buttons, page: '/king',
     };
   }
 
@@ -207,6 +209,7 @@ export class Commands {
         `then say ${f.code(`paid ${q.id}`)}. half becomes liquidity for your coin/MASTER, locked for good.`,
       ].join('\n'),
       buttons: [[{ label: 'Copy amount', copy: `${q.amountUi}`, data: `amt:${q.id}` }, { label: 'Copy address', copy: q.depositAddress, data: `addr:${q.id}` }], [{ label: 'I paid', data: `paid:${q.id}` }], [{ label: 'Cancel', data: `cancel:${q.id}` }]],
+      page: `/q/${q.id}`,
     };
   }
 

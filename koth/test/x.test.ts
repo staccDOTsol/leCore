@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { XSurface, chunkPost, imageCandidates, oauth1Header, oneCashtag, renderForX } from '../src/surfaces/x.js';
+import { XSurface, chunkPost, imageCandidates, oauth1Header, oneCashtag, renderForX, shortenAddresses } from '../src/surfaces/x.js';
 import type { Commands, Ctx, Reply } from '../src/commands.js';
 
 const creds = { apiKey: 'k', apiSecret: 's', accessToken: 't', accessSecret: 'ts', bearer: '', botUserId: '' };
@@ -48,6 +48,13 @@ describe('x helpers', () => {
     expect(oneCashtag('Token $TOKEN beats $BONK for $25.46 · $SHILL')).toBe('Token $TOKEN beats BONK for $25.46 · SHILL');
     expect(imageCandidates('https://ipfs.io/ipfs/bafyabc')).toEqual(['https://ipfs.io/ipfs/bafyabc', 'https://dweb.link/ipfs/bafyabc', 'https://cloudflare-ipfs.com/ipfs/bafyabc', 'https://gateway.pinata.cloud/ipfs/bafyabc', 'https://nftstorage.link/ipfs/bafyabc']);
     expect(imageCandidates('https://host/assets/1.png')).toEqual(['https://host/assets/1.png']);
+  });
+  it('shortens addresses outside urls and links the page that carries them', () => {
+    const mint = 'HgtdKCcDUKN8rZNctBrNSJzPsRfPQ6XDMtQkBiU6A9ru', sig = '67cj8AowTgBKDBRnswW7BzhdNVgFatNwXsVwzkjg1u8DBz4ViTpQsjDLkekozU2mWqsTpxVZYh8J73Zj3aoQ8pXT';
+    expect(shortenAddresses(`send to ${mint} tx https://solscan.io/tx/${sig} id 6a2d528004ac`)).toBe(`send to Hgtd…A9ru tx https://solscan.io/tx/${sig} id 6a2d528004ac`);
+    expect(renderForX(() => `mint ${mint}`, [], { page: '/q/q1', publicUrl: 'https://k.fly.dev/' })).toBe('mint Hgtd…A9ru\nfull addresses + copy buttons: https://k.fly.dev/q/q1');
+    expect(renderForX(() => `mint ${mint}`, [], { page: '/q/q1', publicUrl: 'https://k.fly.dev', rawAddresses: true })).toBe(`mint ${mint}`);
+    expect(renderForX(() => 'no address here', [], { page: '/king', publicUrl: 'https://k.fly.dev' })).toBe('no address here');
   });
   it('renders url buttons as lines and drops the rest', () => {
     expect(renderForX((f) => f.b('hi'), [[{ label: 'Copy', copy: 'X' }, { label: 'Solscan', url: 'https://s/1' }]])).toBe('hi\nSolscan: https://s/1');

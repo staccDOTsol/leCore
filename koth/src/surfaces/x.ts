@@ -24,6 +24,10 @@ export type XOpts = {
   pollMs?: number;
   /** Characters per post: 4000 with Premium (the default here), 280 on a plain account. Longer replies become threads. */
   maxChars?: number;
+  /** The bot's public url: replies link to its /king and /q/<id> pages, which carry the full addresses. */
+  publicUrl?: string;
+  /** Post raw Solana addresses. Off by default: X forbids crypto addresses for an app's first 7 days (403), and the pages have copy buttons anyway. */
+  rawAddresses?: boolean;
   log?: (s: string) => void;
   fetchImpl?: typeof fetch;
 };
@@ -66,10 +70,27 @@ export function chunkPost(text: string, max: number): string[] {
   return out.length ? out : [''];
 }
 
-/** The plain rendering of a reply plus the buttons X cannot show: url buttons become "label: url" lines; the rest are already in the text. */
-export function renderForX(rich: Rich, buttons?: Button[][]): string {
+/** Base58 runs of Solana-address length as whole words; signatures (86-88 chars) and hex ids do not match. */
+const ADDRESS = /\b[1-9A-HJ-NP-Za-km-z]{32,44}\b/g;
+
+/** `Hgtd…A9ru`: the address is recognizable but no longer an address. Text inside urls is left alone. */
+export function shortenAddresses(text: string): string {
+  return text.split(/(https?:\/\/\S+)/).map((part, i) => i % 2 ? part : part.replace(ADDRESS, (a) => `${a.slice(0, 4)}…${a.slice(-4)}`)).join('');
+}
+
+/**
+ * The plain rendering of a reply plus what X cannot show: url buttons become "label: url" lines; the
+ * rest are already in the text. Without `rawAddresses`, addresses are shortened and the reply's page
+ * (full addresses, copy buttons) is linked instead.
+ */
+export function renderForX(rich: Rich, buttons?: Button[][], opts: { page?: string; publicUrl?: string; rawAddresses?: boolean } = {}): string {
   const links = (buttons ?? []).flat().filter((b) => b.url).map((b) => `${b.label}: ${b.url}`);
-  return [plain(rich).trim(), ...links].join('\n').trim();
+  let text = plain(rich).trim();
+  if (!opts.rawAddresses && ADDRESS.test(text)) {
+    text = shortenAddresses(text);
+    if (opts.page && opts.publicUrl) links.unshift(`full addresses + copy buttons: ${opts.publicUrl.replace(/\/+$/, '')}${opts.page}`);
+  }
+  return [text, ...links].join('\n').trim();
 }
 
 /** X allows one cashtag per post: the first `$SYMBOL` keeps its dollar sign, the rest lose it (the symbol stays readable). */
@@ -211,14 +232,14 @@ export class XSurface {
 
   /** Send a reply the way Telegram does: text (threaded if long) with the card attached. */
   async send(reply: Reply, inReplyTo?: string): Promise<string | undefined> {
-    const ids = await this.postThread(renderForX(reply.rich, reply.buttons), { inReplyTo, image: reply.image });
+    const ids = await this.postThread(renderForX(reply.rich, reply.buttons, { page: reply.page, publicUrl: this.o.publicUrl, rawAddresses: this.o.rawAddresses }), { inReplyTo, image: reply.image });
     return ids[0];
   }
 
   /** A standalone post to the feed: takeover announcements and the master shillbot's cadence posts. */
   async broadcast(text: string | Rich, image?: string | null, buttons?: Button[][]): Promise<void> {
     const rich: Rich = typeof text === 'string' ? (f) => f.esc(text) : text;
-    await this.postThread(renderForX(rich, buttons), { image });
+    await this.postThread(renderForX(rich, buttons, { page: '/king', publicUrl: this.o.publicUrl, rawAddresses: this.o.rawAddresses }), { image });
   }
 
   /** Mentions older than this on the very first poll (no since_id yet) are history, not commands. */
@@ -276,7 +297,7 @@ export class XSurface {
     const progress = async (rich: Rich) => {
       if (acked) return;                                    // X cannot edit: one "settling…" post, the outcome threads under it
       acked = true;
-      const id = await this.post(chunkPost(plain(rich), this.max)[0], { inReplyTo: anchor }).catch((e) => { this.o.log?.(`x progress post failed: ${e}`); return ''; });
+      const id = await this.post(chunkPost(this.o.rawAddresses ? plain(rich) : shortenAddresses(plain(rich)), this.max)[0], { inReplyTo: anchor }).catch((e) => { this.o.log?.(`x progress post failed: ${e}`); return ''; });
       if (id) anchor = id;
     };
     const reply = await this.commands.handle({ surface: 'x', author: `@${t.username}`, authorId: `x:${t.author_id}`, text: t.text, progress });

@@ -8,6 +8,8 @@ primary_region = "iad"
 [env]
   OPENZOO_CLUSTER = "mainnet"
   OPENZOO_HUB_URL = "https://sites.openzoo.fun"
+  # shared runtime (zoo-vm) program id; /s/<siteId> resolves sites under it. Set after `runtime deploy`.
+  # OPENZOO_VM_PROGRAM = "<zoo-vm id>"
   PORT = "8080"
   # writes: set the secret OPENZOO_HUB_KEYPAIR (JSON byte array) to let visitors POST; bounded by these
   OPENZOO_HUB_WRITE_BUDGET_SOL = "0.05"

@@ -2,3 +2,5 @@ node_modules/
 runtime/zoo-host/target/
 **/target/
 .zoo-out/
+prebuilt/zoo_vm.v3.so
+prebuilt/zoo_vm.v[1-4].so

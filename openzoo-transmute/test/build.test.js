@@ -156,13 +156,45 @@ test('build: transmute contract violations fail loudly', async () => {
   await assert.rejects(build(path.join(root, 'does-not-exist'), { transmute: stubTransmute(), connection: null, skipCargo: true, log: () => {} }), /no such directory/);
 });
 
+test('build --target shared: bytecode module instead of a crate, no cargo, site-sized cost sheet', async () => {
+  const root = path.resolve(path.dirname(new URL(import.meta.url).pathname), 'fixtures', 'next-app');
+  const out = fs.mkdtempSync(path.join(os.tmpdir(), 'zoo-shared-'));
+  const lines = [];
+  const r = await build(root, { out, target: 'shared', connection: null, log: (l) => lines.push(String(l)) });
+  assert.equal(r.target, 'shared');
+  assert.equal(r.crateDir, null);
+  assert.equal(r.soPath, null);
+  assert.ok(r.codeSize > 100 && fs.statSync(r.codePath).size === r.codeSize);
+  assert.equal(fs.readFileSync(r.codePath).subarray(0, 4).toString(), 'ZOOB');
+  assert.ok(!fs.existsSync(path.join(out, '.zoo', 'crate')));
+  const bi = JSON.parse(fs.readFileSync(path.join(out, '.zoo', 'build.json'), 'utf8'));
+  assert.equal(bi.target, 'shared');
+  assert.equal(bi.codePath, r.codePath);
+  const m = JSON.parse(fs.readFileSync(path.join(out, '.zoo', 'manifest.json'), 'utf8'));
+  assert.equal(m.target, 'shared');
+  assert.ok(m.routes.length >= 4);
+  assert.ok(r.costEstimate.shared && !r.costEstimate.items.some((i) => i.kind === 'program'));
+  assert.ok(r.costEstimate.items.some((i) => i.kind === 'site'));
+  assert.ok(r.costEstimate.totalSol < 0.1, `a shared site is cents, got ${r.costEstimate.totalSol}`);
+  assert.ok(lines.some((l) => /code\.bin/.test(l)));
+  // cli: --target shared is the default, --runtime <id> flows into build.json
+  const outLines = [];
+  const code = await run(['build', root, '--out', out, '--runtime', Keypair.generate().publicKey.toBase58(), '--json'], { log: (l) => outLines.push(String(l)), error: () => {} });
+  assert.equal(code, 0);
+  const js = JSON.parse(outLines.find((l) => l.startsWith('{')));
+  assert.equal(js.target, 'shared');
+  assert.ok(JSON.parse(fs.readFileSync(path.join(out, '.zoo', 'build.json'), 'utf8')).runtime);
+  await assert.rejects(run(['build', root, '--out', out, '--target', 'nope'], { log: () => {}, error: () => {} }).then((c) => { if (c) throw new Error('exit ' + c); }), /exit 1/);
+  fs.rmSync(out, { recursive: true, force: true });
+});
+
 test('estimateCost: rpc rent when a cluster is reachable, formatted table', async () => {
   const connection = await probeConnection('localnet', { timeoutMs: 2000 });
   const est = await estimateCost({ staticFiles: [{ path: '/a.html', size: 1000, contentType: 'text/html' }], soSize: 100_000, manifestBytes: 500, connection });
   assert.ok(est.items.some((i) => /program data/.test(i.label)));
-  assert.equal(est.items.find((i) => /program data/.test(i.label)).bytes, 45 + 200_000);
+  assert.equal(est.items.find((i) => /program data/.test(i.label)).bytes, 45 + 100_000);
   assert.equal(est.items.find((i) => i.label === 'program account').bytes, 36);
-  assert.ok(est.sol > 1 && est.sol < 3, `2×100KB program ≈ 1.4 SOL, got ${est.sol}`);
+  assert.ok(est.sol > 0.5 && est.sol < 1.5, `100KB program (exact size) ≈ 0.7 SOL, got ${est.sol}`);
   assert.ok(est.totalSol > est.sol, 'fees added');
   if (connection) {
     assert.equal(est.source, 'rpc');

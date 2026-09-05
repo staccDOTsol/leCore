@@ -12,7 +12,8 @@
     "lib",
     "runtime",
     "docs",
-    "README.md"
+    "README.md",
+    "prebuilt"
   ],
   "engines": {
     "node": ">=18"
@@ -25,5 +26,13 @@
     "acorn": "^8.14.0",
     "acorn-walk": "^8.3.4"
   },
-  "keywords": ["vercel", "lambda", "solana", "pinocchio", "openzoo", "transmute", "x402"]
+  "keywords": [
+    "vercel",
+    "lambda",
+    "solana",
+    "pinocchio",
+    "openzoo",
+    "transmute",
+    "x402"
+  ]
 }

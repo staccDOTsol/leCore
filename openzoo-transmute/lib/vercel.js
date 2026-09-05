@@ -208,6 +208,13 @@ export function readNextjs(root) {
       if (fs.existsSync(f)) functions.push(new VercelFunction({ name: 'middleware', routePath: '/', pattern: '^/.*$', sourceFile: f, style: 'app', middleware: true, runtime: 'edge' }));
     }
   }
+  // A top-level `api/` next to a Next.js app is built by @vercel/node exactly
+  // as it is in a Vite repo (Vercel's docs call these "Serverless Functions"
+  // outside the framework); `next build` ignores it, `vercel build` does not.
+  // A pages/api route with the same name wins, as it does on Vercel.
+  for (const f of readVercelNode(root).functions) {
+    if (!functions.some((g) => g.name === f.name)) functions.push(f);
+  }
   // Static: `public/` is copied verbatim by @vercel/next; `out/` exists after `next build` with output:'export'.
   const staticDir = fs.existsSync(path.join(root, 'out')) ? path.join(root, 'out') : path.join(root, 'public');
   if (!fs.existsSync(path.join(root, 'out'))) notes.push("no `out/` directory: only `public/` is treated as static. Run `next build` with `output: 'export'` in next.config to ship the rendered pages.");

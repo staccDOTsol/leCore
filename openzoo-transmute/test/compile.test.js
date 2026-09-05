@@ -43,6 +43,8 @@ describe('parse: route detection', () => {
     assert.equal(byName['api/counter'].runtime, 'edge');
     assert.equal(byName['api/echo'].style, 'app');
     assert.equal(byName['api/time'].style, 'vercel-node');
+    // readNextjs discovers the top-level api/ itself now (the test helper's merge is a no-op)
+    assert.ok(readDeployment(FIXTURE).functions.some((f) => f.name === 'api/time' && f.style === 'vercel-node'), 'readDeployment alone finds api/time');
     assert.equal(byName['api/bad-fetch'].style, 'vercel-node');
     assert.equal(byName['api/hello'].environment.ZOO_NAME, 'fixture');
     assert.deepEqual(dep.staticFiles.map((s) => s.path).sort(), ['/app.js', '/index.html']);

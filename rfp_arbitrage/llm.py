@@ -174,19 +174,23 @@ class LLM:
 
     # -- openzoo / OpenAI-compatible -----------------------------------------------
     def _post(self, body: dict[str, Any], headers: dict[str, str] | None = None) -> dict[str, Any]:
-        """Retries a rotating x402 door (503) and a rate-limited one (429): the gateway picks a
-        different seller within seconds, and a sale that never happened costs nothing."""
+        """RETRY ONLY WHAT COSTS NOTHING. A 503 'no door quoted' is refused before any payment,
+        so retrying is free and the gateway may pick a different seller within seconds. A 502
+        is the opposite: the proxy already SETTLED and the door then failed -- MEASURED, 102
+        such settlements against 31 completions, roughly $3.70 paid for nothing. Retrying that
+        pays again, so it is raised immediately and the caller's circuit breaker stops the run."""
         import time as _time
         last: LLMError | None = None
-        for attempt in range(4):
+        for attempt in range(3):
             try:
                 return self._post_once(body, headers)
             except LLMError as e:
                 t = str(e)
-                if not ("503" in t or "429" in t or "no x402 door" in t or "502" in t or "504" in t):
+                free_to_retry = ("no door quoted" in t or "no x402 door" in t or "429" in t) and "502" not in t
+                if not free_to_retry:
                     raise
                 last = e
-                _time.sleep(2 ** attempt * 1.5)
+                _time.sleep(2 ** attempt * 2.0)
         raise last if last is not None else LLMError("gateway unreachable")
 
     def _post_once(self, body: dict[str, Any], headers: dict[str, str] | None = None) -> dict[str, Any]:

@@ -175,6 +175,9 @@ class Pump:
                     except Exception as e:  # noqa: BLE001
                         self.log(f"[pump:gate] bind failed for {o.key}: {str(e)[:120]}")
                 v = analyze(o, text, self.llm, context_id=ctx)
+                for b in v.other_blockers:
+                    if "LLM unavailable" in b:
+                        self._door_failure(b)
                 st.put_verdict(v)
                 if self.llm is not None:
                     self.log(f"[pump:gate] {v.method} {v.delegation.value}/{v.ai_use.value} conf={v.confidence:.2f} "
@@ -230,6 +233,20 @@ class Pump:
                 self.counts["priced"] += 1
         return len(opps)
 
+    def _door_failure(self, e: object) -> None:
+        """A paid call that settled and got nothing back (502) detaches the model for this run.
+        Paying again while the doors are broken is pure loss; _retry_llm re-probes each round
+        and re-attaches as soon as one sells."""
+        s = str(e)
+        if "502" in s or "refused payment" in s:
+            with self._lock:
+                self._door_fails = getattr(self, "_door_fails", 0) + 1
+                n = self._door_fails
+            if n >= 3 and self.llm is not None:
+                self.log(f"[pump] detaching the model: {n} paid calls settled and returned nothing ({s[:120]}); "
+                         f"free stages continue and the model re-attaches when a door sells")
+                self.llm = None
+
     def _retry_llm(self) -> None:
         if self.llm is not None or self.llm_factory is None:
             return
@@ -237,6 +254,8 @@ class Pump:
         why = cand.available() if cand is not None else "no factory result"
         if why is None:
             self.llm = cand
+            with self._lock:
+                self._door_fails = 0
             self.log(f"[pump] LLM now available: {cand.name} -- heuristic verdicts will be re-gated, biggest asks first")
         else:
             self.log(f"[pump] LLM still unavailable: {why[:160]}")

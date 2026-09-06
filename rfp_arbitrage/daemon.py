@@ -118,11 +118,18 @@ def board_markdown(store: Store, limit: int = 60) -> str:
     return "\n".join(out)
 
 
-def gist_files(store: Store, proposals: int = 8) -> dict[str, dict[str, str]]:
-    """What the gist holds: the board, then the drafts themselves so the link is the work."""
+def gist_files(store: Store, proposals: int = 8) -> tuple[dict[str, dict[str, str]], str, dict[str, int]]:
+    """What the gist holds: the board, then the drafts themselves so the link is the work.
+
+    Returns the files, a digest of the SUBSTANCE, and the counts for the heartbeat. The digest
+    is deliberately not a hash of the files: the board stamps the time it was written, so file
+    content differs every single round and "nothing changed" could never be detected -- the log
+    said `gist updated` every 90 seconds forever and meant nothing by it."""
     from .report import ready_board
     files: dict[str, dict[str, str]] = {"README.md": {"content": board_markdown(store)}}
-    for i, r in enumerate(ready_board(store, 60)):
+    rows = ready_board(store, 60)
+    state: list[str] = []
+    for i, r in enumerate(rows):
         if i >= proposals:
             break
         row = store.conn.execute("SELECT markdown FROM proposals WHERE opportunity_key=?", (r["key"],)).fetchone()
@@ -132,7 +139,25 @@ def gist_files(store: Store, proposals: int = 8) -> dict[str, dict[str, str]]:
         tag = "ready" if r["sendable"] else "blocked"
         # a gist file over a megabyte is rejected outright; no bid is anywhere near this long
         files[f"{i + 1:02d}-{tag}-{_slug(r['title'])}.md"] = {"content": md[:120_000]}
-    return files
+        state.append(f"{r['key']}|{tag}|{r['price']:.0f}|{hashlib.sha256(md.encode()).hexdigest()[:16]}")
+    st = store.stats()
+    counts = {k: int(st.get(k, 0)) for k in ("opportunities", "intellectual", "verdicts", "matches", "proposals")}
+    counts["ready"] = sum(1 for r in rows if r["sendable"])
+    state.append("|".join(f"{k}={v}" for k, v in sorted(counts.items())))
+    return files, hashlib.sha256("\n".join(state).encode()).hexdigest(), counts
+
+
+def _last_line(path: Path, prefix: str) -> str:
+    """The most recent line a child logged with this prefix -- the child's own progress report,
+    which is a truer answer to 'is it working' than anything this process can compute."""
+    try:
+        tail = path.read_text(errors="replace").splitlines()[-400:]
+    except Exception:
+        return ""
+    for line in reversed(tail):
+        if line.startswith(prefix):
+            return line.strip()
+    return ""
 
 
 # ---------------------------------------------------------------- the gist itself
@@ -169,11 +194,12 @@ class Gist:
         with urllib.request.urlopen(req, timeout=60) as r:
             return json.loads(r.read().decode())
 
-    def publish(self, files: dict[str, dict[str, str]], description: str) -> str | None:
-        """Create once, then PATCH the same id forever. Returns the url when something changed."""
+    def publish(self, files: dict[str, dict[str, str]], digest: str, description: str) -> str | None:
+        """Create once, then PATCH the same id forever. Returns the url when something changed.
+
+        `digest` is over the substance, not the rendered files -- see gist_files."""
         if not self.token:
             return None
-        digest = hashlib.sha256(json.dumps(files, sort_keys=True).encode()).hexdigest()
         if digest == self._last:
             return None                       # nothing new; do not spend a write
         # IN PLACE means in place: a file we published last round and no longer have is deleted
@@ -192,7 +218,7 @@ class Gist:
             if e.code == 404 and self.id:     # remembered a gist that is gone; start a new one
                 _log(f"gist {self.id} is gone, creating a fresh one")
                 self.id = ""
-                return self.publish(files, description)
+                return self.publish(files, digest, description)
             _log(f"gist {method_hint(e)}: {e.code} {detail}")
             return None
         except Exception as e:                # network flap: try again next round
@@ -303,7 +329,7 @@ def run(args) -> int:
     signal.signal(signal.SIGTERM, bye)
 
     proxy: subprocess.Popen | None = None
-    misses, quiet_until, last_gist = 0, 0.0, 0.0
+    misses, quiet_until, last_gist, last_round = 0, 0.0, 0.0, ""
     _log(f"starting. db={args.db or os.environ.get('RFP_DB') or 'rfp_arbitrage.sqlite3'} out={args.out_dir}")
     try:
         while not stop["now"]:
@@ -334,22 +360,28 @@ def run(args) -> int:
             # 3. the link
             if gist.token and time.time() - last_gist >= args.gist_every:
                 last_gist = time.time()
-                url = None
                 try:
                     from .config import settings
                     st = Store(args.db or settings().db_path)
                     try:
-                        files = gist_files(st, args.gist_proposals)
+                        files, digest, counts = gist_files(st, args.gist_proposals)
                     finally:
                         st.close()
-                    ready = sum(1 for n in files if "-ready-" in n)
-                    url = gist.publish(files, f"Live bid board — {ready} ready to send — "
-                                              f"{datetime.now(timezone.utc):%Y-%m-%d %H:%M UTC}")
+                    url = gist.publish(files, digest, f"Live bid board — {counts['ready']} ready to send — "
+                                                     f"{datetime.now(timezone.utc):%Y-%m-%d %H:%M UTC}")
                 except Exception as e:
                     _log(f"board build failed: {type(e).__name__}: {str(e)[:160]}")
                 else:
-                    if url:
-                        _log(f"gist updated: {url}")
+                    # IS IT WORKING. The counts move or they do not, and the pump's own round line
+                    # carries the spend -- printing `gist updated` on a timer answered nothing.
+                    _log(f"{counts['opportunities']:,} indexed · {counts['verdicts']:,} gated · "
+                         f"{counts['matches']:,} eligible · {counts['proposals']:,} drafted "
+                         f"({counts['ready']} ready to send)"
+                         + (f" · gist rewritten {url}" if url else " · gist unchanged"))
+                    round_line = _last_line(logs / "pump.log", "[pump] round")
+                    if round_line and round_line != last_round:
+                        last_round = round_line
+                        _log(round_line)
 
             for _ in range(int(max(1, args.tick))):
                 if stop["now"]:

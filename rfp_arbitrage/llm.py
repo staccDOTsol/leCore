@@ -46,6 +46,41 @@ def price_of(model: str) -> tuple[float, float]:
     return (5.0, 25.0)   # assume frontier when unknown: the cap errs on the safe side
 
 
+def _close_truncated(text: str) -> str | None:
+    """A long draft that runs into max_tokens stops mid-object, and the whole paid read is then
+    thrown away over a missing brace. Walk the text, close whatever is still open, and drop the
+    half-written value at the end. Returns None if there is nothing to close."""
+    out: list[str] = []
+    stack: list[str] = []
+    in_str = esc = False
+    last_safe = 0                             # end of the last complete key/value pair
+    for i, ch in enumerate(text):
+        out.append(ch)
+        if in_str:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = False
+        elif ch == '"':
+            in_str = True
+        elif ch in "{[":
+            stack.append("}" if ch == "{" else "]")
+        elif ch in "}]":
+            if stack:
+                stack.pop()
+            last_safe = i + 1
+        elif ch == ",":
+            last_safe = i                     # a comma follows a value that finished cleanly
+    if not stack and not in_str:
+        return None
+    head = text[:last_safe].rstrip().rstrip(",")
+    if not head:
+        return None
+    return head + "".join(reversed(stack))
+
+
 def _extract_json(text: str) -> dict[str, Any]:
     text = text.strip()
     m = re.search(r"```(?:json)?\s*(\{.*\})\s*```", text, re.S)
@@ -57,7 +92,19 @@ def _extract_json(text: str) -> dict[str, Any]:
         pass
     a, b = text.find("{"), text.rfind("}")
     if a != -1 and b > a:
-        return json.loads(text[a:b + 1])
+        try:
+            return json.loads(text[a:b + 1])
+        except json.JSONDecodeError:
+            pass                              # a brace inside a string, or a truncated tail
+    if a != -1:
+        patched = _close_truncated(text[a:])
+        if patched:
+            try:
+                return json.loads(patched)
+            except json.JSONDecodeError:
+                pass
+    # A raw JSONDecodeError escaping here killed the caller outright; as an LLMError the chain
+    # falls through to the next model and the salvage pass, which is what it is there for.
     raise LLMError(f"no JSON object in model output: {text[:200]!r}")
 
 

@@ -2,7 +2,13 @@
 that survived gate + price + match. The draft is the first artifact of the delivery loop --
 the same context that produced the verdict and the scope produces the proposal, the buyer
 Q&A, and later the deliverables and their revisions. Output: a Markdown proposal plus a
-structured record (compliance matrix, assumptions, questions for the buyer, price)."""
+structured record (compliance matrix, assumptions, questions for the buyer, price).
+
+The proposal speaks in ASSETS AND RESOURCES, never in production method: a buyer is purchasing
+an outcome against acceptance criteria, and how the firm marshals capacity to meet them is not
+something these solicitations ask to be disclosed. Where a solicitation DOES require disclosure
+of methods or tooling, that requirement is answered truthfully in the compliance matrix -- the
+clause gate has already recorded whether the solicitation demands it."""
 from __future__ import annotations
 
 from typing import Any
@@ -23,7 +29,7 @@ PROPOSAL_SCHEMA: dict[str, Any] = {
                                                     "properties": {"name": {"type": "string"}, "acceptance": {"type": "string"}}}, "maxItems": 15},
         "schedule": {"type": "array", "items": {"type": "string"}, "maxItems": 12},
         "team": {"type": "array", "items": {"type": "string"}, "maxItems": 8,
-                 "description": "roles on the delivery team (AI teams with named human accountable leads / reviewers)"},
+                 "description": "the resources assigned: roles and accountable leads, described as assets/capacity the firm brings; never the production method"},
         "compliance_matrix": {"type": "array", "maxItems": 30, "items": {"type": "object", "additionalProperties": False,
                               "required": ["requirement", "where", "response"],
                               "properties": {"requirement": {"type": "string"}, "where": {"type": "string"}, "response": {"type": "string"}}}},
@@ -35,8 +41,15 @@ PROPOSAL_SCHEMA: dict[str, Any] = {
 }
 
 SYSTEM = """You write winning, compliant responses to public-sector solicitations for a firm that delivers
-intellectual work (software, data, studies, writing, design, analysis) through AI teams with human accountable
-leads and reviewers. Read the bound solicitation. Mirror its structure and its evaluation criteria. Build the
+intellectual work: software, data, studies, writing, design, analysis. Read the bound solicitation.
+
+HOW TO DESCRIBE THE DELIVERY TEAM. Speak in terms of ASSETS AND RESOURCES the firm brings to bear --
+"our delivery resources", "the assets assigned to this engagement", "capacity", "the review team",
+named accountable leads. Do NOT describe the production method, do NOT name AI, automation, models
+or tooling, and do NOT claim headcount you cannot name. The buyer is purchasing an outcome against
+acceptance criteria; how the firm marshals its resources to meet them is not a disclosure the
+solicitation asks for. If the solicitation itself requires disclosure of methods or tooling, answer
+that requirement truthfully and completely in the compliance matrix. Mirror its structure and its evaluation criteria. Build the
 compliance matrix from the solicitation's own mandatory requirements, citing where each one lives. Be concrete:
 deliverables with acceptance criteria, a schedule that respects stated dates, assumptions that protect margin,
 questions that a serious bidder would ask before pricing. Never invent past performance, certifications, or

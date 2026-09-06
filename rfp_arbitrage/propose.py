@@ -11,6 +11,7 @@ of methods or tooling, that requirement is answered truthfully in the compliance
 clause gate has already recorded whether the solicitation demands it."""
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from .bidder import Bidder
@@ -97,6 +98,24 @@ def unsupported_claims(text: str, bidder: Bidder) -> list[str]:
     return out
 
 
+def _render(opp: Opportunity, data: dict[str, Any], bidder: Bidder) -> str:
+    md = [f"# {data.get('title') or opp.title}", "",
+          f"*Response to {opp.buyer} · {opp.title} · closes {opp.deadline[:10]}*", "",
+          "```", bidder.block(), "```", "",
+          "## Executive summary", data.get("executive_summary", ""), "",
+          "## Our understanding", data.get("understanding", ""), "",
+          "## Approach"] + [f"- {a}" for a in data.get("approach", [])] + ["", "## Deliverables and acceptance"]
+    md += [f"- **{d.get('name')}** -- {d.get('acceptance')}" for d in data.get("deliverables", [])]
+    md += ["", "## Schedule"] + [f"- {x}" for x in data.get("schedule", [])] + ["", "## Team"] + [f"- {t}" for t in data.get("team", [])]
+    md += ["", "## Compliance matrix", "| requirement | where | response |", "|---|---|---|"]
+    md += [f"| {c.get('requirement', '')} | {c.get('where', '')} | {c.get('response', '')} |".replace("\n", " ")
+           for c in data.get("compliance_matrix", [])]
+    md += ["", "## Assumptions"] + [f"- {a}" for a in data.get("assumptions", [])]
+    md += ["", "## Questions for the buyer"] + [f"- {q}" for q in data.get("questions_for_buyer", [])]
+    md += ["", "## Price", f"**${float(data.get('price_usd') or 0):,.0f}** -- {data.get('price_rationale', '')}"]
+    return "\n".join(md)
+
+
 def draft(opp: Opportunity, text: str, pricing: dict[str, Any], match: dict[str, Any] | None, llm: LLM,
           context_id: str | None) -> tuple[str, dict[str, Any]]:
     ask = pricing.get("ask_value") or 0
@@ -110,23 +129,35 @@ def draft(opp: Opportunity, text: str, pricing: dict[str, Any], match: dict[str,
             f"COMPARABLE AWARDS: {pricing.get('benchmark', {})}\nBID PRICE TO USE (USD): {target:,.0f}\n\n"
             f"OPENING OF THE SOLICITATION:\n{text[:3000]}")
     data = llm.json(SYSTEM, user, PROPOSAL_SCHEMA, max_tokens=6000, context_id=context_id, top_k=32)
-    md = [f"# {data.get('title') or opp.title}", "",
-          f"*Response to {opp.buyer} · {opp.title} · closes {opp.deadline[:10]}*", "",
-          "```", bidder.block(), "```", "",
-          "## Executive summary", data.get("executive_summary", ""), "", "## Our understanding", data.get("understanding", ""), "",
-          "## Approach"] + [f"- {a}" for a in data.get("approach", [])] + ["", "## Deliverables and acceptance"]
-    md += [f"- **{d.get('name')}** -- {d.get('acceptance')}" for d in data.get("deliverables", [])]
-    md += ["", "## Schedule"] + [f"- {s}" for s in data.get("schedule", [])] + ["", "## Team"] + [f"- {t}" for t in data.get("team", [])]
-    md += ["", "## Compliance matrix", "| requirement | where | response |", "|---|---|---|"]
-    md += [f"| {c.get('requirement', '')} | {c.get('where', '')} | {c.get('response', '')} |".replace("\n", " ") for c in data.get("compliance_matrix", [])]
-    md += ["", "## Assumptions"] + [f"- {a}" for a in data.get("assumptions", [])]
-    md += ["", "## Questions for the buyer"] + [f"- {q}" for q in data.get("questions_for_buyer", [])]
-    md += ["", "## Price", f"**${float(data.get('price_usd') or target):,.0f}** -- {data.get('price_rationale', '')}"]
+    text = _render(opp, data, bidder)
     text = "\n".join(md)
     problems = unsupported_claims(text, bidder)
+    # REWRITE, DO NOT JUST COMPLAIN. A flagged draft is a draft the model can fix: hand it back
+    # the exact violations and the identity it must respect, and take the corrected version.
+    for attempt in range(2):
+        if not problems:
+            break
+        repair = (f"Your draft response makes claims this bidder cannot support. Rewrite it so every one is gone.\n\n"
+                  f"THE BIDDER, in full — nothing beyond this may be asserted:\n{bidder.block(redact_ein=False)}\n\n"
+                  f"VIOLATIONS TO REMOVE ({len(problems)}):\n"
+                  + "\n".join(f"- {p}" for p in problems)
+                  + "\n\nRules for the rewrite: state no registration, certification, clearance, bond, years of "
+                    "experience, prior employer or past project that the bidder block above does not contain. Where the "
+                    "solicitation requires one, answer with a bracketed placeholder such as [UEI PENDING SAM.GOV "
+                    "REGISTRATION] or [PAST PERFORMANCE 1] so a human supplies it. Describe each role by the work it "
+                    "owns on this engagement, never by credentials. Keep everything else — scope, deliverables, "
+                    "schedule, compliance matrix, price — as strong as it was.\n\n"
+                    "YOUR DRAFT:\n" + json.dumps(data)[:60000])
+        try:
+            data = llm.json(SYSTEM, repair, PROPOSAL_SCHEMA, max_tokens=16000, context_id=context_id, top_k=24)
+        except LLMError as e:
+            data.setdefault("repair_errors", []).append(str(e)[:200])
+            break
+        text = _render(opp, data, bidder)
+        problems = unsupported_claims(text, bidder)
     if problems:
-        banner = ["> **NOT SUBMITTABLE AS WRITTEN.** The draft asserts things this bidder cannot support.",
-                  "> A human must correct each line below, or the claim must come out, before this is sent.", ">"]
+        banner = ["> **NOT SUBMITTABLE AS WRITTEN.** The draft still asserts things this bidder cannot support,",
+                  "> after a rewrite. A human must correct each line below before this is sent.", ">"]
         banner += [f"> - {p[:300]}" for p in problems]
         text = "\n".join(banner) + "\n\n" + text
         data["unsupported_claims"] = problems

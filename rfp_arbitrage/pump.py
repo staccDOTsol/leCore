@@ -328,13 +328,28 @@ class Pump:
                  AND (o.deadline = '' OR o.deadline >= date('now'))
                  AND o.key NOT IN (SELECT opportunity_key FROM proposals)
                  -- AND NOT ALREADY CARRIED TO A TERMINAL OUTCOME. Without this the queue never
-                 -- advances: an opportunity that legitimately falls out (ineligible, held on a
-                 -- registration) produces no proposal, so it is picked again every single round
-                 -- and nothing behind it is ever reached. Retried after 12 h, because the reason
-                 -- can change -- a UEI arrives, the awards index grows, a model attaches.
+                 -- advances: an opportunity that legitimately falls out (ineligible, no
+                 -- comparable price) produces no proposal, so it is picked again every single
+                 -- round and nothing behind it is ever reached. Retried after 12 h, because the
+                 -- reason can change -- the awards index grows, a deadline nears.
+                 --
+                 -- A SHORTER LEASH WHERE THE REASON WAS NEVER ABOUT THE OPPORTUNITY. A missing
+                 -- model and a missing or incomplete bidder profile are configuration: the
+                 -- operator fixes them in seconds and expects the next round to move. Twelve
+                 -- hours makes the fix look like it did not take -- measured: 48 eligible
+                 -- matches, every one carried to "drafting held" while .rfp_bidder.json did not
+                 -- exist, and not one of them reachable again afterwards. Twenty minutes instead.
+                 -- Not zero: "held pending a UEI" can last weeks, and re-carrying those every
+                 -- round would starve the queue exactly as it did before this table existed. A
+                 -- re-carry is cheap anyway -- the verdict and the price are already stored.
                  AND o.key NOT IN (SELECT opportunity_key FROM carried
-                                   WHERE at > datetime('now', '-12 hours')
-                                     AND outcome NOT LIKE 'matched; awaiting%')
+                                   WHERE outcome NOT LIKE 'matched; awaiting%'
+                                     AND outcome NOT LIKE 'drafting held%'
+                                     AND at > datetime('now', '-12 hours'))
+                 AND o.key NOT IN (SELECT opportunity_key FROM carried
+                                   WHERE (outcome LIKE 'matched; awaiting%'
+                                          OR outcome LIKE 'drafting held%')
+                                     AND at > datetime('now', '-20 minutes'))
                ORDER BY COALESCE(p.ask_value, 0) DESC, o.posted DESC
                LIMIT ?""", (self.threshold, self.conveyor_batch * 8)).fetchall()
         return [Opportunity.from_row(dict(r)) for r in rows]

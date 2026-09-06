@@ -21,7 +21,8 @@ from .models import Opportunity
 PROPOSAL_SCHEMA: dict[str, Any] = {
     "type": "object", "additionalProperties": False,
     "required": ["title", "executive_summary", "understanding", "approach", "deliverables", "schedule", "team",
-                 "compliance_matrix", "assumptions", "questions_for_buyer", "price_usd", "price_rationale"],
+                 "compliance_matrix", "assumptions", "questions_for_buyer", "price_usd", "price_rationale",
+                 "solution_diagram", "delivery_diagram"],
     "properties": {
         "title": {"type": "string"},
         "executive_summary": {"type": "string"},
@@ -39,6 +40,16 @@ PROPOSAL_SCHEMA: dict[str, Any] = {
         "questions_for_buyer": {"type": "array", "items": {"type": "string"}, "maxItems": 10},
         "price_usd": {"type": "number"},
         "price_rationale": {"type": "string"},
+        "solution_diagram": {"type": "string", "description":
+            "A Mermaid diagram of the SOLUTION this solicitation asks for, end to end: the buyer's real inputs, "
+            "each processing or decision step, the systems and standards named in the solicitation, and every "
+            "deliverable as a terminal node. Use `flowchart LR` or `sequenceDiagram`. Node labels are short and "
+            "concrete, drawn from the solicitation's own vocabulary. No styling, no colour, no <br/>, no parentheses "
+            "or quotes inside labels. Mermaid source only, without a code fence."},
+        "delivery_diagram": {"type": "string", "description":
+            "A Mermaid diagram of HOW THE ENGAGEMENT RUNS: milestones, review gates, buyer touchpoints, acceptance "
+            "criteria, and the resources assigned at each stage. Never name production methods or tooling. Use "
+            "`flowchart TD` or `gantt`. Mermaid source only, without a code fence."},
     },
 }
 
@@ -58,7 +69,15 @@ named prior employer, or a past project unless the bidder block states it. Descr
 WORK IT OWNS on this engagement -- "owns the monthly schedule and cost reporting", "independent
 reviewer of every deliverable before submission" -- and nothing else. Where the solicitation demands
 credentials, resumes, past performance or registrations, put the requirement in the compliance matrix
-with a bracketed placeholder as the response, so a human supplies it or the bid is withdrawn. The buyer is purchasing an outcome against
+with a bracketed placeholder as the response, so a human supplies it or the bid is withdrawn.
+
+THE TWO DIAGRAMS ARE THE PROOF YOU UNDERSTOOD THE WORK. A buyer reads them before the prose. Draw the
+actual mechanism this solicitation describes -- their systems, their data, their standards, their
+approval chain -- not a generic pipeline. A box labelled "Process" or "Analysis" is a failure: name the
+step. Every deliverable in your deliverables list must appear as a terminal node in the solution
+diagram, and every review gate in your schedule must appear in the delivery diagram. Mermaid labels
+must be plain: no parentheses, quotes, colons, semicolons or HTML inside a label, because the diagram
+must render on first read. The buyer is purchasing an outcome against
 acceptance criteria; how the firm marshals its resources to meet them is not a disclosure the
 solicitation asks for. If the solicitation itself requires disclosure of methods or tooling, answer
 that requirement truthfully and completely in the compliance matrix. Mirror its structure and its evaluation criteria. Build the
@@ -98,6 +117,28 @@ def unsupported_claims(text: str, bidder: Bidder) -> list[str]:
     return out
 
 
+def _clean_mermaid(src: str) -> str:
+    """Mermaid fails closed: one stray character and the buyer sees a parse error instead of the
+    diagram that was supposed to prove we understood their problem. Strip the fences a model adds
+    anyway, and neutralise the punctuation that breaks a label."""
+    import re as _re
+    src = _re.sub(r"^\s*```(?:mermaid)?\s*|\s*```\s*$", "", src.strip())
+    out = []
+    for line in src.splitlines():
+        # only rewrite inside label brackets, never the arrows or the node ids
+        def fix(m):
+            body = m.group(2)
+            body = body.replace('"', "").replace("(", " ").replace(")", " ").replace(";", ",").replace(":", " -")
+            body = _re.sub(r"<[^>]+>", " ", body)
+            body = _re.sub(r"\s{2,}", " ", body).strip()
+            return f"{m.group(1)}{body}{m.group(3)}"
+        # each label shape on its own pass, so a stray paren INSIDE a [label] is still reachable
+        for pat in (r"(\[)([^\]]*)(\])", r"(\{)([^}]*)(\})", r"(\(\()([^)]*)(\)\))"):
+            line = _re.sub(pat, fix, line)
+        out.append(line.rstrip())
+    return "\n".join(l for l in out if l.strip())
+
+
 def _render(opp: Opportunity, data: dict[str, Any], bidder: Bidder) -> str:
     md = [f"# {data.get('title') or opp.title}", "",
           f"*Response to {opp.buyer} · {opp.title} · closes {opp.deadline[:10]}*", "",
@@ -110,6 +151,14 @@ def _render(opp: Opportunity, data: dict[str, Any], bidder: Bidder) -> str:
     md += ["", "## Compliance matrix", "| requirement | where | response |", "|---|---|---|"]
     md += [f"| {c.get('requirement', '')} | {c.get('where', '')} | {c.get('response', '')} |".replace("\n", " ")
            for c in data.get("compliance_matrix", [])]
+    for key, heading, blurb in (("solution_diagram", "## The solution, end to end",
+                                 "How the work moves from your inputs to each deliverable."),
+                                ("delivery_diagram", "## How the engagement runs",
+                                 "Milestones, review gates and acceptance.")):
+        dia = (data.get(key) or "").strip()
+        if dia:
+            dia = _clean_mermaid(dia)
+            md += ["", heading, "", f"*{blurb}*", "", "```mermaid", dia, "```"]
     md += ["", "## Assumptions"] + [f"- {a}" for a in data.get("assumptions", [])]
     md += ["", "## Questions for the buyer"] + [f"- {q}" for q in data.get("questions_for_buyer", [])]
     md += ["", "## Price", f"**${float(data.get('price_usd') or 0):,.0f}** -- {data.get('price_rationale', '')}"]

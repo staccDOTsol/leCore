@@ -137,7 +137,8 @@ def estimate_scope(opp: Opportunity, text: str, llm: LLM | None, context_id: str
     except LLMError as e:
         h = heuristic_scope(opp, text)
         h["assumptions"].append(f"LLM unavailable: {e}")
-        if "budget exhausted" not in str(e) and "could not reach" not in str(e) and "402" not in str(e):
+        from .clauses import _transient
+        if not _transient(e):
             h["basis"] = f"llm-failed:{llm.name}"       # paid, no usable answer: not retried automatically
         return h
     mix = {k: float(v) for k, v in (d.get("skill_mix") or {}).items() if k in REFERENCE_RATES and float(v) > 0}

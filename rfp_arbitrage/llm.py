@@ -174,6 +174,22 @@ class LLM:
 
     # -- openzoo / OpenAI-compatible -----------------------------------------------
     def _post(self, body: dict[str, Any], headers: dict[str, str] | None = None) -> dict[str, Any]:
+        """Retries a rotating x402 door (503) and a rate-limited one (429): the gateway picks a
+        different seller within seconds, and a sale that never happened costs nothing."""
+        import time as _time
+        last: LLMError | None = None
+        for attempt in range(4):
+            try:
+                return self._post_once(body, headers)
+            except LLMError as e:
+                t = str(e)
+                if not ("503" in t or "429" in t or "no x402 door" in t or "502" in t or "504" in t):
+                    raise
+                last = e
+                _time.sleep(2 ** attempt * 1.5)
+        raise last if last is not None else LLMError("gateway unreachable")
+
+    def _post_once(self, body: dict[str, Any], headers: dict[str, str] | None = None) -> dict[str, Any]:
         req = urllib.request.Request(self.url, data=json.dumps(body).encode("utf-8"),
                                      headers={"Content-Type": "application/json"}, method="POST")
         if self.api_key:

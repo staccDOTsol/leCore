@@ -223,6 +223,16 @@ def heuristic_verdict(key: str, text: str) -> ClauseVerdict:
     )
 
 
+def _transient(e: object) -> bool:
+    """Gateway or budget conditions that must NOT mark an opportunity as read-and-failed:
+    the door rotation (503 'no x402 door can currently sell'), an unreachable proxy, a 402
+    payment failure, and an exhausted budget all mean 'not read yet', not 'read badly'."""
+    s = str(e)
+    return ("budget exhausted" in s or "could not reach" in s or "402" in s or "503" in s
+            or "no x402 door" in s or "unreachable" in s or "Connection refused" in s
+            or "429" in s or "502" in s or "504" in s or "timed out" in s)
+
+
 # --- LLM verdict -------------------------------------------------------------------------
 VERDICT_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -333,7 +343,7 @@ def analyze(opp: Opportunity, text: str, llm: LLM | None, full_threshold: int = 
         data = llm.json(SYSTEM_PROMPT, user, VERDICT_SCHEMA, max_tokens=3000, context_id=context_id, top_k=24)
     except LLMError as e:
         heur.other_blockers.append(f"LLM unavailable ({e}); heuristic verdict only")
-        if "budget exhausted" not in str(e) and "could not reach" not in str(e) and "402" not in str(e):
+        if not _transient(e):
             heur.method = f"llm-failed:{llm.name}"     # paid and got no usable answer: do not pay again automatically
         return heur
     try:

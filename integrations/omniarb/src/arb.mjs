@@ -14,7 +14,7 @@
 import { formatEther, parseEther } from 'viem';
 import { nativePrices, toUsd } from './prices.mjs';
 import { quoteNativeCached, supportedChains } from './relay.mjs';
-import { NATIVE, PORTAL } from './config.mjs';
+import { NATIVE, PORTAL, arbHelperFor } from './config.mjs';
 import { publicClient, simOverrides, SIM_ACCOUNT } from './chain.mjs';
 import { ARTIFACT, helperFor, quoteBuy, quoteSell, arbGasCost } from './quote.mjs';
 
@@ -54,6 +54,32 @@ export async function mapPool(items, fn, limit = 8) {
   });
   await Promise.all(workers);
   return out;
+}
+
+/**
+ * Pick routes that can safely run at the same time.
+ *
+ * Two routes may execute concurrently only if they share no chain. The wallet
+ * has one nonce per chain, so two sends on the same chain race each other; and
+ * two routes touching the same chain touch the same pools, where the first fill
+ * moves the price the second was quoted at. Disjoint chains have neither
+ * problem, so a Polygon->World route and a Base->Robinhood one are genuinely
+ * independent and there is no reason to run them one after the other.
+ *
+ * Greedy over the profit-sorted list, which is what you want here: the best
+ * route always goes, and cheaper ones fill in only where they cost nothing.
+ */
+export function selectDisjointRoutes(routes, max = 4) {
+  const picked = [];
+  const claimed = new Set();
+  for (const r of routes) {
+    if (picked.length >= max) break;
+    const touches = [r.src.id, r.dst.id];
+    if (touches.some((id) => claimed.has(id))) continue;
+    touches.forEach((id) => claimed.add(id));
+    picked.push(r);
+  }
+  return picked;
 }
 
 /** Sizes probed before refining, in native units. */
@@ -469,6 +495,18 @@ export async function findRoutes(token, byChain, funds,
           // that chain. Flag it so the executor never picks a leg it cannot send.
           const buyNeedsHelper = !atomic && !buyV.viaOmniRouter && buyV.kind !== 'curve';
           const sellNeedsHelper = !atomic && !sellV.viaOmniRouter && sellV.kind !== 'curve';
+          // Those legs are sendable once the helper actually exists on that chain.
+          const buyHelperReady = !buyNeedsHelper || Boolean(arbHelperFor(src.chain));
+          const sellHelperReady = !sellNeedsHelper || Boolean(arbHelperFor(dst.chain));
+
+          // The sell happens on the DESTINATION chain and is paid for in the
+          // DESTINATION chain's gas asset. Having money on the source says
+          // nothing about that. Bridging into a chain the wallet cannot transact
+          // on strands the tokens there with no way to sell them, which is
+          // exactly what "gas required exceeds allowance (0)" means.
+          const dstNative = funds.get(dstId)?.balance ?? 0n;
+          const dstGasNeeded = sellGas * 2n; // sell, plus an approve on first use
+          const dstCanPayGas = sameChain || dstNative >= dstGasNeeded;
 
           tasks.push(async () => {
             const best = await optimiseUsd(evaluate, { cap });
@@ -476,7 +514,11 @@ export async function findRoutes(token, byChain, funds,
             return {
               buyNeedsHelper,
               sellNeedsHelper,
-              executable: atomic || (!buyNeedsHelper && !sellNeedsHelper),
+              dstCanPayGas,
+              dstGasNeeded,
+              executable: atomic
+                ? Boolean(arbHelperFor(src.chain))
+                : (buyHelperReady && sellHelperReady && dstCanPayGas),
               type: atomic ? 'route-atomic' : (sameChain ? 'route-same-chain' : 'route-bridged'),
               atomic, token,
               chain: src.chain, src: src.chain, dst: dst.chain,

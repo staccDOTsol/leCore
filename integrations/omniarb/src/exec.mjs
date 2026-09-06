@@ -116,8 +116,6 @@ export async function buyOnVenue(c, account, token, venue, nativeIn, { slippageB
   if (!quoted || quoted === 0n) throw new Error(`no buy quote on ${c.name}`);
   const minOut = (quoted * (10000n - slippageBps)) / 10000n;
 
-  const before = await pc.readContract({ address: token, abi: ERC20_ABI, functionName: 'balanceOf', args: [account.address] });
-
   let hash;
   if (venue.kind === 'curve') {
     hash = await wc.writeContract({ address: PAD, abi: PAD_ABI, functionName: 'buy', args: [token, minOut], value: nativeIn });
@@ -126,13 +124,31 @@ export async function buyOnVenue(c, account, token, venue, nativeIn, { slippageB
       address: c.router, abi: ROUTER_ABI, functionName: 'buy',
       args: [token, c.hook, minOut, account.address, deadline(900)], value: nativeIn });
   } else {
-    throw new Error('hookless-pool buys need the OmniArb helper — use an atomic route');
+    // Hookless pool: omnichain's router refuses it, so go through our helper.
+    // Native is currency0 on every omnichain pool, so buying is zeroForOne.
+    const h = helperFor(c);
+    if (!h.deployed) {
+      throw new Error(`hookless buy on ${c.name} needs the helper — run "omniarb deploy --chain ${c.short} --live"`);
+    }
+    hash = await wc.writeContract({
+      address: h.address, abi: ARTIFACT.abi, functionName: 'swapV4',
+      args: [c.poolManager, venue.key, true, nativeIn, minOut], value: nativeIn });
   }
 
   const rec = await pc.waitForTransactionReceipt({ hash });
   if (rec.status !== 'success') throw new Error(`buy reverted on ${c.name} (${hash})`);
-  const after = await pc.readContract({ address: token, abi: ERC20_ABI, functionName: 'balanceOf', args: [account.address] });
-  return { hash, received: after - before, quoted, explorer: `${c.explorer}/tx/${hash}` };
+
+  // Measure across the block the buy landed in, not with wall-clock reads.
+  // Behind a failover transport the two reads can come from nodes at different
+  // heights, which reports a filled buy as "0 tokens" — and the route then
+  // aborts on top of tokens it already owns.
+  const [pre, post] = await Promise.all([
+    pc.readContract({ address: token, abi: ERC20_ABI, functionName: 'balanceOf',
+      args: [account.address], blockNumber: rec.blockNumber - 1n }),
+    pc.readContract({ address: token, abi: ERC20_ABI, functionName: 'balanceOf',
+      args: [account.address], blockNumber: rec.blockNumber }),
+  ]);
+  return { hash, received: post - pre, quoted, explorer: `${c.explorer}/tx/${hash}` };
 }
 
 /** Sell `amount` of `token` on one venue. Returns native actually received. */
@@ -152,7 +168,11 @@ export async function sellOnVenue(c, account, token, venue, amount, { slippageBp
   if (!quoted || quoted === 0n) throw new Error(`no sell quote on ${c.name}`);
   const minOut = (quoted * (10000n - slippageBps)) / 10000n;
 
-  const spender = venue.kind === 'curve' ? PAD : c.router;
+  const helper = venue.kind !== 'curve' && !venue.viaOmniRouter ? helperFor(c) : null;
+  if (helper && !helper.deployed) {
+    throw new Error(`hookless sell on ${c.name} needs the helper — run "omniarb deploy --chain ${c.short} --live"`);
+  }
+  const spender = venue.kind === 'curve' ? PAD : (helper ? helper.address : c.router);
   const allowance = await pc.readContract({ address: token, abi: ERC20_ABI, functionName: 'allowance', args: [account.address, spender] });
   if (allowance < amount) {
     const ah = await wc.writeContract({ address: token, abi: ERC20_ABI, functionName: 'approve', args: [spender, MAX_UINT256] });
@@ -162,10 +182,17 @@ export async function sellOnVenue(c, account, token, venue, amount, { slippageBp
   // Preflight the real call, not just the view quote. The pad's quoteSell can
   // return a price for a sell its state-changing path then rejects, and finding
   // that out by broadcasting costs gas and strands the tokens mid-route.
-  const call = venue.kind === 'curve'
-    ? { address: PAD, abi: PAD_ABI, functionName: 'sell', args: [token, amount, minOut] }
-    : { address: c.router, abi: ROUTER_ABI, functionName: 'sell',
-        args: [token, c.hook, amount, minOut, account.address, deadline(900)] };
+  let call;
+  if (venue.kind === 'curve') {
+    call = { address: PAD, abi: PAD_ABI, functionName: 'sell', args: [token, amount, minOut] };
+  } else if (helper) {
+    // Selling the token side of a hookless pool is oneForZero.
+    call = { address: helper.address, abi: ARTIFACT.abi, functionName: 'swapV4',
+      args: [c.poolManager, venue.key, false, amount, minOut] };
+  } else {
+    call = { address: c.router, abi: ROUTER_ABI, functionName: 'sell',
+      args: [token, c.hook, amount, minOut, account.address, deadline(900)] };
+  }
   try {
     await pc.simulateContract({ ...call, account: account.address });
   } catch (e) {

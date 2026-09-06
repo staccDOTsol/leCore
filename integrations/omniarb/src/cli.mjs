@@ -11,11 +11,11 @@
 
 import { cpus } from 'node:os';
 import { formatEther, formatUnits, getAddress, parseEther } from 'viem';
-import { CHAINS, chainById, HOME_CHAIN, arbHelperFor } from './config.mjs';
+import { CHAINS, chainById, HOME_CHAIN, arbHelperFor, recordDeployment } from './config.mjs';
 import { publicClient, loadAccount, allChains, supportsOverrides, verifyTokenLayout } from './chain.mjs';
 import { fetchIndexedTokens, fetchLaunchedTokens, discoverPools, discoverCurve, liveChains, tokenMeta } from './discovery.mjs';
 import { quoteSell } from './quote.mjs';
-import { findSameChain, findCrossChain, findLiquidation, findRoutes, fundableCapital, priceRelayFunding } from './arb.mjs';
+import { findSameChain, findCrossChain, findLiquidation, findRoutes, fundableCapital, priceRelayFunding, selectDisjointRoutes } from './arb.mjs';
 import { quoteNative, executeNative, supportedChains, resetRelayCache } from './relay.mjs';
 import { nativePrices, toUsd, usdStr } from './prices.mjs';
 import { helperFor, resetQuoteCache } from './quote.mjs';
@@ -194,8 +194,8 @@ async function cmdDeploy() {
     }
     console.log(`${c.short}: deploying...`);
     const r = await deployHelper(c, account);
-    console.log(`${c.short}: deployed at ${r.address} (gas ${r.gasUsed})`);
-    console.log(`  export ARB_${c.id}=${r.address}`);
+    recordDeployment(c.id, r.address);
+    console.log(`${c.short}: deployed at ${r.address} (gas ${r.gasUsed}) — saved to deployments.json`);
   }
 }
 
@@ -312,7 +312,10 @@ function printRoutes(routes, limit = 10) {
     }
     console.log(`     ${r.note}`);
     if (r.atomic && !helperFor(r.chain).deployed) console.log(`     needs: omniarb deploy --chain ${r.chain.short} --live`);
-    else if (!r.executable) {
+    else if (!r.dstCanPayGas) {
+      console.log(`     not takeable: no ${r.dst.nativeSymbol} on ${r.dst.short} to pay for the sell` +
+        ` — fund it first ("omniarb move --to ${r.dst.short} --amount ..")`);
+    } else if (!r.executable) {
       const where = r.buyNeedsHelper ? r.src.short : r.dst.short;
       console.log(`     not takeable yet: hookless leg needs "omniarb deploy --chain ${where} --live"`);
     }
@@ -446,11 +449,13 @@ async function cmdWatch() {
   const useRelay = has('relay');
   const atomicOnly = has('atomic');
   const maxFails = Number(flag('max-fails', '3'));
+  const parallelTrades = Number(flag('parallel', '4'));
 
   console.log(`\nwatching ${token}`);
   console.log(`chains: ${chains.map((c) => c.short).join(', ')} · every ${interval / 1000}s · floor ${usdStr(minUsd)}` +
     `${capUsd ? ` · cap ${usdStr(capUsd)}/trade` : ''} · ${live ? '*** LIVE ***' : 'dry run'}`);
-  console.log(`${atomicOnly ? 'atomic routes only' : 'atomic and bridged routes'}\n`);
+  console.log(`${atomicOnly ? 'atomic routes only' : 'atomic and bridged routes'}` +
+    ` · up to ${parallelTrades} disjoint-chain trades at once\n`);
 
   let pass = 0;
   let fired = 0;
@@ -481,30 +486,48 @@ async function cmdWatch() {
           `[${best.type}] ${hop} ${best.buy.kind}->${best.sell.kind}`);
 
         if (live) {
-          try {
-            if (best.atomic) {
-              const r = await executeAtomic({ ...best, token, gas: 0n, net: 0n }, account, { dryRun: false });
-              console.log(`${stamp}    sent ${r.fn}: ${r.status} — ${r.explorer}`);
+          // Fire every route that shares no chain with a better one, all at once.
+          const batch = selectDisjointRoutes(usable, parallelTrades);
+          if (batch.length > 1) {
+            console.log(`${stamp}    firing ${batch.length} in parallel: ` +
+              batch.map((r) => `${r.src.short}->${r.dst.short} ${usdStr(r.netUsd)}`).join(' | '));
+          }
+
+          const results = await Promise.allSettled(batch.map(async (r) => {
+            const tag = `${r.src.short}->${r.dst.short}`;
+            if (r.atomic) {
+              const x = await executeAtomic({ ...r, token, gas: 0n, net: 0n }, account, { dryRun: false });
+              console.log(`${stamp}    [${tag}] sent ${x.fn}: ${x.status} — ${x.explorer}`);
             } else {
-              const r = await executeRoute({ ...best, token }, account,
-                { dryRun: false, onStep: (m) => console.log(`${stamp}    ${m}`) });
-              for (const l of r.legs) if (l.explorer) console.log(`${stamp}    ${l.leg}: ${l.explorer}`);
+              const x = await executeRoute({ ...r, token }, account,
+                { dryRun: false, onStep: (m) => console.log(`${stamp}    [${tag}] ${m}`) });
+              for (const l of x.legs) if (l.explorer) console.log(`${stamp}    [${tag}] ${l.leg}: ${l.explorer}`);
             }
-            fired += 1;
-            expectedUsd += best.netUsd;
+            return r.netUsd;
+          }));
+
+          const won = results.filter((x) => x.status === 'fulfilled');
+          for (const x of results) {
+            if (x.status === 'rejected') {
+              console.log(`${stamp}    failed: ${String(x.reason?.message ?? x.reason).split('\n')[0]}`);
+            }
+          }
+
+          if (won.length) {
+            fired += won.length;
+            expectedUsd += won.reduce((a, x) => a + x.value, 0);
             fails = 0;
-            console.log(`${stamp}    cycle ${fired} done · expected ${usdStr(best.netUsd)} · running ${usdStr(expectedUsd)}`);
-            // These pools are shallow and a fill moves them hard, so this pass's
-            // numbers are stale the moment it lands. Go straight round and re-price
-            // rather than firing again on them.
+            console.log(`${stamp}    ${won.length}/${batch.length} filled · ${fired} total · running ${usdStr(expectedUsd)}`);
+            // A fill moves the pools it touched, so this pass's numbers are stale
+            // the moment it lands. Re-price rather than firing again on them.
             continue;
-          } catch (e) {
-            fails += 1;
-            console.log(`${stamp}    not sent (${fails}/${maxFails}): ${e.message.split('\n')[0]}`);
-            if (fails >= maxFails) {
-              console.log(`${stamp}  stopping after ${fails} consecutive failures — check "bag" and "balances"`);
-              return;
-            }
+          }
+
+          fails += 1;
+          console.log(`${stamp}    nothing filled (${fails}/${maxFails})`);
+          if (fails >= maxFails) {
+            console.log(`${stamp}  stopping after ${fails} passes with no fill — check "bag" and "balances"`);
+            return;
           }
         }
       }
@@ -564,8 +587,8 @@ if (!cmd || !commands[cmd] || has('help')) {
   route     --token 0x.. [--relay] [--max-usd 5] [--min-usd 0] [--concurrency N]
             funded routes: native you hold -> token -> bridge -> token -> native
             --relay also positions capital across chains through relay.link
-  watch     --token 0x.. [--interval 60] [--relay] [--atomic] [--live]
-            run route on a loop, firing the best each pass and re-pricing after every fill
+  watch     --token 0x.. [--interval 60] [--parallel 4] [--relay] [--atomic] [--live]
+            loop: fires every route that shares no chain with a better one, then re-prices
   move      --from RH --to ETH --amount 0.005 [--live]        move native between chains via Relay
   fire      --token 0x.. [--atomic|--bridged] [--live]        execute the best route end to end
   sell      --token 0x.. --chain Base [--amount N] [--live]    sell a holding on that chain's best venue

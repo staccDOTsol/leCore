@@ -1,3 +1,5 @@
+import { readFileSync, writeFileSync } from 'node:fs';
+
 // Chain + contract map for omnichain.family, lifted from the live app bundle
 // (_next/static/chunks) and verified against each chain's RPC.
 //
@@ -146,8 +148,33 @@ export const rpcsFor = (c) => {
 /** Primary endpoint, for display and for anything that needs a single URL. */
 export const rpcFor = (c) => rpcsFor(c)[0];
 
-/** ARB_<chainId> points at an already-deployed OmniArb helper. */
-export const arbHelperFor = (c) => process.env[`ARB_${c.id}`] || null;
+/**
+ * Address of the deployed OmniArb helper for a chain, if there is one.
+ *
+ * Read from deployments.json so a helper survives the shell that deployed it —
+ * the loop runs unattended and should not depend on an env var someone
+ * remembered to export. ARB_<chainId> still wins when set.
+ */
+let _deployments = null;
+function deployments() {
+  if (_deployments) return _deployments;
+  try {
+    const path = new URL('../deployments.json', import.meta.url);
+    _deployments = JSON.parse(readFileSync(path, 'utf8'));
+  } catch { _deployments = {}; }
+  return _deployments;
+}
+
+export const arbHelperFor = (c) =>
+  process.env[`ARB_${c.id}`] || deployments()[String(c.id)] || null;
+
+/** Record a freshly deployed helper so later runs find it. */
+export function recordDeployment(chainId, address) {
+  const current = { ...deployments(), [String(chainId)]: address };
+  const path = new URL('../deployments.json', import.meta.url);
+  writeFileSync(path, `${JSON.stringify(current, null, 2)}\n`);
+  _deployments = current;
+}
 
 // ------------------------------------------------------------------- ABIs
 

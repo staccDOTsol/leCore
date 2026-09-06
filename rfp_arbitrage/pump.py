@@ -4,6 +4,12 @@ previous one has produced, cumulatively, while a crawl is still landing rows:
 
     fetch workers  : intellectual + open + never fetched      -> documents  (N threads, claim-based)
     propose worker : eligible + submittable + matched, best first -> a drafted, self-repaired bid
+
+CONVEYOR MODE (--conveyor, the default): the stage queues above are a backfill, not the main
+path. A found opportunity should not wait a round for each stage -- it is carried all the way
+through by one worker: documents, clause gate, price, match, drafted bid. An opportunity either
+falls out early (not intellectual, blocked, ineligible, unpriceable) or it comes out the far end
+as a bid. That is the difference between a factory and four queues.
     gate worker    : fetched + no verdict (or heuristic-only while an LLM is up) -> verdict
     price worker   : gated + no pricing                        -> pricing (+ USAspending benchmark)
     match/report   : every `interval` seconds rebuild matches from everything gated+priced,
@@ -33,11 +39,17 @@ class Pump:
                  llm=None, max_docs: int = 6, benchmark: bool = True, out_dir: str | Path = ".",
                  report_limit: int = 40, log: Callable[[str], None] = print, cfg: Settings | None = None,
                  fetch_workers: int = 4, llm_factory: Callable[[], Any] | None = None, gate_workers: int = 4,
-                 propose: bool = True, propose_batch: int = 3):
+                 propose: bool = True, propose_batch: int = 3, conveyor: bool = True,
+                 conveyor_batch: int = 2, conveyor_workers: int = 2, verbose: bool = False):
         self.db = str(db)
         self.gate_workers = max(1, gate_workers)
         self.propose = propose
         self.propose_batch = max(1, propose_batch)
+        self.conveyor = conveyor
+        self.conveyor_batch = max(1, conveyor_batch)
+        self.conveyor_workers = max(1, conveyor_workers)
+        self.verbose = verbose
+        self._carrying: set[str] = set()
         self._gate_claimed: set[str] = set()      # keys an LLM read is in flight for (one process, many threads)
         self.llm_factory = llm_factory      # re-tried every round while the LLM is unavailable (unfunded wallet, proxy down)
         self.fetch_workers = max(1, fetch_workers)
@@ -53,7 +65,8 @@ class Pump:
         self.cfg = cfg or _settings()
         self.stop = threading.Event()
         self.counts = {"fetched": 0, "gated": 0, "priced": 0, "matched": 0, "rounds": 0}
-        self._idle = {"price": 0, "propose": 0, **{f"gate{i}": 0 for i in range(max(1, gate_workers))},
+        self._idle = {"price": 0, "propose": 0,
+                      **({f"conveyor{i}": 0 for i in range(max(1, conveyor_workers))} if conveyor else {}), **{f"gate{i}": 0 for i in range(max(1, gate_workers))},
                       **{f"fetch{i}": 0 for i in range(max(1, fetch_workers))}}
         self._lock = threading.Lock()
 
@@ -305,6 +318,108 @@ class Pump:
             self.log(f"[pump:propose] ${float(data.get('price_usd') or 0):,.0f} {clean} -- {o.title[:56]} (spent ${self.llm.spent_usd:.2f})")
         return n
 
+    def conveyor_queue(self, st: Store) -> list[Opportunity]:
+        """The best OPEN, intellectual work that has not yet been carried through. Highest ask
+        first so the money is drafted before the long tail."""
+        rows = st.conn.execute(
+            """SELECT o.* FROM opportunities o
+               LEFT JOIN pricing p ON p.opportunity_key = o.key
+               WHERE o.intellectual_score >= ?
+                 AND (o.deadline = '' OR o.deadline >= date('now'))
+                 AND o.key NOT IN (SELECT opportunity_key FROM proposals)
+               ORDER BY COALESCE(p.ask_value, 0) DESC, o.posted DESC
+               LIMIT ?""", (self.threshold, self.conveyor_batch * 8)).fetchall()
+        return [Opportunity.from_row(dict(r)) for r in rows]
+
+    def carry(self, st: Store, o: Opportunity) -> str:
+        """One opportunity, all the way. Returns where it stopped, for the log."""
+        from .attachments import Fetcher
+        from .awards import AwardIndex
+        from .bidder import Bidder
+        from .clauses import analyze, ensure_context
+        from .match import build_matches
+        from .pricing import price
+        from .propose import draft
+        import re as _re
+
+        bidder = Bidder.load()
+        # 1. documents
+        if not st.has_document(o.key, FETCHED_MARK):
+            if self._claim(st, o.key):
+                got = list(Fetcher(st, self.cfg).fetch(o, max_docs=self.max_docs))
+                st.put_document(o.key, FETCHED_MARK, "mark", "", "" if got else "no attachments")
+                with self._lock:
+                    self.counts["fetched"] += 1
+        text = st.full_text(o.key)
+        # 2. the legal gate
+        v = st.verdict(o.key)
+        if v is None or (self.llm is not None and not v.method.startswith("llm")):
+            ctx = ensure_context(st, self.llm, o.key, text) if self.llm else None
+            v = analyze(o, text, self.llm, context_id=ctx)
+            st.put_verdict(v)
+            with self._lock:
+                self.counts["gated"] += 1
+        if not v.arbitrage_viable:
+            return "blocked by the gate"
+        # 3. eligibility, before spending anything on a price or a draft
+        ok, why = bidder.eligible_for(o.set_aside, v.clearance_or_citizenship_required)
+        if not ok:
+            return f"ineligible: {why[:60]}"
+        # 4. price
+        pr = st.pricing(o.key)
+        if pr is None or (self.llm is not None and not str(pr.get("scope_basis", "")).startswith("llm")):
+            bench = AwardIndex(st).benchmark(o)
+            ctx = st.context(o.key, self.llm.name) if self.llm else None
+            pr = price(o, text, self.llm, bench if bench.get("n", 0) >= 8 else None, self.cfg, context_id=ctx)
+            st.put_pricing(o.key, pr)
+            with self._lock:
+                self.counts["priced"] += 1
+        if not pr.get("ask_value"):
+            return "no comparable price"
+        # 5. match
+        ms = build_matches([o], {o.key: v}, {o.key: pr}, self.cfg)
+        if not ms:
+            return "margin below the floor"
+        st.put_matches(ms)
+        # 6. the bid itself
+        ready, gate_why = bidder.ready_for(o.jurisdiction.value, o.tier.value)
+        if not ready:
+            return f"drafting held: {gate_why[:60]}"
+        if self.llm is None:
+            return "matched; awaiting a model to draft"
+        ctx = ensure_context(st, self.llm, o.key, text)
+        md, data = draft(o, text, pr, ms[0].to_dict(), self.llm, ctx)
+        st.put_proposal(o.key, md, data, f"llm:{self.llm.name}")
+        out = self.out_dir / "proposals"
+        out.mkdir(parents=True, exist_ok=True)
+        (out / (_re.sub(r"[^A-Za-z0-9]+", "-", o.key)[:80] + ".md")).write_text(md, encoding="utf-8")
+        flags = data.get("unsupported_claims") or []
+        with self._lock:
+            self.counts["drafted"] = self.counts.get("drafted", 0) + 1
+        return f"BID ${float(data.get('price_usd') or 0):,.0f} " + ("clean" if not flags else f"{len(flags)} flagged")
+
+    def step_conveyor(self, st: Store) -> int:
+        n = 0
+        for o in self.conveyor_queue(st):
+            if n >= self.conveyor_batch or self.stop.is_set():
+                break
+            with self._lock:
+                if o.key in self._carrying:
+                    continue
+                self._carrying.add(o.key)
+            try:
+                where = self.carry(st, o)
+                n += 1
+                if where.startswith("BID") or self.verbose:
+                    spend = f" ${self.llm.spent_usd:.2f}" if self.llm else ""
+                    self.log(f"[pump:conveyor] {where} -- {o.title[:58]}{spend}")
+            except Exception as e:  # noqa: BLE001
+                self.log(f"[pump:conveyor] {o.key}: {type(e).__name__}: {str(e)[:130]}")
+            finally:
+                with self._lock:
+                    self._carrying.discard(o.key)
+        return n
+
     def step_report(self, st: Store) -> int:
         self._retry_llm()
         from .match import build_matches
@@ -343,6 +458,7 @@ class Pump:
     # -- run -------------------------------------------------------------------------
     def run(self, watch: bool = False) -> dict:
         jobs = [("price", self.step_price), ("propose", self.step_propose)] + \
+               ([(f"conveyor{i}", self.step_conveyor) for i in range(self.conveyor_workers)] if self.conveyor else []) + \
                [(f"gate{i}", self.step_gate) for i in range(self.gate_workers)] + \
                [(f"fetch{i}", self.step_fetch) for i in range(self.fetch_workers)]
         threads = [threading.Thread(target=self._loop, args=(n, f), name=n, daemon=True) for n, f in jobs]

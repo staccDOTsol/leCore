@@ -335,7 +335,8 @@ def test_pump_streams_cumulatively(tmp_path, monkeypatch):
     # no network: attachments stage records the sentinel only
     monkeypatch.setattr(att.Fetcher, "urls_for", lambda self, opp: [])
     logs = []
-    pump = Pump(db, threshold=0.5, interval=0.2, benchmark=False, out_dir=tmp_path / "out", log=logs.append)
+    pump = Pump(db, threshold=0.5, interval=0.1, benchmark=False, out_dir=tmp_path / "out", log=logs.append,
+                conveyor=False, fetch_workers=1, gate_workers=1)
     # land a second row mid-run from another connection
     def lander():
         time.sleep(0.15)
@@ -378,3 +379,47 @@ def test_awards_index_benchmark_and_live_report(tmp_path):
     st.put_pricing(o.key, p)
     rep = live_report(st)
     assert "1 open" in rep and "bids:awards-index" in rep and o.url in rep
+
+
+def test_conveyor_carries_one_opportunity_end_to_end(tmp_path, monkeypatch):
+    """A found opportunity is carried all the way -- documents, gate, price, match, bid --
+    by one worker, instead of waiting a round for each stage."""
+    from rfp_arbitrage.pump import Pump
+    import rfp_arbitrage.attachments as att
+
+    db = tmp_path / "c.sqlite3"
+    st = Store(db)
+    o = _opp("t:1", "Custom software development and data dashboard",
+             "Build a Django application and a Power BI dashboard. Estimated value $240,000. " + PERMIT_SUB,
+             naics=["541511"])
+    st.upsert_opportunities([o])
+    st.set_intellectual(o.key, classify(o.title, o.description).score, "t")
+    monkeypatch.setattr(att.Fetcher, "urls_for", lambda self, opp: [])
+
+    pump = Pump(db, threshold=0.5, interval=5, benchmark=False, out_dir=tmp_path / "out", log=lambda *_: None)
+    where = pump.carry(st, o)
+
+    assert st.verdict(o.key) is not None, "the gate ran"
+    assert st.pricing(o.key)["ask_value"], "it was priced in the same pass"
+    assert st.matches(), "it was matched in the same pass"
+    # no model is attached here, so it stops exactly at the bid and says so
+    assert where == "matched; awaiting a model to draft"
+
+
+def test_conveyor_drops_ineligible_before_spending(tmp_path, monkeypatch):
+    """A set-aside we cannot claim ends the carry before any pricing or drafting work."""
+    from rfp_arbitrage.pump import Pump
+    import rfp_arbitrage.attachments as att
+
+    db = tmp_path / "e.sqlite3"
+    st = Store(db)
+    o = _opp("t:2", "Grant writing services", "Write federal grant applications. " + PERMIT_SUB,
+             set_aside="8(a) Set-Aside (FAR 19.8)")
+    st.upsert_opportunities([o])
+    st.set_intellectual(o.key, 0.9, "t")
+    monkeypatch.setattr(att.Fetcher, "urls_for", lambda self, opp: [])
+
+    pump = Pump(db, threshold=0.5, interval=5, benchmark=False, out_dir=tmp_path / "out", log=lambda *_: None)
+    where = pump.carry(st, o)
+    assert where.startswith("ineligible"), where
+    assert st.pricing(o.key) is None, "an ineligible opportunity is never priced"

@@ -61,7 +61,9 @@ USDC on Base to the EVM one. `npx openzoo balance` shows what landed.
 **It takes 60 to 90 seconds to bind and prints nothing for the first 45.** Do not kill
 it. Wait for `listening on http://localhost:8402/v1`.
 
-A read costs about $0.03. Twenty-five dollars covers most of an open market.
+A read costs about $0.03, but a full pipeline round reads and drafts many at once: **budget
+roughly $10-15 per hour of running**, and set `--budget` to what you are willing to lose.
+The cap is enforced from the payment receipts, so it stops rather than draining the wallet.
 
 ## 4. One command
 
@@ -79,17 +81,23 @@ the drafts themselves. The gist id is remembered in `.rfp_cache/gist.json`, so a
 tomorrow, next week — keeps writing to the same link instead of scattering new ones. A draft
 that drops off the board is deleted from the gist rather than left there stale.
 
-First run prints the link once it exists:
-
 ```
 [daemon 04:11:07] starting. db=rfp_arbitrage.sqlite3 out=rfp_out
 [daemon 04:11:07] proxy at http://localhost:8402/v1 not answering (1/4)
 [daemon 04:12:22] restarting the openzoo proxy, then leaving it alone for four minutes
-[daemon 04:17:40] gist updated: https://gist.github.com/you/8f0c…
+[daemon 04:17:40] 17,139 indexed · 2,474 gated · 2,416 eligible · 5 drafted (4 ready to send) · gist rewritten https://gist.github.com/you/8f0c…
+[daemon 04:17:40] [pump] round 6: ... llm-verdicts 159 drafts 5 spent $15.13/$18
+[daemon 04:19:11] 17,139 indexed · 2,474 gated · 2,416 eligible · 5 drafted (4 ready to send) · gist unchanged
 ```
 
-Then it only speaks when something changes. Nothing is published without `GITHUB_TOKEN`;
-without one the daemon says so and runs anyway, writing `rfp_out/` locally.
+**That heartbeat is the answer to "is it working".** The counts come from the database and
+the second line is the pump's own round summary, carrying what has been spent. If the numbers
+move, it is working. If they sit still while the spend climbs, something is wrong — look in
+`.rfp_cache/logs/pump.log`. `gist unchanged` means the substance is identical to last round,
+so no write was spent; the timestamp in the board does not count as a change.
+
+Nothing is published without `GITHUB_TOKEN`; without one the daemon says so and runs anyway,
+writing `rfp_out/` locally.
 
 Fill the price side once, at any point — it is slow and only needs doing occasionally:
 

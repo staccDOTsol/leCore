@@ -17,8 +17,8 @@ Two details here were expensive to learn and are load-bearing:
   children as Popen handles and ask them directly.
 
 And one rule the whole file follows: a condition that makes output impossible must SAY SO,
-repeatedly. An empty award index and a missing bidder profile each silently pinned the
-drafted count to zero while every log line looked healthy.
+repeatedly. An empty award index, a missing bidder profile and an unfunded wallet each
+silently pinned the drafted count to zero while every log line looked healthy.
 """
 from __future__ import annotations
 
@@ -185,12 +185,12 @@ def board_markdown(store: Store, limit: int = 60) -> str:
             "and the run stops itself at a spend cap.",
             "",
             "## The files in this gist", "",
-            "`README.md` is this document. Every other file is a complete drafted bid — executive summary,",
-            "understanding of the buyer's problem, deliverables with acceptance criteria, schedule,",
-            "compliance matrix against the solicitation's own mandatory requirements, two diagrams of the",
-            "solution and the engagement, assumptions, questions for the buyer, and a price. `-ready-`",
-            "means it asserts nothing the bidding entity cannot support. `-blocked-` means it does, and",
-            "the reasons are printed at the top of the file.",
+            "This document is `00-README.md`. Every other file is a complete drafted bid — executive",
+            "summary, understanding of the buyer's problem, deliverables with acceptance criteria,",
+            "schedule, compliance matrix against the solicitation's own mandatory requirements, two",
+            "diagrams of the solution and the engagement, assumptions, questions for the buyer, and a",
+            "price. `-ready-` means it asserts nothing the bidding entity cannot support. `-blocked-`",
+            "means it does, and the reasons are printed at the top of the file.",
             "",
             "A draft is checked against the entity's real profile before it is called ready: no invented",
             "registrations, certifications, years of experience or past performance. When the check fires,",
@@ -213,7 +213,9 @@ def gist_files(store: Store, proposals: int = 8) -> tuple[dict[str, dict[str, st
     content differs every single round and "nothing changed" could never be detected -- the log
     said `gist updated` every 90 seconds forever and meant nothing by it."""
     from .report import ready_board
-    files: dict[str, dict[str, str]] = {"README.md": {"content": board_markdown(store)}}
+    # "00-" because a gist lists its files in plain alphabetical order and digits sort before
+    # letters: as "README.md" the document rendered UNDERNEATH every bid it was introducing.
+    files: dict[str, dict[str, str]] = {"00-README.md": {"content": board_markdown(store)}}
     rows = ready_board(store, 60)
     state: list[str] = []
     for i, r in enumerate(rows):
@@ -274,7 +276,10 @@ class Gist:
         self.path.write_text(json.dumps({"id": gid, "url": url}, indent=2))
 
     def _call(self, method: str, url: str, body: dict[str, Any]) -> dict[str, Any]:
-        req = urllib.request.Request(url, data=json.dumps(body).encode(), method=method, headers={
+        # a GET carries no body: urllib will happily attach one, and a GET with a payload is the
+        # kind of thing an API gateway drops rather than answers
+        data = json.dumps(body).encode() if body else None
+        req = urllib.request.Request(url, data=data, method=method, headers={
             "Authorization": f"Bearer {self.token}", "Accept": "application/vnd.github+json",
             "X-GitHub-Api-Version": "2022-11-28", "Content-Type": "application/json",
             "User-Agent": "rfp-arbitrage-daemon"})
@@ -289,6 +294,14 @@ class Gist:
             return None
         if digest == self._last:
             return None                       # nothing new; do not spend a write
+        # WHAT IS ALREADY UP THERE, learned once per run. Without this, `_published` starts empty
+        # after every restart and a file the gist still holds but we no longer write can never be
+        # removed -- a renamed board leaves its old name behind, forever, next to the new one.
+        if self.id and not self._published:
+            try:
+                self._published = set(self._call("GET", f"{GIST_API}/{self.id}", {}).get("files") or {})
+            except Exception as e:            # not fatal: worst case a stale file lingers
+                _log(f"could not read the gist's current files ({str(e)[:80]}); stale ones may remain")
         # IN PLACE means in place: a file we published last round and no longer have is deleted
         # (null), not left behind as a bid that has since been superseded.
         payload = dict(files)
@@ -452,7 +465,7 @@ def run(args) -> int:
 
     proxy: subprocess.Popen | None = None
     awards_proc: subprocess.Popen | None = None
-    misses, quiet_until, last_gist, last_round, last_awards = 0, 0.0, 0.0, "", 0.0
+    misses, quiet_until, last_gist, last_round, last_awards, last_llm = 0, 0.0, 0.0, "", 0.0, ""
     _log(f"starting. db={args.db or os.environ.get('RFP_DB') or 'rfp_arbitrage.sqlite3'} out={args.out_dir}")
     try:
         while not stop["now"]:
@@ -534,6 +547,14 @@ def run(args) -> int:
                     if round_line and round_line != last_round:
                         last_round = round_line
                         _log(round_line)
+                    # THE THIRD SILENT BLOCKER. An unfunded wallet or a dry door network means
+                    # no model, which means no draft, forever -- and the pump says so only in
+                    # its own log, which is not the one anybody is watching. Echo it here, and
+                    # only when it changes, so a recovery is as visible as the failure.
+                    llm_line = _last_line(logs / "pump.log", "[pump] LLM ")
+                    if llm_line and llm_line != last_llm:
+                        last_llm = llm_line
+                        _log(llm_line)
 
             for _ in range(int(max(1, args.tick))):
                 if stop["now"]:

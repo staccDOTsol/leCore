@@ -323,6 +323,12 @@ def cmd_stats(args) -> int:
     return 0
 
 
+def cmd_daemon(args) -> int:
+    """The whole thing as one process: proxy, crawler, conveyor, and one gist kept current."""
+    from .daemon import run
+    return run(args)
+
+
 def cmd_run(args) -> int:
     """crawl -> classify -> fetch -> gate -> price -> match -> report"""
     for fn in (cmd_crawl, cmd_fetch, cmd_gate, cmd_price):
@@ -413,6 +419,27 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--no-usaspending", action="store_true")
 
     s = sub.add_parser("stats"); s.set_defaults(fn=cmd_stats)
+
+    s = sub.add_parser("daemon", help="ONE COMMAND: proxy + crawler + conveyor, supervised, "
+                                      "publishing the board into one gist that is rewritten in place")
+    s.set_defaults(fn=cmd_daemon)
+    s.add_argument("--out-dir", default="rfp_out")
+    s.add_argument("--threshold", type=float, default=0.6, help="how confidently intellectual the work must be")
+    s.add_argument("--interval", type=float, default=120.0, help="seconds between pump rounds")
+    s.add_argument("--conveyor-workers", type=int, default=3, help="opportunities carried end to end in parallel")
+    s.add_argument("--gate-workers", type=int, default=2, help="parallel clause readers")
+    s.add_argument("--fast-every", type=float, default=2.0); s.add_argument("--slow-every", type=float, default=4.0)
+    s.add_argument("--sam-every", type=float, default=24.0)
+    s.add_argument("--budget", type=float, help="hard USD cap on model spend, from the payment receipts")
+    s.add_argument("--models", help="fallback chain, comma separated (default: the built-in cross-vendor chain)")
+    s.add_argument("--no-proxy", action="store_true", help="do not start openzoo; something else is serving LECORE_LLM_URL")
+    s.add_argument("--keep-proxy", action="store_true", help="leave the proxy running on exit")
+    s.add_argument("--gist", help="publish into THIS gist id (default: the one remembered in $RFP_CACHE/gist.json)")
+    s.add_argument("--gist-token", help="default $GITHUB_TOKEN; needs only the `gist` scope")
+    s.add_argument("--gist-every", type=float, default=90.0, help="seconds between gist rewrites")
+    s.add_argument("--gist-proposals", type=int, default=8, help="drafts carried in the gist alongside the board")
+    s.add_argument("--gist-public", action="store_true", help="create it public (only affects the first run)")
+    s.add_argument("--tick", type=float, default=15.0, help="supervisor loop period")
 
     s = sub.add_parser("run", help="the whole pipeline"); s.set_defaults(fn=cmd_run)
     s.add_argument("--sources"); s.add_argument("--days", type=int, default=30)

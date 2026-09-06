@@ -20,7 +20,7 @@ import { quoteNative, executeNative, supportedChains, resetRelayCache } from './
 import { nativePrices, toUsd, usdStr } from './prices.mjs';
 import { helperFor, resetQuoteCache } from './quote.mjs';
 import { deployHelper, executeAtomic, executeRoute, sellOnVenue, passesGuards } from './exec.mjs';
-import { bridge } from './bridge.mjs';
+import { bridge, pendingMints, clearPendingMint, findUnmintedBurns, retryMint, mintProcessed } from './bridge.mjs';
 import { ERC20_ABI } from './config.mjs';
 
 const argv = process.argv.slice(2);
@@ -312,7 +312,10 @@ function printRoutes(routes, limit = 10) {
     }
     console.log(`     ${r.note}`);
     if (r.atomic && !helperFor(r.chain).deployed) console.log(`     needs: omniarb deploy --chain ${r.chain.short} --live`);
-    else if (!r.dstCanPayGas) {
+    else if (!r.mintable) {
+      console.log(`     not takeable: omnichain's relayer is out of gas on ${r.dst.short}` +
+        ` — bridging there would burn the tokens with no mint`);
+    } else if (!r.dstCanPayGas) {
       console.log(`     not takeable: no ${r.dst.nativeSymbol} on ${r.dst.short} to pay for the sell` +
         ` — fund it first ("omniarb move --to ${r.dst.short} --amount ..")`);
     } else if (!r.executable) {
@@ -412,6 +415,54 @@ async function cmdFire() {
   const r = await executeRoute({ ...pick, token }, account, { dryRun: false, onStep: (m) => console.log(`  ${m}`) });
   console.log(`\ndone — ${r.legs.length} leg(s)`);
   for (const l of r.legs) console.log(`  ${l.leg}: ${l.explorer ?? l.hash ?? ''}`);
+}
+
+// ------------------------------------------------------------------- mints
+
+/** Burns whose mint never landed: list, recover from chain, and retry. */
+async function cmdMints() {
+  const account = loadAccount();
+  const token = await resolveToken();
+  let claims = pendingMints();
+  console.log(`\n${claims.length} pending mint(s) on record`);
+
+  if (has('recover')) {
+    // Trust the chain over the local file — a loop that died mid-route never
+    // got to write anything down.
+    const chains = allChains(flag('chain'));
+    console.log('scanning for burns the destination never processed...');
+    for (const src of chains) {
+      for (const dst of chains) {
+        if (src.id === dst.id) continue;
+        const found = await findUnmintedBurns({ src, dst, address: account.address }).catch(() => []);
+        for (const f of found) {
+          if (claims.some((c) => c.srcTxHash === f.srcTxHash && c.srcNonce === f.srcNonce)) continue;
+          claims.push(f);
+          console.log(`  found ${formatUnits(BigInt(f.amount), 18)} burned ${src.short} -> ${dst.short} (${f.srcTxHash.slice(0, 12)}…)`);
+        }
+      }
+    }
+  }
+
+  if (!claims.length) { console.log('nothing owed.'); return; }
+
+  for (const c of claims) {
+    const src = chainById(c.srcChainId); const dst = chainById(c.dstChainId);
+    const done = c.messageId ? await mintProcessed(dst, c.messageId) : false;
+    console.log(`\n  ${formatUnits(BigInt(c.amount), 18)} ${src.short} -> ${dst.short}` +
+      `  nonce ${c.srcNonce}  ${done ? 'ALREADY MINTED' : 'unminted'}`);
+    console.log(`    burn: ${src.explorer}/tx/${c.srcTxHash}`);
+    if (done) { clearPendingMint(c); continue; }
+    if (!has('retry')) continue;
+    try {
+      await retryMint(c);
+      console.log('    relayer accepted — mint requested');
+      clearPendingMint(c);
+    } catch (e) {
+      console.log(`    still refused: ${e.message.split('\n')[0].slice(0, 140)}`);
+    }
+  }
+  if (!has('retry')) console.log('\nre-run with --retry to ask the relayer again');
 }
 
 // -------------------------------------------------------------------- move
@@ -575,7 +626,7 @@ async function cmdBag() {
 // -------------------------------------------------------------------- main
 
 const commands = { tokens: cmdTokens, venues: cmdVenues, balances: cmdBalances, bag: cmdBag,
-  route: cmdRoute, watch: cmdWatch, move: cmdMove, fire: cmdFire, sell: cmdSell, scan, deploy: cmdDeploy, run: cmdRun, bridge: cmdBridge };
+  route: cmdRoute, watch: cmdWatch, move: cmdMove, fire: cmdFire, sell: cmdSell, mints: cmdMints, scan, deploy: cmdDeploy, run: cmdRun, bridge: cmdBridge };
 
 if (!cmd || !commands[cmd] || has('help')) {
   console.log(`omniarb — arbitrage across omnichain.family
@@ -596,6 +647,7 @@ if (!cmd || !commands[cmd] || has('help')) {
   deploy    --chain Pol [--live]           deploy the OmniArb helper
   run       --token 0x.. [--live] [--max 1]
   bridge    --token 0x.. --from Base --to Pol --amount 1000 [--live]
+  mints     --token 0x.. [--recover] [--retry]                 burns whose mint never landed
 
 Nothing sends a transaction unless you pass --live.
 The wallet key is read from STACCOVERFLOW_KP and is never logged.`);

@@ -95,6 +95,48 @@ import { bridge } from './bridge.mjs';
 
 const MAX_UINT256 = (1n << 256n) - 1n;
 
+/** keccak256("Transfer(address,address,uint256)") */
+const TRANSFER_TOPIC = '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef';
+const topicAddr = (t) => `0x${t.slice(26)}`.toLowerCase();
+
+/**
+ * Net tokens `to` gained in this transaction, straight from its Transfer logs.
+ *
+ * Exact regardless of node height or pruning, which balance reads are not:
+ * wall-clock reads can straddle nodes at different heights and report a filled
+ * buy as zero, and block-pinned reads need archive state the public endpoints
+ * refuse to serve.
+ */
+export function tokensReceived(receipt, token, to) {
+  const t = token.toLowerCase();
+  const who = to.toLowerCase();
+  let net = 0n;
+  for (const log of receipt.logs) {
+    if (log.address.toLowerCase() !== t) continue;
+    if (log.topics[0] !== TRANSFER_TOPIC || log.topics.length < 3) continue;
+    const value = BigInt(log.data);
+    if (topicAddr(log.topics[2]) === who) net += value;   // to us
+    if (topicAddr(log.topics[1]) === who) net -= value;   // from us
+  }
+  return net;
+}
+
+/**
+ * Native gained across a transaction. Tries the exact block-pinned pair, and
+ * falls back to the quoted figure when the endpoint has no archive state.
+ */
+async function nativeDelta(pc, address, receipt, fallback = null) {
+  try {
+    const [pre, post] = await Promise.all([
+      pc.getBalance({ address, blockNumber: receipt.blockNumber - 1n }),
+      pc.getBalance({ address, blockNumber: receipt.blockNumber }),
+    ]);
+    return { delta: post - pre, exact: true };
+  } catch {
+    return { delta: fallback, exact: false };
+  }
+}
+
 /** Wait for `blocks` new blocks, so a just-observed balance is settled everywhere. */
 async function settle(c, blocks = 2, timeoutMs = 60_000) {
   const pc = publicClient(c);
@@ -138,17 +180,15 @@ export async function buyOnVenue(c, account, token, venue, nativeIn, { slippageB
   const rec = await pc.waitForTransactionReceipt({ hash });
   if (rec.status !== 'success') throw new Error(`buy reverted on ${c.name} (${hash})`);
 
-  // Measure across the block the buy landed in, not with wall-clock reads.
-  // Behind a failover transport the two reads can come from nodes at different
-  // heights, which reports a filled buy as "0 tokens" — and the route then
-  // aborts on top of tokens it already owns.
-  const [pre, post] = await Promise.all([
-    pc.readContract({ address: token, abi: ERC20_ABI, functionName: 'balanceOf',
-      args: [account.address], blockNumber: rec.blockNumber - 1n }),
-    pc.readContract({ address: token, abi: ERC20_ABI, functionName: 'balanceOf',
-      args: [account.address], blockNumber: rec.blockNumber }),
-  ]);
-  return { hash, received: post - pre, quoted, explorer: `${c.explorer}/tx/${hash}` };
+  // Read the fill out of the receipt's own Transfer logs.
+  //
+  // Not from balances: a wall-clock pair of reads can straddle two nodes at
+  // different heights and report a filled buy as zero, while pinning the reads
+  // to the surrounding blocks needs archive state that the free public
+  // endpoints do not serve ("Requested resource not found"). The receipt is
+  // already in hand, exact, and needs neither.
+  const received = tokensReceived(rec, token, account.address);
+  return { hash, received, quoted, explorer: `${c.explorer}/tx/${hash}` };
 }
 
 /** Sell `amount` of `token` on one venue. Returns native actually received. */
@@ -204,18 +244,14 @@ export async function sellOnVenue(c, account, token, venue, amount, { slippageBp
   const rec = await pc.waitForTransactionReceipt({ hash });
   if (rec.status !== 'success') throw new Error(`sell reverted on ${c.name} (${hash})`);
 
-  // Settle P&L against the block the sell landed in rather than wall-clock
-  // reads: with a failover transport the before/after reads can come from
-  // nodes at different heights, which reports a real gain as zero.
-  const [pre, post] = await Promise.all([
-    pc.getBalance({ address: account.address, blockNumber: rec.blockNumber - 1n }),
-    pc.getBalance({ address: account.address, blockNumber: rec.blockNumber }),
-  ]);
+  // Prefer the exact block-pinned pair; fall back to the quote when the
+  // endpoint has no archive state to answer it with.
   const gasPaid = rec.gasUsed * rec.effectiveGasPrice;
+  const { delta, exact } = await nativeDelta(pc, account.address, rec, quoted - gasPaid);
   return {
-    hash, quoted, gasPaid,
-    delta: post - pre,
-    received: post - pre + gasPaid,
+    hash, quoted, gasPaid, exact,
+    delta,
+    received: delta === null ? quoted : delta + gasPaid,
     explorer: `${c.explorer}/tx/${hash}`,
   };
 }

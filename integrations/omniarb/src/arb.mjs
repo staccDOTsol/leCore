@@ -14,6 +14,7 @@
 import { formatEther, parseEther } from 'viem';
 import { nativePrices, toUsd } from './prices.mjs';
 import { quoteNativeCached, supportedChains } from './relay.mjs';
+import { relayerCanMint } from './bridge.mjs';
 import { NATIVE, PORTAL, arbHelperFor } from './config.mjs';
 import { publicClient, simOverrides, SIM_ACCOUNT } from './chain.mjs';
 import { ARTIFACT, helperFor, quoteBuy, quoteSell, arbGasCost } from './quote.mjs';
@@ -420,6 +421,12 @@ export async function findRoutes(token, byChain, funds,
   const out = [];
   const entries = [...byChain.entries()];
 
+  // A bridged route is only real if the relayer can pay for the mint.
+  const relayerOk = new Map();
+  await Promise.all(entries.map(async ([id, e]) => {
+    relayerOk.set(id, await relayerCanMint(e.chain));
+  }));
+
   const gasCache = new Map();
   const gasFor = async (c, units) => {
     const k = `${c.id}:${units}`;
@@ -507,6 +514,7 @@ export async function findRoutes(token, byChain, funds,
           const dstNative = funds.get(dstId)?.balance ?? 0n;
           const dstGasNeeded = sellGas * 2n; // sell, plus an approve on first use
           const dstCanPayGas = sameChain || dstNative >= dstGasNeeded;
+          const mintable = sameChain || (relayerOk.get(dstId)?.ok ?? true);
 
           tasks.push(async () => {
             const best = await optimiseUsd(evaluate, { cap });
@@ -516,9 +524,10 @@ export async function findRoutes(token, byChain, funds,
               sellNeedsHelper,
               dstCanPayGas,
               dstGasNeeded,
+              mintable,
               executable: atomic
                 ? Boolean(arbHelperFor(src.chain))
-                : (buyHelperReady && sellHelperReady && dstCanPayGas),
+                : (buyHelperReady && sellHelperReady && dstCanPayGas && mintable),
               type: atomic ? 'route-atomic' : (sameChain ? 'route-same-chain' : 'route-bridged'),
               atomic, token,
               chain: src.chain, src: src.chain, dst: dst.chain,

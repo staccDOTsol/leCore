@@ -23,6 +23,13 @@ class LLMError(RuntimeError):
     pass
 
 
+def _has_status(text: str, code: int) -> bool:
+    """A standalone HTTP status in a message. `402` must not match the `x402` that appears in
+    every door error -- that misread every rotating-door failure as 'this gateway wants payment'
+    and blocked runs while the chain could still sell another model."""
+    return re.search(rf"(?<![\w.]){code}(?![\d])", text.replace("x402", "xFOURZEROTWO")) is not None
+
+
 # USD per million tokens (input, output) -- first-party list prices; gateways may mark up
 PRICES: dict[str, tuple[float, float]] = {
     "claude-fable-5-1": (10.0, 50.0), "claude-fable-5": (10.0, 50.0), "claude-opus-5": (5.0, 25.0), "claude-opus-4-8": (5.0, 25.0),
@@ -83,6 +90,9 @@ class LLM:
         self.calls = 0
         self.usage: dict[str, int] = {"input": 0, "output": 0}
         self.billed_usd = 0.0        # from x402 receipts when the gateway returns them
+        self.model_used = self.model
+        chain = os.environ.get("RFP_LLM_MODELS", "")
+        self.fallback_models: list[str] = [m.strip() for m in chain.split(",") if m.strip()] or ["gpt-5.6-auto"]
         self.budget_usd: float | None = float(os.environ["RFP_LLM_BUDGET_USD"]) if os.environ.get("RFP_LLM_BUDGET_USD") else None
 
     @property
@@ -97,7 +107,7 @@ class LLM:
 
     @property
     def name(self) -> str:
-        return f"{self.provider}:{self.model}"
+        return f"{self.provider}:{self.model_used}"
 
     # -- public --------------------------------------------------------------------
     @property
@@ -132,9 +142,33 @@ class LLM:
 
     def json(self, system: str, user: str, schema: dict[str, Any], max_tokens: int = 4000,
              context_id: str | None = None, top_k: int | None = None) -> dict[str, Any]:
+        """Tries each model in the chain. A door that cannot sell model A right now can usually
+        sell model B, so one unsellable model must not stall the pipeline. The model that
+        actually answered is recorded in `self.model_used`."""
+        chain = [self.model] + [m for m in self.fallback_models if m != self.model]
+        last: LLMError | None = None
+        for i, model in enumerate(chain):
+            self.model_used = model
+            try:
+                return self._json_one(model, system, user, schema, max_tokens, context_id, top_k)
+            except LLMError as e:
+                t = str(e)
+                # "unknown model" is a chain condition too: this gateway cannot serve that id,
+                # so move to the next model rather than failing the read.
+                transient = ("no door quoted" in t or "no x402 door" in t or "benched" in t
+                             or "refused payment" in t or "unknown model" in t
+                             or any(_has_status(t, c) for c in (429, 500, 502, 503, 504)))
+                if not transient or i == len(chain) - 1:
+                    raise
+                last = e
+        raise last if last is not None else LLMError("no model in the chain could be sold")
+
+    def _json_one(self, model: str, system: str, user: str, schema: dict[str, Any], max_tokens: int,
+                  context_id: str | None, top_k: int | None) -> dict[str, Any]:
         if self.over_budget():
             raise LLMError(f"LLM budget exhausted: ${self.spent_usd:.2f} of ${self.budget_usd:.2f} (RFP_LLM_BUDGET_USD)")
         self.calls += 1
+        prior_model, self.model = self.model, model
         if self.provider == "anthropic":
             return self._anthropic_json(system, user, schema, max_tokens)
         headers = {}
@@ -159,16 +193,24 @@ class LLM:
             with urllib.request.urlopen(req, timeout=8):
                 pass
             # /models is public on paid gateways; prove the chat door actually opens for us
-            probe = {"model": self.model, "messages": [{"role": "user", "content": "ok"}], "max_tokens": 1}
-            try:
-                self._post(probe)
-            except LLMError as e:
-                if "402" in str(e):
-                    return f"{self.url} answers 402: this gateway wants payment (x402) or a funded session (OPENZOO_SESSION / LECORE_LLM_HEADERS)"
-                if "401" in str(e) or "403" in str(e):
-                    return f"{self.url} rejects our credentials ({str(e)[:80]})"
-                raise
-            return None
+            # CHAIN-AWARE: available means "some model in the chain can be sold right now".
+            reasons = []
+            for model in [self.model] + [m for m in self.fallback_models if m != self.model]:
+                try:
+                    self._post({"model": model, "messages": [{"role": "user", "content": "ok"}], "max_tokens": 1})
+                    self.model_used = model
+                    return None
+                except LLMError as e:
+                    t = str(e)
+                    if "unknown model" in t:
+                        reasons.append(f"{model}: not served by this gateway")
+                        continue
+                    if _has_status(t, 402):
+                        return f"{self.url} answers 402: this gateway wants payment (x402) or a funded session (OPENZOO_SESSION / LECORE_LLM_HEADERS)"
+                    if _has_status(t, 401) or _has_status(t, 403):
+                        return f"{self.url} rejects our credentials ({t[:80]})"
+                    reasons.append(f"{model}: {t[:90]}")
+            return "no model in the chain is sellable right now -- " + "; ".join(reasons[:3])
         except Exception as e:  # noqa: BLE001
             return f"{self.provider} at {self.url or 'api.anthropic.com'} unreachable: {type(e).__name__}: {e}"
 

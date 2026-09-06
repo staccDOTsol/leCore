@@ -228,9 +228,11 @@ def _transient(e: object) -> bool:
     the door rotation (503 'no x402 door can currently sell'), an unreachable proxy, a 402
     payment failure, and an exhausted budget all mean 'not read yet', not 'read badly'."""
     s = str(e)
-    return ("budget exhausted" in s or "could not reach" in s or "402" in s or "503" in s
-            or "no x402 door" in s or "unreachable" in s or "Connection refused" in s
-            or "429" in s or "502" in s or "504" in s or "timed out" in s)
+    from .llm import _has_status
+    return ("budget exhausted" in s or "could not reach" in s or "no x402 door" in s
+            or "no door quoted" in s or "benched" in s or "refused payment" in s
+            or "unreachable" in s or "Connection refused" in s or "timed out" in s or "unknown model" in s
+            or any(_has_status(s, c) for c in (402, 429, 502, 503, 504)))
 
 
 # --- LLM verdict -------------------------------------------------------------------------

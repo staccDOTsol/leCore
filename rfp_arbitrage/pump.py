@@ -473,7 +473,11 @@ class Pump:
         if self.llm is not None:
             llm_verdicts = st.conn.execute("SELECT COUNT(*) FROM verdicts WHERE method LIKE 'llm:%'").fetchone()[0]
             drafted = st.conn.execute("SELECT COUNT(*) FROM proposals").fetchone()[0]
-            llm_note = f" llm-verdicts {llm_verdicts} drafts {drafted} spent ${self.llm.spent_usd:.2f}" + (f"/${self.llm.budget_usd:.0f}" if self.llm.budget_usd else "")
+            # "~" when the gateway returned no receipt and no usage, so the figure is our own
+            # token estimate rather than what was actually settled. Never print an estimated
+            # amount of money as though it were measured.
+            tilde = "~" if getattr(self.llm, "estimated_calls", 0) else ""
+            llm_note = f" llm-verdicts {llm_verdicts} drafts {drafted} spent {tilde}${self.llm.spent_usd:.2f}" + (f"/${self.llm.budget_usd:.0f}" if self.llm.budget_usd else "")
         self.log(f"[pump] round {self.counts['rounds']}: opps {s['opportunities']} intellectual {s['intellectual']} "
                  f"fetched {self.counts['fetched']} docs {s['documents']} gated {s['verdicts']} viable {s['viable']} "
                  f"priced {s['priced']} matches {len(ms)}{llm_note} -> {self.out_dir / 'shortlist.md'}")

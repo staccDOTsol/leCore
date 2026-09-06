@@ -51,7 +51,7 @@ Every clause read and every drafted bid is a paid call. The gateway takes crypto
 request, no account and no API key.
 
 ```bash
-npx openzoo            # terminal 1 — leave it running
+npx openzoo            # only to create and fund the wallet; the daemon starts it for you after that
 ```
 
 It prints two funding addresses on first run and creates a burner wallet at
@@ -75,16 +75,20 @@ export RFP_DB=rfp_arbitrage.sqlite3 RFP_CACHE=.rfp_cache
 python -m rfp_arbitrage daemon --budget 25
 ```
 
-That is the whole thing. It starts the paying proxy, the crawler and the conveyor, restarts
-whichever one dies, and every 90 seconds rewrites **one gist, in place**, with the board and
-the drafts themselves. The gist id is remembered in `.rfp_cache/gist.json`, so a restart —
-tomorrow, next week — keeps writing to the same link instead of scattering new ones. A draft
-that drops off the board is deleted from the gist rather than left there stale.
+That is the whole thing, and it is the only command. It starts the paying proxy, the crawler,
+the conveyor and the comparable-award index, restarts whichever one dies, and every 90 seconds
+rewrites **one gist, in place**, with the board and the drafts themselves. The gist id is
+remembered in `.rfp_cache/gist.json`, so a restart — tomorrow, next week — keeps writing to the
+same link instead of scattering new ones. A draft that drops off the board is deleted from the
+gist rather than left there stale.
 
 ```
 [daemon 04:11:07] starting. db=rfp_arbitrage.sqlite3 out=rfp_out
-[daemon 04:11:07] proxy at http://localhost:8402/v1 not answering (1/4)
-[daemon 04:12:22] restarting the openzoo proxy, then leaving it alone for four minutes
+[daemon 04:11:07] starting the openzoo proxy, then leaving it alone for four minutes
+[daemon 04:11:07] pump up (pid 499366) -> .rfp_cache/logs/pump.log
+[daemon 04:11:07] ingest up (pid 499367) -> .rfp_cache/logs/ingest.log
+[daemon 04:11:07] building the comparable-award index (holds 0 rows) -> .rfp_cache/logs/awards.log
+[daemon 04:14:22] comparable-award index rebuilt: 83,061 rows (exit 0)
 [daemon 04:17:40] 17,139 indexed · 2,474 gated · 2,416 eligible · 5 drafted (4 ready to send) · gist rewritten https://gist.github.com/you/8f0c…
 [daemon 04:17:40] [pump] round 6: ... llm-verdicts 159 drafts 5 spent $15.13/$18
 [daemon 04:19:11] 17,139 indexed · 2,474 gated · 2,416 eligible · 5 drafted (4 ready to send) · gist unchanged
@@ -96,14 +100,15 @@ move, it is working. If they sit still while the spend climbs, something is wron
 `.rfp_cache/logs/pump.log`. `gist unchanged` means the substance is identical to last round,
 so no write was spent; the timestamp in the board does not count as a change.
 
+**Watch `eligible` in particular.** If it is a handful while `gated` is in the thousands, the
+comparable-award index has not finished building yet. Nothing can be priced without it — an ask
+with no comparable market has no margin, so it never becomes a match and is never drafted, and
+the pipeline looks like it is running fine while finding nothing. The daemon builds it at
+startup and refreshes it every `--awards-every` hours (default 24); it takes a few minutes and
+pulls ~85,000 awards from SEAO Québec, the Socrata portals and USAspending.
+
 Nothing is published without `GITHUB_TOKEN`; without one the daemon says so and runs anyway,
 writing `rfp_out/` locally.
-
-Fill the price side once, at any point — it is slow and only needs doing occasionally:
-
-```bash
-python -m rfp_arbitrage awards        # the comparable-award index the bids are priced against
-```
 
 ### Or drive the stages yourself
 
@@ -116,7 +121,7 @@ export RFP_LLM_BUDGET_USD=25                 # a hard cap, read from the payment
 
 npx openzoo                                  # terminal 1
 python -m rfp_arbitrage crawl --days 30      # terminal 2 — first fill, a few minutes
-python -m rfp_arbitrage awards
+python -m rfp_arbitrage awards               # the price side
 python -m rfp_arbitrage pump --watch --verbose   # the conveyor
 python -m rfp_arbitrage ingest --watch       # terminal 3 — keeps crawling for new work
 ```
@@ -168,6 +173,7 @@ detach the model until a door recovers.
 | `--gist-every` | 90 | seconds between rewrites; a round with nothing new spends no write |
 | `--gist-proposals` | 8 | how many drafts ride along in the gist beside the board |
 | `--gist-public` | off | only affects the run that creates it |
+| `--awards-every` | 24 | hours between rebuilds of the comparable-award index; built at startup |
 | `--budget` | none | hard USD cap, read from the payment receipts |
 | `--models` | built-in chain | override the fallback chain |
 | `--no-proxy` | off | something else is already serving `LECORE_LLM_URL` |
@@ -180,12 +186,13 @@ setsid nohup python -m rfp_arbitrage daemon --budget 25 > .rfp_cache/daemon.log 
 tail -f .rfp_cache/daemon.log        # stage logs are under .rfp_cache/logs/
 ```
 
-Two hard-won details live in the supervisor. The proxy gets four consecutive failed health
-checks and then four minutes of silence before anything touches it again — it binds in 60 to
-90 seconds and prints nothing for the first 45, and every earlier version killed it
-mid-startup, forever, which is why nothing was ever drafted. And the children are owned as
-process handles, never looked up with `pgrep -f openzoo`: that pattern matches its own
-command line and answers yes whether or not the service exists.
+Two hard-won details live in the supervisor. A proxy the daemon started gets four consecutive
+failed health checks and then four minutes of silence before anything touches it again — it
+binds in 60 to 90 seconds and prints nothing for the first 45, and every earlier version killed
+it mid-startup, forever, which is why nothing was ever drafted. (On a cold start there is
+nothing to be patient with, so it starts one immediately.) And the children are owned as process
+handles, never looked up with `pgrep -f openzoo`: that pattern matches its own command line and
+answers yes whether or not the service exists.
 
 (`.rfp_cache/keep.sh` is the shell ancestor of this and still works, but `daemon` supersedes
 it and is the one that publishes.)

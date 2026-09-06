@@ -177,9 +177,10 @@ def draft(opp: Opportunity, text: str, pricing: dict[str, Any], match: dict[str,
             f"deliverables already identified: {pricing.get('deliverables', [])[:8]}\n"
             f"COMPARABLE AWARDS: {pricing.get('benchmark', {})}\nBID PRICE TO USE (USD): {target:,.0f}\n\n"
             f"OPENING OF THE SOLICITATION:\n{text[:3000]}")
-    data = llm.json(SYSTEM, user, PROPOSAL_SCHEMA, max_tokens=6000, context_id=context_id, top_k=32)
+    # 6000 was not enough for fourteen fields plus two diagrams: drafts were coming back cut off
+    # mid-object, and a truncated read costs exactly as much as a complete one.
+    data = llm.json(SYSTEM, user, PROPOSAL_SCHEMA, max_tokens=12000, context_id=context_id, top_k=32)
     text = _render(opp, data, bidder)
-    text = "\n".join(md)
     problems = unsupported_claims(text, bidder)
     # REWRITE, DO NOT JUST COMPLAIN. A flagged draft is a draft the model can fix: hand it back
     # the exact violations and the identity it must respect, and take the corrected version.

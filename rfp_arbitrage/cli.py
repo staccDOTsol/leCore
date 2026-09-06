@@ -420,7 +420,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     s = sub.add_parser("stats"); s.set_defaults(fn=cmd_stats)
 
-    s = sub.add_parser("daemon", help="ONE COMMAND: proxy + crawler + conveyor, supervised, "
+    s = sub.add_parser("daemon", help="ONE COMMAND: proxy + crawler + conveyor + price index, supervised, "
                                       "publishing the board into one gist that is rewritten in place")
     s.set_defaults(fn=cmd_daemon)
     s.add_argument("--out-dir", default="rfp_out")
@@ -430,6 +430,8 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--gate-workers", type=int, default=2, help="parallel clause readers")
     s.add_argument("--fast-every", type=float, default=2.0); s.add_argument("--slow-every", type=float, default=4.0)
     s.add_argument("--sam-every", type=float, default=24.0)
+    s.add_argument("--awards-every", type=float, default=24.0,
+                   help="hours between rebuilds of the comparable-award index; built once at startup")
     s.add_argument("--budget", type=float, help="hard USD cap on model spend, from the payment receipts")
     s.add_argument("--models", help="fallback chain, comma separated (default: the built-in cross-vendor chain)")
     s.add_argument("--no-proxy", action="store_true", help="do not start openzoo; something else is serving LECORE_LLM_URL")

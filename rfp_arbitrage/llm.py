@@ -137,6 +137,7 @@ class LLM:
         self.calls = 0
         self.usage: dict[str, int] = {"input": 0, "output": 0}
         self.billed_usd = 0.0        # from x402 receipts when the gateway returns them
+        self.estimated_calls = 0     # calls the gateway reported neither a receipt nor usage for
         self.model_used = self.model
         chain = os.environ.get("RFP_LLM_MODELS", "")
         # THE CHAIN IS SURVIVAL, NOT PREFERENCE. The x402 door network sells a different subset
@@ -266,6 +267,27 @@ class LLM:
         except Exception as e:  # noqa: BLE001
             return f"{self.provider} at {self.url or 'api.anthropic.com'} unreachable: {type(e).__name__}: {e}"
 
+    def _account(self, data: dict[str, Any], sent: str, got: str) -> None:
+        """Record what a call cost. A SPEND CAP THAT CANNOT SEE THE SPEND IS NOT A CAP: measured
+        against a live openzoo proxy, 373 paid calls totalling $2.53 by the gateway's own counter
+        were reported here as $0.00, because that proxy returns neither an x402 receipt nor a
+        `usage` block and both accounting paths therefore read zero. RFP_LLM_BUDGET_USD was inert
+        and the run continued to an empty wallet. So: take a receipt when there is one, take the
+        reported usage when there is one, and otherwise ESTIMATE from the text -- an estimate that
+        is wrong by a factor of two still stops a runaway; silence never does."""
+        u = data.get("usage") or {}
+        i, o = int(u.get("prompt_tokens") or 0), int(u.get("completion_tokens") or 0)
+        if not i and not o:
+            i, o = len(sent) // 4, len(got) // 4        # ~4 chars a token, near enough to cap on
+            self.estimated_calls += 1
+        self.usage["input"] += i
+        self.usage["output"] += o
+        receipt = data.get("x402") or {}
+        if isinstance(receipt, dict) and receipt.get("billedUsd") is not None:
+            self.billed_usd += float(receipt["billedUsd"])
+        elif u.get("cost") is not None:
+            self.billed_usd += float(u["cost"])
+
     # -- openzoo / OpenAI-compatible -----------------------------------------------
     def _post(self, body: dict[str, Any], headers: dict[str, str] | None = None) -> dict[str, Any]:
         """RETRY ONLY WHAT COSTS NOTHING. A 503 'no door quoted' is refused before any payment,
@@ -328,16 +350,9 @@ class LLM:
             text = data["choices"][0]["message"]["content"]
         except (KeyError, IndexError, TypeError):
             raise LLMError(f"unexpected response shape: {list(data) if isinstance(data, dict) else type(data)}") from None
-        u = data.get("usage") or {}
-        self.usage["input"] += int(u.get("prompt_tokens") or 0)
-        self.usage["output"] += int(u.get("completion_tokens") or 0)
-        receipt = data.get("x402") or {}
-        if isinstance(receipt, dict) and receipt.get("billedUsd") is not None:
-            self.billed_usd += float(receipt["billedUsd"])
-        elif u.get("cost") is not None:
-            self.billed_usd += float(u["cost"])
         if isinstance(text, list):   # some proxies return content blocks
             text = "".join(b.get("text", "") for b in text if isinstance(b, dict))
+        self._account(data, sys_msg + user_msg, text)
         try:
             return _extract_json(text)
         except LLMError:
@@ -350,14 +365,11 @@ class LLM:
                                  " Use only what the answer states; anything it does not address is 'silent', null, false or an empty list."},
                                 {"role": "user", "content": "ANALYST'S ANSWER:\n" + text[:12000] + "\n\n---\n" + json_rule + "\nThe JSON object only."}]}
         data2 = self._post(salvage)
-        u2 = data2.get("usage") or {}
-        self.usage["input"] += int(u2.get("prompt_tokens") or 0); self.usage["output"] += int(u2.get("completion_tokens") or 0)
-        r2 = data2.get("x402") or {}
-        if isinstance(r2, dict) and r2.get("billedUsd") is not None:
-            self.billed_usd += float(r2["billedUsd"])
         text2 = data2["choices"][0]["message"]["content"]
         if isinstance(text2, list):
             text2 = "".join(b.get("text", "") for b in text2 if isinstance(b, dict))
+        # the salvage pass is a second PAID call; it counts against the cap like any other
+        self._account(data2, str(salvage["messages"]), text2)
         return _extract_json(text2)
 
     # -- Anthropic SDK ---------------------------------------------------------------

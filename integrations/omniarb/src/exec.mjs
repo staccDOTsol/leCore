@@ -85,3 +85,145 @@ export function passesGuards(opp, limits) {
 }
 
 export { loadAccount };
+
+// --------------------------------------------------------- non-atomic routes
+
+import { ROUTER_ABI, PAD, PAD_ABI, ERC20_ABI } from './config.mjs';
+import { deadline } from './chain.mjs';
+import { quoteBuy, quoteSell } from './quote.mjs';
+import { bridge } from './bridge.mjs';
+
+const MAX_UINT256 = (1n << 256n) - 1n;
+
+/** Wait for `blocks` new blocks, so a just-observed balance is settled everywhere. */
+async function settle(c, blocks = 2, timeoutMs = 60_000) {
+  const pc = publicClient(c);
+  const start = await pc.getBlockNumber();
+  const until = Date.now() + timeoutMs;
+  while (Date.now() < until) {
+    await new Promise((r) => setTimeout(r, 2000));
+    const now = await pc.getBlockNumber().catch(() => start);
+    if (now >= start + BigInt(blocks)) return;
+  }
+}
+
+/** Buy `token` with `nativeIn` on one venue. Returns tokens actually received. */
+export async function buyOnVenue(c, account, token, venue, nativeIn, { slippageBps = 1000n } = {}) {
+  const pc = publicClient(c);
+  const wc = walletClient(c, account);
+
+  const quoted = await quoteBuy(c, token, venue, nativeIn);
+  if (!quoted || quoted === 0n) throw new Error(`no buy quote on ${c.name}`);
+  const minOut = (quoted * (10000n - slippageBps)) / 10000n;
+
+  const before = await pc.readContract({ address: token, abi: ERC20_ABI, functionName: 'balanceOf', args: [account.address] });
+
+  let hash;
+  if (venue.kind === 'curve') {
+    hash = await wc.writeContract({ address: PAD, abi: PAD_ABI, functionName: 'buy', args: [token, minOut], value: nativeIn });
+  } else if (venue.viaOmniRouter) {
+    hash = await wc.writeContract({
+      address: c.router, abi: ROUTER_ABI, functionName: 'buy',
+      args: [token, c.hook, minOut, account.address, deadline(900)], value: nativeIn });
+  } else {
+    throw new Error('hookless-pool buys need the OmniArb helper — use an atomic route');
+  }
+
+  const rec = await pc.waitForTransactionReceipt({ hash });
+  if (rec.status !== 'success') throw new Error(`buy reverted on ${c.name} (${hash})`);
+  const after = await pc.readContract({ address: token, abi: ERC20_ABI, functionName: 'balanceOf', args: [account.address] });
+  return { hash, received: after - before, quoted, explorer: `${c.explorer}/tx/${hash}` };
+}
+
+/** Sell `amount` of `token` on one venue. Returns native actually received. */
+export async function sellOnVenue(c, account, token, venue, amount, { slippageBps = 1500n } = {}) {
+  const pc = publicClient(c);
+  const wc = walletClient(c, account);
+
+  // Confirm the tokens are actually spendable at the current head before doing
+  // anything else. A bridged balance can look present on one node a moment
+  // before it is, and selling into that gap fails inside the router as
+  // TransferFailed rather than as anything self-explanatory.
+  const held = await pc.readContract({
+    address: token, abi: ERC20_ABI, functionName: 'balanceOf', args: [account.address], blockTag: 'latest' });
+  if (held < amount) throw new Error(`only ${held} spendable on ${c.name}, need ${amount} — balance has not settled`);
+
+  const quoted = await quoteSell(c, token, venue, amount);
+  if (!quoted || quoted === 0n) throw new Error(`no sell quote on ${c.name}`);
+  const minOut = (quoted * (10000n - slippageBps)) / 10000n;
+
+  const spender = venue.kind === 'curve' ? PAD : c.router;
+  const allowance = await pc.readContract({ address: token, abi: ERC20_ABI, functionName: 'allowance', args: [account.address, spender] });
+  if (allowance < amount) {
+    const ah = await wc.writeContract({ address: token, abi: ERC20_ABI, functionName: 'approve', args: [spender, MAX_UINT256] });
+    await pc.waitForTransactionReceipt({ hash: ah });
+  }
+
+  const hash = venue.kind === 'curve'
+    ? await wc.writeContract({ address: PAD, abi: PAD_ABI, functionName: 'sell', args: [token, amount, minOut] })
+    : await wc.writeContract({
+        address: c.router, abi: ROUTER_ABI, functionName: 'sell',
+        args: [token, c.hook, amount, minOut, account.address, deadline(900)] });
+
+  const rec = await pc.waitForTransactionReceipt({ hash });
+  if (rec.status !== 'success') throw new Error(`sell reverted on ${c.name} (${hash})`);
+
+  // Settle P&L against the block the sell landed in rather than wall-clock
+  // reads: with a failover transport the before/after reads can come from
+  // nodes at different heights, which reports a real gain as zero.
+  const [pre, post] = await Promise.all([
+    pc.getBalance({ address: account.address, blockNumber: rec.blockNumber - 1n }),
+    pc.getBalance({ address: account.address, blockNumber: rec.blockNumber }),
+  ]);
+  const gasPaid = rec.gasUsed * rec.effectiveGasPrice;
+  return {
+    hash, quoted, gasPaid,
+    delta: post - pre,
+    received: post - pre + gasPaid,
+    explorer: `${c.explorer}/tx/${hash}`,
+  };
+}
+
+/**
+ * Run a non-atomic route: buy, optionally bridge, sell.
+ *
+ * There is no revert to fall back on here. Each leg is quoted again immediately
+ * before it is sent and carries its own slippage floor, and the function reports
+ * exactly which legs completed — if the sell fails the tokens are simply sitting
+ * on the destination chain, recoverable with `bag`.
+ */
+export async function executeRoute(route, account, { dryRun = true, onStep = () => {} } = {}) {
+  const { src, dst, buy, sell, sizeIn, token } = route;
+  const bridged = src.id !== dst.id;
+
+  if (dryRun) {
+    return { dryRun: true, sent: false, plan: { src: src.name, dst: dst.name, sizeIn, bridged,
+      buy: buy.kind, sell: sell.kind } };
+  }
+
+  const done = { legs: [] };
+
+  onStep(`buying on ${src.name} (${buy.kind})`);
+  const b = await buyOnVenue(src, account, token, buy, sizeIn);
+  done.legs.push({ leg: 'buy', ...b });
+  onStep(`  got ${b.received} raw tokens — ${b.explorer}`);
+
+  let amount = b.received;
+  if (amount === 0n) throw new Error('buy produced no tokens');
+
+  if (bridged) {
+    onStep(`bridging ${src.name} -> ${dst.name}`);
+    const br = await bridge({ src, dst, account, token, amount });
+    done.legs.push({ leg: 'bridge', ...br });
+    if (!br.arrived) throw new Error(`relayer has not minted on ${dst.name} yet (burn tx ${br.hash}) — retry the sell later`);
+    onStep(`  minted on ${dst.name}, letting it settle`);
+    await settle(dst, 2);
+  }
+
+  onStep(`selling on ${dst.name} (${sell.kind})`);
+  const s = await sellOnVenue(dst, account, token, sell, amount);
+  done.legs.push({ leg: 'sell', ...s });
+  onStep(`  ${s.explorer}`);
+
+  return { dryRun: false, sent: true, ...done };
+}

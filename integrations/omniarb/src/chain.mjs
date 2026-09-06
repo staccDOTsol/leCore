@@ -1,10 +1,10 @@
 // Client construction, wallet loading, and the state-override helpers that let
 // the bot quote every venue without holding a single token.
 
-import { createPublicClient, createWalletClient, http, defineChain,
+import { createPublicClient, createWalletClient, http, fallback, defineChain,
   keccak256, encodeAbiParameters, toHex, pad, parseEther } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
-import { CHAINS, rpcFor, TOKEN_BALANCE_SLOT, TOKEN_ALLOWANCE_SLOT, ERC20_ABI } from './config.mjs';
+import { CHAINS, rpcFor, rpcsFor, TOKEN_BALANCE_SLOT, TOKEN_ALLOWANCE_SLOT, ERC20_ABI } from './config.mjs';
 
 export const MAX_UINT = (1n << 256n) - 1n;
 /** A burner used only inside eth_call simulations. Never signs anything. */
@@ -15,18 +15,22 @@ const _pub = new Map();
 export function viemChain(c) {
   return defineChain({
     id: c.id, name: c.name,
-    nativeCurrency: { name: 'Ether', symbol: 'ETH', decimals: 18 },
-    rpcUrls: { default: { http: [rpcFor(c)] } },
+    nativeCurrency: { name: c.nativeSymbol, symbol: c.nativeSymbol, decimals: 18 },
+    rpcUrls: { default: { http: rpcsFor(c) } },
     blockExplorers: { default: { name: c.name, url: c.explorer } },
   });
 }
 
+/** Transport that fails over across a chain's endpoints instead of giving up. */
+export function transportFor(c) {
+  const urls = rpcsFor(c);
+  const transports = urls.map((u) => http(u, { timeout: 30_000, retryCount: 2, retryDelay: 300 }));
+  return transports.length === 1 ? transports[0] : fallback(transports, { rank: false, retryCount: 1 });
+}
+
 export function publicClient(c) {
   if (!_pub.has(c.id)) {
-    _pub.set(c.id, createPublicClient({
-      chain: viemChain(c),
-      transport: http(rpcFor(c), { timeout: 30_000, retryCount: 2 }),
-    }));
+    _pub.set(c.id, createPublicClient({ chain: viemChain(c), transport: transportFor(c) }));
   }
   return _pub.get(c.id);
 }
@@ -45,7 +49,7 @@ export function loadAccount() {
 }
 
 export function walletClient(c, account) {
-  return createWalletClient({ account, chain: viemChain(c), transport: http(rpcFor(c), { timeout: 30_000 }) });
+  return createWalletClient({ account, chain: viemChain(c), transport: transportFor(c) });
 }
 
 // ------------------------------------------------------- state overrides

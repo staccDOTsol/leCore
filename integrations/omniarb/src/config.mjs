@@ -34,7 +34,7 @@ export const TOKEN_ALLOWANCE_SLOT = 6n;
 export const CHAINS = [
   {
     id: 4663, name: 'Robinhood', short: 'RH', nativeSymbol: 'ETH', priceId: 'ethereum',
-    rpc: 'https://rpc.mainnet.chain.robinhood.com',
+    rpcs: ['https://rpc.mainnet.chain.robinhood.com'],
     explorer: 'https://rh-scan.com',
     poolManager: '0x8366a39cc670b4001a1121b8f6a443a643e40951',
     hook: '0x816b4043fe55b9a982c2baefb746c9f541c380cc',
@@ -44,7 +44,7 @@ export const CHAINS = [
   },
   {
     id: 8453, name: 'Base', short: 'Base', nativeSymbol: 'ETH', priceId: 'ethereum',
-    rpc: 'https://mainnet.base.org',
+    rpcs: ['https://base-rpc.publicnode.com', 'https://mainnet.base.org'],
     explorer: 'https://basescan.org',
     poolManager: '0x498581ff718922c3f8e6a244956af099b2652b2b',
     hook: '0xce5d52c0c2345260502872b6108d0ce2559280cc',
@@ -54,7 +54,7 @@ export const CHAINS = [
   },
   {
     id: 1, name: 'Ethereum', short: 'ETH', nativeSymbol: 'ETH', priceId: 'ethereum',
-    rpc: 'https://ethereum-rpc.publicnode.com',
+    rpcs: ['https://ethereum-rpc.publicnode.com', 'https://cloudflare-eth.com'],
     explorer: 'https://etherscan.io',
     poolManager: '0x000000000004444c5dc75cb358380d2e3de08a90',
     hook: '0xf1233150d60d96f4f9086a535738b53625a980cc',
@@ -64,7 +64,7 @@ export const CHAINS = [
   },
   {
     id: 42161, name: 'Arbitrum', short: 'Arb', nativeSymbol: 'ETH', priceId: 'ethereum',
-    rpc: 'https://arb1.arbitrum.io/rpc',
+    rpcs: ['https://arbitrum-one-rpc.publicnode.com', 'https://arb1.arbitrum.io/rpc'],
     explorer: 'https://arbiscan.io',
     poolManager: '0x360e68faccca8ca495c1b759fd9eee466db9fb32',
     hook: '0x552658e4dcb00c069ab97244489c830a87b380cc',
@@ -74,7 +74,7 @@ export const CHAINS = [
   },
   {
     id: 56, name: 'BNB', short: 'BNB', nativeSymbol: 'BNB', priceId: 'binancecoin',
-    rpc: 'https://bsc-dataseed.binance.org',
+    rpcs: ['https://bsc-rpc.publicnode.com', 'https://bsc-dataseed.binance.org'],
     explorer: 'https://bscscan.com',
     poolManager: '0x28e2ea090877bf75740558f6bfb36a5ffee9e9df',
     hook: '0x2e119e43217cee9ba42bb153c4f8a81226d400cc',
@@ -84,7 +84,7 @@ export const CHAINS = [
   },
   {
     id: 137, name: 'Polygon', short: 'Pol', nativeSymbol: 'POL', priceId: 'polygon-ecosystem-token',
-    rpc: 'https://polygon-bor-rpc.publicnode.com',
+    rpcs: ['https://polygon-bor-rpc.publicnode.com', 'https://polygon-rpc.com'],
     explorer: 'https://polygonscan.com',
     poolManager: '0x67366782805870060151383f4bbff9dab53e5cd6',
     hook: '0xd14b20a40b605879d250902b024cc41b677500cc',
@@ -94,7 +94,7 @@ export const CHAINS = [
   },
   {
     id: 480, name: 'World', short: 'Wld', nativeSymbol: 'ETH', priceId: 'ethereum',
-    rpc: 'https://worldchain-mainnet.g.alchemy.com/public',
+    rpcs: ['https://worldchain-mainnet.g.alchemy.com/public'],
     explorer: 'https://worldscan.org',
     poolManager: '0xb1860d529182ac3bc1f51fa2abd56662b7d13f33',
     hook: '0x03f4051e621ee3f3652adef2c453458a777e40cc',
@@ -104,7 +104,7 @@ export const CHAINS = [
   },
   {
     id: 59144, name: 'Linea', short: 'Lin', nativeSymbol: 'ETH', priceId: 'ethereum',
-    rpc: 'https://rpc.linea.build',
+    rpcs: ['https://linea-rpc.publicnode.com', 'https://rpc.linea.build'],
     explorer: 'https://lineascan.build',
     poolManager: '0x248083fb965359d82b06c1f5322480dcfc1ad857',
     hook: '0xb8dd684f503c3386595d4a8886f29e0388b100cc',
@@ -114,7 +114,7 @@ export const CHAINS = [
   },
   {
     id: 143, name: 'Monad', short: 'Mon', nativeSymbol: 'MON', priceId: 'monad',
-    rpc: 'https://rpc.monad.xyz',
+    rpcs: ['https://rpc.monad.xyz'],
     explorer: 'https://monadvision.com',
     poolManager: '0x188d586ddcf52439676ca21a244753fa19f9ea8e',
     hook: '0xe89ab12a7dca7b4cb269002826dab40b04d440cc',
@@ -126,8 +126,25 @@ export const CHAINS = [
 
 export const chainById = (id) => CHAINS.find((c) => c.id === Number(id));
 
-/** RPC_<chainId> in the environment overrides the bundled endpoint. */
-export const rpcFor = (c) => process.env[`RPC_${c.id}`] || c.rpc;
+/**
+ * Ordered RPC endpoints for a chain, tried in sequence.
+ *
+ * Public endpoints here drop requests often enough to matter — a missed
+ * getLogs silently costs a venue, and a missed eth_call silently costs a
+ * quote — so each chain lists a fallback and the client fails over rather
+ * than treating one bad response as the truth. PublicNode is preferred
+ * where it carries the chain; Robinhood, World and Monad have no second
+ * public endpoint, so they run single-homed.
+ *
+ * RPC_<chainId> in the environment is tried before all of them.
+ */
+export const rpcsFor = (c) => {
+  const override = process.env[`RPC_${c.id}`];
+  return override ? [override, ...c.rpcs] : [...c.rpcs];
+};
+
+/** Primary endpoint, for display and for anything that needs a single URL. */
+export const rpcFor = (c) => rpcsFor(c)[0];
 
 /** ARB_<chainId> points at an already-deployed OmniArb helper. */
 export const arbHelperFor = (c) => process.env[`ARB_${c.id}`] || null;

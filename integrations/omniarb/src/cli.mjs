@@ -13,11 +13,12 @@ import { formatEther, formatUnits, getAddress, parseEther } from 'viem';
 import { CHAINS, chainById, HOME_CHAIN, arbHelperFor } from './config.mjs';
 import { publicClient, loadAccount, allChains, supportsOverrides, verifyTokenLayout } from './chain.mjs';
 import { fetchIndexedTokens, fetchLaunchedTokens, discoverPools, discoverCurve, liveChains, tokenMeta } from './discovery.mjs';
+import { quoteSell } from './quote.mjs';
 import { findSameChain, findCrossChain, findLiquidation, findRoutes, fundableCapital, priceRelayFunding } from './arb.mjs';
 import { quoteNative, executeNative, supportedChains, resetRelayCache } from './relay.mjs';
 import { nativePrices, toUsd, usdStr } from './prices.mjs';
 import { helperFor, resetQuoteCache } from './quote.mjs';
-import { deployHelper, executeAtomic, passesGuards } from './exec.mjs';
+import { deployHelper, executeAtomic, executeRoute, sellOnVenue, passesGuards } from './exec.mjs';
 import { bridge } from './bridge.mjs';
 import { ERC20_ABI } from './config.mjs';
 
@@ -324,6 +325,84 @@ async function cmdRoute() {
   printRoutes(routes, Number(flag('top', '10')));
 }
 
+// -------------------------------------------------------------------- sell
+
+/** Sell a holding directly on one chain's best venue. */
+async function cmdSell() {
+  const account = loadAccount();
+  const token = await resolveToken();
+  const c = allChains(flag('chain'))[0];
+  if (!c) die('pass --chain');
+  const venues = await discoverPools(c, token);
+  if (c.id === HOME_CHAIN) {
+    const curve = await discoverCurve(token);
+    if (curve) venues.push({ ...curve, viaOmniRouter: false, kind: 'curve' });
+  }
+  const usable = venues.filter((v) => v.kind === 'curve' || v.viaOmniRouter);
+  if (!usable.length) die(`no directly sellable venue on ${c.name} (hookless pools need the OmniArb helper)`);
+
+  const held = await publicClient(c).readContract({
+    address: token, abi: ERC20_ABI, functionName: 'balanceOf', args: [account.address] });
+  const amount = flag('amount') ? parseEther(String(flag('amount'))) : held;
+  if (amount > held) die(`holding only ${formatUnits(held, 18)} on ${c.name}`);
+
+  console.log(`\nholding ${Number(formatUnits(held, 18)).toLocaleString()} on ${c.name}, selling ${Number(formatUnits(amount, 18)).toLocaleString()}\n`);
+
+  let best = null;
+  for (const v of usable) {
+    const q = await quoteSell(c, token, v, amount);
+    console.log(`  ${v.kind.padEnd(12)} -> ${q === null ? 'no quote' : `${eth(q)} ${c.nativeSymbol}`}`);
+    if (q !== null && (!best || q > best.q)) best = { v, q };
+  }
+  if (!best) die('no venue quotes this size');
+  console.log(`\nbest: ${best.v.kind} at ${eth(best.q)} ${c.nativeSymbol}`);
+
+  if (!has('live')) { console.log('\ndry run — re-run with --live to send'); return; }
+  const r = await sellOnVenue(c, account, token, best.v, amount);
+  console.log(`sold: ${r.explorer}`);
+  console.log(`received ${eth(r.received)} ${c.nativeSymbol} · gas ${eth(r.gasPaid)} · net ${eth(r.delta)} ${c.nativeSymbol}`);
+}
+
+// -------------------------------------------------------------------- fire
+
+/** Execute the best route the router finds — atomic or not. */
+async function cmdFire() {
+  const token = await resolveToken();
+  const chains = allChains(flag('chain'));
+  const minUsd = Number(flag('min-usd', '0.25'));
+  const capUsd = flag('max-usd') ? Number(flag('max-usd')) : null;
+  const live = has('live');
+  const wantAtomic = has('atomic');
+  const wantBridged = has('bridged');
+
+  console.log(`\nfiring on ${token}`);
+  const { routes, account } = await routePass({ token, chains, minUsd, capUsd, relay: has('relay') });
+  if (!routes.length) { console.log('nothing clears the floor right now.'); return; }
+
+  const wanted = routes.filter((r) => {
+    if (wantAtomic && !r.atomic) return false;
+    if (wantBridged && r.atomic) return false;
+    if (r.funding === 'relay') return false; // reposition with `move` first, deliberately
+    return true;
+  });
+  if (!wanted.length) { console.log('no route matches those filters.'); return; }
+
+  printRoutes(wanted, 3);
+  const pick = wanted[0];
+  console.log(`taking: [${pick.type}] ${pick.src.short} -> ${pick.dst.short}  ${usdStr(pick.netUsd)}\n`);
+
+  if (!live) { console.log('dry run — re-run with --live to send'); return; }
+
+  if (pick.atomic) {
+    const r = await executeAtomic({ ...pick, token, gas: 0n, net: 0n }, account, { dryRun: false });
+    console.log(`sent ${r.fn} on ${r.chain}: ${r.status} — ${r.explorer}`);
+    return;
+  }
+  const r = await executeRoute({ ...pick, token }, account, { dryRun: false, onStep: (m) => console.log(`  ${m}`) });
+  console.log(`\ndone — ${r.legs.length} leg(s)`);
+  for (const l of r.legs) console.log(`  ${l.leg}: ${l.explorer ?? l.hash ?? ''}`);
+}
+
 // -------------------------------------------------------------------- move
 
 async function cmdMove() {
@@ -357,42 +436,69 @@ async function cmdWatch() {
   const capUsd = flag('max-usd') ? Number(flag('max-usd')) : null;
   const live = has('live');
   const useRelay = has('relay');
+  const atomicOnly = has('atomic');
+  const maxFails = Number(flag('max-fails', '3'));
 
   console.log(`\nwatching ${token}`);
   console.log(`chains: ${chains.map((c) => c.short).join(', ')} · every ${interval / 1000}s · floor ${usdStr(minUsd)}` +
-    ` · ${live ? '*** LIVE, atomic routes will be sent ***' : 'dry run'}\n`);
+    `${capUsd ? ` · cap ${usdStr(capUsd)}/trade` : ''} · ${live ? '*** LIVE ***' : 'dry run'}`);
+  console.log(`${atomicOnly ? 'atomic routes only' : 'atomic and bridged routes'}\n`);
 
   let pass = 0;
-  let lastBest = null;
+  let fired = 0;
+  let expectedUsd = 0;
+  let fails = 0;
+  let lastKey = null;
+
   for (;;) {
     pass += 1;
     const stamp = new Date().toISOString().replace('T', ' ').slice(0, 19);
     try {
       const { routes, account } = await routePass({ token, chains, minUsd, capUsd, relay: useRelay, quiet: true });
-      const best = routes[0] ?? null;
-      const key = best ? `${best.type}:${best.src.id}:${best.dst.id}:${best.buy.kind}:${best.sell.kind}` : 'none';
-      const changed = key !== lastBest;
-      lastBest = key;
+      // Relay-funded routes need a deliberate `move` first, so they are not
+      // something the loop should take on its own.
+      const usable = routes.filter((r) => (atomicOnly ? r.atomic : true) && r.funding !== 'relay');
+      const best = usable[0] ?? null;
 
       if (!best) {
-        if (changed) console.log(`${stamp}  pass ${pass}: nothing clears ${usdStr(minUsd)}`);
+        if (lastKey !== 'none') console.log(`${stamp}  pass ${pass}: nothing clears ${usdStr(minUsd)}`);
+        lastKey = 'none';
       } else {
         const hop = best.src.id === best.dst.id ? best.src.short : `${best.src.short}->${best.dst.short}`;
-        console.log(`${stamp}  pass ${pass}: ${routes.length} route(s), best ${usdStr(best.netUsd)} ` +
+        lastKey = `${best.type}:${hop}`;
+        console.log(`${stamp}  pass ${pass}: ${usable.length} route(s), best ${usdStr(best.netUsd)} ` +
           `[${best.type}] ${hop} ${best.buy.kind}->${best.sell.kind}`);
 
-        if (live && best.atomic) {
+        if (live) {
           try {
-            const r = await executeAtomic(
-              { ...best, token, gas: 0n, net: best.netUsd }, account, { dryRun: false });
-            console.log(`${stamp}    sent: ${r.status} — ${r.explorer}`);
-          } catch (e) { console.log(`${stamp}    not sent: ${e.message}`); }
-        } else if (live && !best.atomic) {
-          console.log(`${stamp}    skipped: best route is not atomic; run it by hand with "bridge" + "run"`);
+            if (best.atomic) {
+              const r = await executeAtomic({ ...best, token, gas: 0n, net: 0n }, account, { dryRun: false });
+              console.log(`${stamp}    sent ${r.fn}: ${r.status} — ${r.explorer}`);
+            } else {
+              const r = await executeRoute({ ...best, token }, account,
+                { dryRun: false, onStep: (m) => console.log(`${stamp}    ${m}`) });
+              for (const l of r.legs) if (l.explorer) console.log(`${stamp}    ${l.leg}: ${l.explorer}`);
+            }
+            fired += 1;
+            expectedUsd += best.netUsd;
+            fails = 0;
+            console.log(`${stamp}    cycle ${fired} done · expected ${usdStr(best.netUsd)} · running ${usdStr(expectedUsd)}`);
+            // These pools are shallow and a fill moves them hard, so this pass's
+            // numbers are stale the moment it lands. Go straight round and re-price
+            // rather than firing again on them.
+            continue;
+          } catch (e) {
+            fails += 1;
+            console.log(`${stamp}    not sent (${fails}/${maxFails}): ${e.message.split('\n')[0]}`);
+            if (fails >= maxFails) {
+              console.log(`${stamp}  stopping after ${fails} consecutive failures — check "bag" and "balances"`);
+              return;
+            }
+          }
         }
       }
     } catch (e) {
-      console.log(`${stamp}  pass ${pass}: error — ${e.message}`);
+      console.log(`${stamp}  pass ${pass}: error — ${e.message.split('\n')[0]}`);
     }
     await new Promise((r) => setTimeout(r, interval));
   }
@@ -435,7 +541,7 @@ async function cmdBag() {
 // -------------------------------------------------------------------- main
 
 const commands = { tokens: cmdTokens, venues: cmdVenues, balances: cmdBalances, bag: cmdBag,
-  route: cmdRoute, watch: cmdWatch, move: cmdMove, scan, deploy: cmdDeploy, run: cmdRun, bridge: cmdBridge };
+  route: cmdRoute, watch: cmdWatch, move: cmdMove, fire: cmdFire, sell: cmdSell, scan, deploy: cmdDeploy, run: cmdRun, bridge: cmdBridge };
 
 if (!cmd || !commands[cmd] || has('help')) {
   console.log(`omniarb — arbitrage across omnichain.family
@@ -447,8 +553,11 @@ if (!cmd || !commands[cmd] || has('help')) {
   route     --token 0x.. [--relay] [--max-usd 5] [--min-usd 0]
             funded routes: native you hold -> token -> bridge -> token -> native
             --relay also positions capital across chains through relay.link
-  watch     --token 0x.. [--interval 60] [--relay] [--live]   run route on a loop
+  watch     --token 0x.. [--interval 60] [--relay] [--atomic] [--live]
+            run route on a loop, firing the best each pass and re-pricing after every fill
   move      --from RH --to ETH --amount 0.005 [--live]        move native between chains via Relay
+  fire      --token 0x.. [--atomic|--bridged] [--live]        execute the best route end to end
+  sell      --token 0x.. --chain Base [--amount N] [--live]    sell a holding on that chain's best venue
   scan      --token 0x.. [--max 1] [--min-net 0] [--cross]
   deploy    --chain Pol [--live]           deploy the OmniArb helper
   run       --token 0x.. [--live] [--max 1]

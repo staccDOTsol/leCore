@@ -10,7 +10,8 @@ Two details here were expensive to learn and are load-bearing:
 
 * The openzoo proxy takes 60-90 seconds to bind and prints nothing at all for the first 45.
   Every earlier supervisor decided it was dead and killed it mid-startup, forever. So: four
-  consecutive failed health checks before acting, and four minutes of silence afterwards.
+  consecutive failed health checks before acting on a proxy WE started, and four minutes of
+  silence afterwards.
 * Never ask `pgrep -f openzoo` whether it is running -- the pattern matches the pgrep
   command line itself and answers yes whether or not the service exists. Here we own the
   children as Popen handles and ask them directly.
@@ -276,6 +277,18 @@ class Child:
             self.proc.terminate()
 
 
+def _award_rows(db: str | None) -> int:
+    """How many comparable awards we can price an ask against."""
+    from .config import settings
+    st = Store(db or settings().db_path)
+    try:
+        return int(st.conn.execute("SELECT COUNT(*) FROM awards").fetchone()[0])
+    except Exception:
+        return 0
+    finally:
+        st.close()
+
+
 def _proxy_up(url: str) -> bool:
     try:
         with urllib.request.urlopen(url.rstrip("/") + "/models", timeout=10) as r:
@@ -329,7 +342,8 @@ def run(args) -> int:
     signal.signal(signal.SIGTERM, bye)
 
     proxy: subprocess.Popen | None = None
-    misses, quiet_until, last_gist, last_round = 0, 0.0, 0.0, ""
+    awards_proc: subprocess.Popen | None = None
+    misses, quiet_until, last_gist, last_round, last_awards = 0, 0.0, 0.0, "", 0.0
     _log(f"starting. db={args.db or os.environ.get('RFP_DB') or 'rfp_arbitrage.sqlite3'} out={args.out_dir}")
     try:
         while not stop["now"]:
@@ -339,10 +353,18 @@ def run(args) -> int:
                     misses = 0
                 else:
                     misses += 1
-                    _log(f"proxy at {llm_url} not answering ({misses}/4)")
+                    # THE FOUR STRIKES ARE FOR A PROXY WE STARTED, not for an empty port. On a cold
+                    # start there is nothing to be patient with: waiting 60 s to discover that
+                    # nobody is listening, and only then spending 90 s binding, is 2.5 idle minutes
+                    # at the front of every run.
+                    if proxy is None and misses == 1:
+                        misses = 4
+                    else:
+                        _log(f"proxy at {llm_url} not answering ({misses}/4)")
                     if misses >= 4:
-                        _log("restarting the openzoo proxy, then leaving it alone for four minutes "
-                             "— it binds slowly and prints nothing at first; that is normal")
+                        _log(("starting" if proxy is None else "restarting") + " the openzoo proxy, then "
+                             "leaving it alone for four minutes — it binds slowly and prints nothing at "
+                             "first; that is normal")
                         if proxy and proxy.poll() is None:
                             proxy.kill()
                         logs.mkdir(parents=True, exist_ok=True)
@@ -356,6 +378,23 @@ def run(args) -> int:
             # 2. the pipeline
             for c in children:
                 c.ensure()
+
+            # 2b. THE PRICE SIDE, BUILT BY US. Without comparable awards only the few solicitations
+            # that state their own dollar value can be priced; everything else has no margin, never
+            # becomes a match, and is never drafted -- which reads as "running fine, finding
+            # nothing". Telling the operator to go run a second command was the wrong answer: one
+            # command means one command. Built at boot, refreshed on a schedule, never blocking.
+            if awards_proc is not None and awards_proc.poll() is not None:
+                _log(f"comparable-award index rebuilt: {_award_rows(args.db):,} rows "
+                     f"(exit {awards_proc.returncode})")
+                awards_proc = None
+            if awards_proc is None and time.time() - last_awards >= args.awards_every * 3600:
+                last_awards = time.time()
+                logs.mkdir(parents=True, exist_ok=True)
+                _log(f"building the comparable-award index (holds {_award_rows(args.db):,} rows) "
+                     f"-> {logs / 'awards.log'}; this is slow and runs alongside everything else")
+                awards_proc = subprocess.Popen(py + db + ["awards"], stdout=open(logs / "awards.log", "ab"),
+                                               stderr=subprocess.STDOUT, env=env)
 
             # 3. the link
             if gist.token and time.time() - last_gist >= args.gist_every:
@@ -391,6 +430,8 @@ def run(args) -> int:
         _log("shutting down")
         for c in children:
             c.stop()
+        if awards_proc and awards_proc.poll() is None:
+            awards_proc.terminate()
         if proxy and proxy.poll() is None and not args.keep_proxy:
             proxy.terminate()
     return 0

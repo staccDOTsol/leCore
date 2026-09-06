@@ -33,6 +33,9 @@ CREATE TABLE IF NOT EXISTS pricing (
     opportunity_key TEXT PRIMARY KEY, ask_value REAL, ask_basis TEXT, hours_low REAL, hours_high REAL,
     skill_mix TEXT, benchmark TEXT, payload TEXT, created TEXT DEFAULT CURRENT_TIMESTAMP
 );
+CREATE TABLE IF NOT EXISTS carried (
+    opportunity_key TEXT PRIMARY KEY, outcome TEXT, at TEXT DEFAULT CURRENT_TIMESTAMP
+);
 CREATE TABLE IF NOT EXISTS proposals (
     opportunity_key TEXT PRIMARY KEY, markdown TEXT, payload TEXT, method TEXT, created TEXT DEFAULT CURRENT_TIMESTAMP
 );
@@ -179,6 +182,14 @@ class Store:
     def pricing(self, key: str) -> dict[str, Any] | None:
         r = self.conn.execute("SELECT payload FROM pricing WHERE opportunity_key=?", (key,)).fetchone()
         return json.loads(r["payload"]) if r else None
+
+    def mark_carried(self, key: str, outcome: str) -> None:
+        with self.tx() as c:
+            c.execute("INSERT OR REPLACE INTO carried (opportunity_key, outcome, at) VALUES (?,?,CURRENT_TIMESTAMP)",
+                      (key, outcome[:200]))
+
+    def carried_outcomes(self) -> dict[str, str]:
+        return {r["opportunity_key"]: r["outcome"] for r in self.conn.execute("SELECT opportunity_key, outcome FROM carried")}
 
     # -- proposals -----------------------------------------------------------------
     def put_proposal(self, key: str, markdown: str, payload: dict[str, Any], method: str) -> None:

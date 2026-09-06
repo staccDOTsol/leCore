@@ -327,6 +327,14 @@ class Pump:
                WHERE o.intellectual_score >= ?
                  AND (o.deadline = '' OR o.deadline >= date('now'))
                  AND o.key NOT IN (SELECT opportunity_key FROM proposals)
+                 -- AND NOT ALREADY CARRIED TO A TERMINAL OUTCOME. Without this the queue never
+                 -- advances: an opportunity that legitimately falls out (ineligible, held on a
+                 -- registration) produces no proposal, so it is picked again every single round
+                 -- and nothing behind it is ever reached. Retried after 12 h, because the reason
+                 -- can change -- a UEI arrives, the awards index grows, a model attaches.
+                 AND o.key NOT IN (SELECT opportunity_key FROM carried
+                                   WHERE at > datetime('now', '-12 hours')
+                                     AND outcome NOT LIKE 'matched; awaiting%')
                ORDER BY COALESCE(p.ask_value, 0) DESC, o.posted DESC
                LIMIT ?""", (self.threshold, self.conveyor_batch * 8)).fetchall()
         return [Opportunity.from_row(dict(r)) for r in rows]
@@ -409,6 +417,7 @@ class Pump:
                 self._carrying.add(o.key)
             try:
                 where = self.carry(st, o)
+                st.mark_carried(o.key, where)
                 n += 1
                 if where.startswith("BID") or self.verbose:
                     spend = f" ${self.llm.spent_usd:.2f}" if self.llm else ""

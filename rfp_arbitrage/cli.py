@@ -271,14 +271,24 @@ def cmd_propose(args) -> int:
     if llm is None:
         print("[propose] a model is required (openzoo at LECORE_LLM_URL)", file=sys.stderr)
         return 2
+    from .bidder import Bidder
+    bidder = Bidder.load()
     out = Path(args.out_dir); out.mkdir(parents=True, exist_ok=True)
     n = 0
-    for m in store.matches(args.limit * 3):
+    for m in store.matches(args.limit * 6):
         if n >= args.limit:
             break
         if not args.refresh and store.proposal(m.opportunity_key):
             continue
         o = store.opportunity(m.opportunity_key); pr = store.pricing(m.opportunity_key) or {}
+        v = store.verdict(m.opportunity_key)
+        ok, why = bidder.eligible_for(o.set_aside, bool(v and v.clearance_or_citizenship_required))
+        if not ok:
+            continue
+        ready, gate_why = bidder.ready_for(o.jurisdiction.value, o.tier.value)
+        if not ready and not args.include_blocked:
+            print(f"  skipped {o.key}: {gate_why}", file=sys.stderr)
+            continue
         text = store.full_text(o.key)
         try:
             ctx = ensure_context(store, llm, o.key, text)
@@ -387,6 +397,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     s = sub.add_parser("propose", help="draft bids for the top matches from the bound solicitation (openzoo)"); s.set_defaults(fn=cmd_propose)
     llm_opts(s); s.add_argument("--limit", type=int, default=5); s.add_argument("--out-dir", default="rfp_out/proposals"); s.add_argument("--refresh", action="store_true")
+    s.add_argument("--include-blocked", action="store_true", help="also draft where a registration (e.g. SAM.gov UEI) is still missing")
 
     s = sub.add_parser("awards", help="build the comparable bids/awards index used to price asks"); s.set_defaults(fn=cmd_awards)
     s.add_argument("--seao-months", type=int, default=3); s.add_argument("--naics-limit", type=int, default=40)

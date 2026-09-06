@@ -37,8 +37,12 @@ def delivery_cost(hours: float) -> tuple[float, dict]:
 
 
 def build_matches(opps: Iterable[Opportunity], verdicts: dict[str, ClauseVerdict], pricing: dict[str, dict],
-                  cfg: Settings | None = None, require_viable: bool = True) -> list[Match]:
+                  cfg: Settings | None = None, require_viable: bool = True, check_eligibility: bool = True) -> list[Match]:
+    """A match is work this bidder can actually win. Eligibility is checked HERE, not in a report:
+    a set-aside we cannot claim or a clearance we cannot hold is not a lead, it is noise."""
+    from .bidder import Bidder
     cfg = cfg or _settings()
+    bidder = Bidder.load() if check_eligibility else None
     out: list[Match] = []
     for o in opps:
         v = verdicts.get(o.key)
@@ -47,6 +51,10 @@ def build_matches(opps: Iterable[Opportunity], verdicts: dict[str, ClauseVerdict
             continue
         if require_viable and (v is None or not v.arbitrage_viable):
             continue
+        if bidder is not None:
+            ok, why = bidder.eligible_for(o.set_aside, bool(v and v.clearance_or_citizenship_required))
+            if not ok:
+                continue
         gate_conf = (v.confidence if v else 0.0) * (1.0 if v and v.method.startswith("llm:") else 0.5)
         hours = float(pr["hours_mid"])
         cost, plan = delivery_cost(hours)

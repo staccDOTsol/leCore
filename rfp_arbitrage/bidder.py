@@ -30,6 +30,7 @@ class Bidder:
     address: str = ""
     country: str = ""
     uei: str = ""                  # SAM.gov Unique Entity ID: required to be AWARDED US federal work
+    set_asides: str = ""           # comma list we can actually claim: small_business,8a,sdvosb,wosb,hubzone,indigenous
     cage: str = ""
     website: str = ""
 
@@ -63,6 +64,32 @@ class Bidder:
             return False, "no legal name or contact email on file"
         if jurisdiction == "US" and tier == "federal" and not self.uei:
             return False, "US federal award requires a SAM.gov UEI; not registered yet"
+        return True, ""
+
+    # Set-aside categories the bidder can claim. Small-business status is SELF-CERTIFIED in
+    # SAM.gov; the socio-economic ones (8(a), SDVOSB, WOSB, HUBZone, Indigenous programs) are
+    # certified by a third party and cannot be claimed without it.
+    def set_asides_held(self) -> set[str]:
+        raw = os.environ.get("RFP_BIDDER_SET_ASIDES", self.set_asides)
+        return {x.strip().lower() for x in raw.split(",") if x.strip()}
+
+    def eligible_for(self, set_aside: str, clearance_required: bool = False) -> tuple[bool, str]:
+        """Can this bidder legally compete, before anything about price or fit."""
+        s = (set_aside or "").strip().lower()
+        if clearance_required and self.country and self.country.upper() != "US":
+            return False, "requires a clearance or US citizenship; bidder is not US-based"
+        if not s or "no set aside" in s or "n/a" in s:
+            return True, ""
+        held = self.set_asides_held()
+        if "total small business" in s or s.startswith("small business"):
+            return ("small_business" in held,
+                    "" if "small_business" in held else "small business set-aside; self-certify in SAM.gov to claim it")
+        for tag, key in (("8(a)", "8a"), ("sdvosb", "sdvosb"), ("service-disabled", "sdvosb"),
+                         ("wosb", "wosb"), ("women-owned", "wosb"), ("hubzone", "hubzone"),
+                         ("indian", "indigenous"), ("indigenous", "indigenous"), ("aboriginal", "indigenous"),
+                         ("veteran", "vosb")):
+            if tag in s:
+                return (key in held, "" if key in held else f"{set_aside.strip()[:60]}: third-party certification we do not hold")
         return True, ""
 
     def block(self, redact_ein: bool = True) -> str:

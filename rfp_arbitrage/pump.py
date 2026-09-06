@@ -276,6 +276,11 @@ class Pump:
         (self.out_dir / "shortlist.md").write_text(match_report(st, self.report_limit), encoding="utf-8")
         (self.out_dir / "gate.md").write_text(gate_report(st, 5000), encoding="utf-8")
         (self.out_dir / "live.md").write_text(live_report(st, 5000), encoding="utf-8")
+        try:
+            from .board import write as write_board
+            write_board(st, self.out_dir / "board.html")
+        except Exception as e:  # noqa: BLE001
+            self.log(f"[pump:board] {type(e).__name__}: {e}")
         with self._lock:
             self.counts["matched"] = len(ms)
             self.counts["rounds"] += 1

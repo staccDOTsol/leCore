@@ -92,7 +92,12 @@ class LLM:
         self.billed_usd = 0.0        # from x402 receipts when the gateway returns them
         self.model_used = self.model
         chain = os.environ.get("RFP_LLM_MODELS", "")
-        self.fallback_models: list[str] = [m.strip() for m in chain.split(",") if m.strip()] or ["gpt-5.6-auto"]
+        # THE CHAIN IS SURVIVAL, NOT PREFERENCE. The x402 door network sells a different subset
+        # every few minutes: measured, Claude and Grok unsellable while the GPT lane sold fine, and
+        # the reverse an hour earlier. A chain that names one vendor stops the pipeline whenever
+        # that vendor's doors are dry, so the default spans vendors and price tiers.
+        self.fallback_models: list[str] = [m.strip() for m in chain.split(",") if m.strip()] or [
+            "claude-fable-5-1", "claude-opus-5", "gpt-5.6-auto", "grok-4", "gpt-4o-mini"]
         self.budget_usd: float | None = float(os.environ["RFP_LLM_BUDGET_USD"]) if os.environ.get("RFP_LLM_BUDGET_USD") else None
 
     @property

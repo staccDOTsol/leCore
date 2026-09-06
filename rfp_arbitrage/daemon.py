@@ -15,6 +15,10 @@ Two details here were expensive to learn and are load-bearing:
 * Never ask `pgrep -f openzoo` whether it is running -- the pattern matches the pgrep
   command line itself and answers yes whether or not the service exists. Here we own the
   children as Popen handles and ask them directly.
+
+And one rule the whole file follows: a condition that makes output impossible must SAY SO,
+repeatedly. An empty award index and a missing bidder profile each silently pinned the
+drafted count to zero while every log line looked healthy.
 """
 from __future__ import annotations
 
@@ -83,9 +87,14 @@ def board_markdown(store: Store, limit: int = 60) -> str:
            ">",
            "> Nobody has sent one. That is the only step still done by a human, and it is on purpose.",
            "",
-           f"*Live. Rewritten in place every ninety seconds — last at {now}. "
-           f"Bidding entity: {b.legal_name} ({b.short_name}), a {b.entity_type} of "
-           f"{b.state_of_incorporation}.*", "",
+           f"*Live. Rewritten in place every ninety seconds — last at {now}."
+           # "Drafted for (), a of ." is what an empty profile used to render. Say the real thing.
+           + (f" Bidding entity: {b.legal_name}"
+              + (f" ({b.short_name})" if b.short_name else "")
+              + (f", a {b.entity_type}" if b.entity_type else "")
+              + (f" of {b.state_of_incorporation}" if b.state_of_incorporation else "") + ".*"
+              if b.legal_name else
+              " **No bidding entity is configured, so every draft is held unsigned.***"), "",
            "---", "",
            "## The trade", "",
            "Governments buy thinking — studies, designs, analyses, plans, software, writing — and they",
@@ -404,6 +413,29 @@ def run(args) -> int:
               logs / "ingest.log", env),
     ]
 
+    # NO BIDDER, NO BIDS, AND UNTIL NOW NO WARNING. `ready_for` refuses every jurisdiction when
+    # there is no legal name and contact email, so a missing .rfp_bidder.json means the conveyor
+    # holds every single draft -- and the board printed "0 bids ready to send" and "Drafted for
+    # (), a of ." as though that were a normal state of the world. It is not; it is the one
+    # piece of configuration without which none of this can ever produce anything.
+    from .bidder import Bidder as _B
+    _bidder = _B.load()
+    if not _bidder.legal_name or not _bidder.contact_email:
+        for line in ("!! NO BIDDER PROFILE. Every draft will be held and nothing will ever be",
+                     "!! marked ready, because a proposal has to be signed by somebody. Write",
+                     "!! .rfp_bidder.json in the working directory (it is gitignored) with at",
+                     "!! minimum:",
+                     '!!   {"legal_name": "Your Company, LLC", "contact_name": "Your Name",',
+                     '!!    "contact_email": "you@example.com", "contact_phone": "(555) 555-5555",',
+                     '!!    "address": "1 Main Street, Somewhere", "country": "US", "uei": ""}',
+                     "!! Everything else in docs/RFP_QUICKSTART.md section 2. Crawling and gating",
+                     "!! continue meanwhile, so nothing is lost by fixing it while this runs."):
+            _log(line)
+    elif _bidder.missing():
+        _log(f"bidder profile is thin: no {', '.join(_bidder.missing())} — drafts will carry bracketed "
+             f"placeholders a human must fill" + ("; US federal bids stay blocked without a UEI"
+                                                  if "uei" in _bidder.missing() else ""))
+
     gist = Gist(args.gist_token, args.gist, cfg_cache, public=args.gist_public)
     if not gist.token:
         _log("no GITHUB_TOKEN in the environment — running without the gist. "
@@ -493,7 +525,11 @@ def run(args) -> int:
                     _log(f"{counts['opportunities']:,} indexed · {counts['verdicts']:,} gated · "
                          f"{counts['matches']:,} eligible · {counts['proposals']:,} drafted "
                          f"({counts['ready']} ready to send)"
-                         + (f" · gist rewritten {url}" if url else " · gist unchanged"))
+                         + (f" · gist rewritten {url}" if url else " · gist unchanged")
+                         # keep saying it: a warning at boot scrolls away, and this is the one
+                         # condition under which the drafted column can never leave zero
+                         + ("" if (_bidder.legal_name and _bidder.contact_email)
+                            else " · NO BIDDER PROFILE, every draft held"))
                     round_line = _last_line(logs / "pump.log", "[pump] round")
                     if round_line and round_line != last_round:
                         last_round = round_line

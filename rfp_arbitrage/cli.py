@@ -247,7 +247,8 @@ def cmd_pump(args) -> int:
         factory = lambda: LLM(provider=getattr(args, "provider", None), model=getattr(args, "model", None))  # noqa: E731
     pump = Pump(args.db or cfg.db_path, threshold=args.threshold, interval=args.interval, batch=args.batch, llm=llm,
                 max_docs=args.max_docs, benchmark=not args.no_benchmark, out_dir=args.out_dir, report_limit=args.limit, cfg=cfg,
-                fetch_workers=args.fetch_workers, llm_factory=factory, gate_workers=args.gate_workers)
+                fetch_workers=args.fetch_workers, llm_factory=factory, gate_workers=args.gate_workers,
+                propose=not args.no_propose, propose_batch=args.propose_batch)
     counts = pump.run(watch=args.watch)
     print(f"[pump] finished: {json.dumps(counts)}")
     return 0
@@ -385,6 +386,8 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--no-benchmark", action="store_true"); s.add_argument("--out-dir", default="rfp_out")
     s.add_argument("--limit", type=int, default=40, help="opportunities in shortlist.md")
     s.add_argument("--fetch-workers", type=int, default=4, help="parallel attachment fetchers")
+    s.add_argument("--no-propose", action="store_true", help="do not draft bids in the pump")
+    s.add_argument("--propose-batch", type=int, default=3, help="bids drafted per round")
     s.add_argument("--gate-workers", type=int, default=4, help="parallel LLM gate readers (each paid call has a settlement round trip)")
     s.add_argument("--watch", action="store_true", help="never exit; keep pumping as crawls land rows")
 

@@ -3,6 +3,7 @@ stages, run them as concurrent workers over the shared store, each picking up wh
 previous one has produced, cumulatively, while a crawl is still landing rows:
 
     fetch workers  : intellectual + open + never fetched      -> documents  (N threads, claim-based)
+    propose worker : eligible + submittable + matched, best first -> a drafted, self-repaired bid
     gate worker    : fetched + no verdict (or heuristic-only while an LLM is up) -> verdict
     price worker   : gated + no pricing                        -> pricing (+ USAspending benchmark)
     match/report   : every `interval` seconds rebuild matches from everything gated+priced,
@@ -31,9 +32,12 @@ class Pump:
     def __init__(self, db: str | Path, threshold: float = 0.6, interval: float = 30.0, batch: int = 25,
                  llm=None, max_docs: int = 6, benchmark: bool = True, out_dir: str | Path = ".",
                  report_limit: int = 40, log: Callable[[str], None] = print, cfg: Settings | None = None,
-                 fetch_workers: int = 4, llm_factory: Callable[[], Any] | None = None, gate_workers: int = 4):
+                 fetch_workers: int = 4, llm_factory: Callable[[], Any] | None = None, gate_workers: int = 4,
+                 propose: bool = True, propose_batch: int = 3):
         self.db = str(db)
         self.gate_workers = max(1, gate_workers)
+        self.propose = propose
+        self.propose_batch = max(1, propose_batch)
         self._gate_claimed: set[str] = set()      # keys an LLM read is in flight for (one process, many threads)
         self.llm_factory = llm_factory      # re-tried every round while the LLM is unavailable (unfunded wallet, proxy down)
         self.fetch_workers = max(1, fetch_workers)
@@ -49,7 +53,7 @@ class Pump:
         self.cfg = cfg or _settings()
         self.stop = threading.Event()
         self.counts = {"fetched": 0, "gated": 0, "priced": 0, "matched": 0, "rounds": 0}
-        self._idle = {"price": 0, **{f"gate{i}": 0 for i in range(max(1, gate_workers))},
+        self._idle = {"price": 0, "propose": 0, **{f"gate{i}": 0 for i in range(max(1, gate_workers))},
                       **{f"fetch{i}": 0 for i in range(max(1, fetch_workers))}}
         self._lock = threading.Lock()
 
@@ -260,6 +264,47 @@ class Pump:
         else:
             self.log(f"[pump] LLM still unavailable: {why[:160]}")
 
+    def step_propose(self, st: Store) -> int:
+        """Draft bids continuously for the best eligible, submittable matches. A board with one
+        entry is not a pipeline; this keeps drafting while there is budget and open work."""
+        if self.llm is None or not self.propose:
+            return 0
+        from pathlib import Path
+        from .bidder import Bidder
+        from .clauses import ensure_context
+        from .propose import draft
+        import re as _re
+        bidder = Bidder.load()
+        out = self.out_dir / "proposals"
+        out.mkdir(parents=True, exist_ok=True)
+        n = 0
+        for m in st.matches(self.propose_batch * 20):
+            if n >= self.propose_batch or self.stop.is_set():
+                break
+            if st.proposal(m.opportunity_key):
+                continue
+            o = st.opportunity(m.opportunity_key)
+            if o is None or (o.deadline and o.deadline[:10] < __import__("datetime").date.today().isoformat()):
+                continue
+            v = st.verdict(o.key)
+            ok, _ = bidder.eligible_for(o.set_aside, bool(v and v.clearance_or_citizenship_required))
+            ready, _ = bidder.ready_for(o.jurisdiction.value, o.tier.value)
+            if not ok or not ready:
+                continue
+            text = st.full_text(o.key)
+            try:
+                ctx = ensure_context(st, self.llm, o.key, text)
+                md, data = draft(o, text, st.pricing(o.key) or {}, m.to_dict(), self.llm, ctx)
+            except Exception as e:  # noqa: BLE001
+                self.log(f"[pump:propose] {o.key}: {type(e).__name__}: {str(e)[:140]}")
+                continue
+            st.put_proposal(o.key, md, data, f"llm:{self.llm.name}")
+            (out / (_re.sub(r"[^A-Za-z0-9]+", "-", o.key)[:80] + ".md")).write_text(md, encoding="utf-8")
+            n += 1
+            clean = "clean" if not data.get("unsupported_claims") else f"{len(data['unsupported_claims'])} flagged"
+            self.log(f"[pump:propose] ${float(data.get('price_usd') or 0):,.0f} {clean} -- {o.title[:56]} (spent ${self.llm.spent_usd:.2f})")
+        return n
+
     def step_report(self, st: Store) -> int:
         self._retry_llm()
         from .match import build_matches
@@ -288,7 +333,8 @@ class Pump:
         llm_note = ""
         if self.llm is not None:
             llm_verdicts = st.conn.execute("SELECT COUNT(*) FROM verdicts WHERE method LIKE 'llm:%'").fetchone()[0]
-            llm_note = f" llm-verdicts {llm_verdicts} spent ${self.llm.spent_usd:.2f}" + (f"/${self.llm.budget_usd:.0f}" if self.llm.budget_usd else "")
+            drafted = st.conn.execute("SELECT COUNT(*) FROM proposals").fetchone()[0]
+            llm_note = f" llm-verdicts {llm_verdicts} drafts {drafted} spent ${self.llm.spent_usd:.2f}" + (f"/${self.llm.budget_usd:.0f}" if self.llm.budget_usd else "")
         self.log(f"[pump] round {self.counts['rounds']}: opps {s['opportunities']} intellectual {s['intellectual']} "
                  f"fetched {self.counts['fetched']} docs {s['documents']} gated {s['verdicts']} viable {s['viable']} "
                  f"priced {s['priced']} matches {len(ms)}{llm_note} -> {self.out_dir / 'shortlist.md'}")
@@ -296,7 +342,8 @@ class Pump:
 
     # -- run -------------------------------------------------------------------------
     def run(self, watch: bool = False) -> dict:
-        jobs = [("price", self.step_price)] + [(f"gate{i}", self.step_gate) for i in range(self.gate_workers)] + \
+        jobs = [("price", self.step_price), ("propose", self.step_propose)] + \
+               [(f"gate{i}", self.step_gate) for i in range(self.gate_workers)] + \
                [(f"fetch{i}", self.step_fetch) for i in range(self.fetch_workers)]
         threads = [threading.Thread(target=self._loop, args=(n, f), name=n, daemon=True) for n, f in jobs]
         for t in threads:

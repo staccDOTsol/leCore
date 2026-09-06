@@ -85,3 +85,6 @@ rfp_arbitrage.sqlite3
 .rfp_cache/
 .env
 rfp_out/
+
+# bidder identity: EIN, phone and home address are not repository content
+.rfp_bidder.json

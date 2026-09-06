@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from .bidder import Bidder
 from .llm import LLM, LLMError
 from .models import Opportunity
 
@@ -46,7 +47,17 @@ intellectual work: software, data, studies, writing, design, analysis. Read the 
 HOW TO DESCRIBE THE DELIVERY TEAM. Speak in terms of ASSETS AND RESOURCES the firm brings to bear --
 "our delivery resources", "the assets assigned to this engagement", "capacity", "the review team",
 named accountable leads. Do NOT describe the production method, do NOT name AI, automation, models
-or tooling, and do NOT claim headcount you cannot name. The buyer is purchasing an outcome against
+or tooling, and do NOT claim headcount you cannot name. Never assert a registration, certification,
+clearance, bond or past-performance reference the bidder block does not state: carry the bracketed
+placeholder through instead, so a human fills it or the bid is not sent.
+
+NO INVENTED CREDENTIALS, EVER. This is a false-certification risk, not a style note. Do not give a
+role a certification (PMP, PE, CPA, CISSP, security clearance), a number of years of experience, a
+named prior employer, or a past project unless the bidder block states it. Describe each role by the
+WORK IT OWNS on this engagement -- "owns the monthly schedule and cost reporting", "independent
+reviewer of every deliverable before submission" -- and nothing else. Where the solicitation demands
+credentials, resumes, past performance or registrations, put the requirement in the compliance matrix
+with a bracketed placeholder as the response, so a human supplies it or the bid is withdrawn. The buyer is purchasing an outcome against
 acceptance criteria; how the firm marshals its resources to meet them is not a disclosure the
 solicitation asks for. If the solicitation itself requires disclosure of methods or tooling, answer
 that requirement truthfully and completely in the compliance matrix. Mirror its structure and its evaluation criteria. Build the
@@ -56,18 +67,52 @@ questions that a serious bidder would ask before pricing. Never invent past perf
 registrations; leave those as bracketed placeholders like [PAST PERFORMANCE 1]. Price at the figure given."""
 
 
+# Claims a draft must not make on its own. Each is a phrase that asserts something only the
+# bidder profile can establish; the check runs on the finished text, because a prompt is a request
+# and this is a rule.
+_FORBIDDEN = [
+    (r"\b(registered|active)\b[^.]{0,60}\bSAM\.gov\b", "claims SAM.gov registration"),
+    (r"\bvalid\s+(UEI|CAGE)\b|\bUEI\s*(?:code|number)?\s*[:#]?\s*[A-Z0-9]{12}\b", "claims a UEI/CAGE we do not have"),
+    # PMP as a CREDENTIAL, not "project management plan (PMP)" the document
+    (r"\b(PMP|PE|CPA|CISSP|PMI-ACP|CISA|LEED)[-\s]?(certified|credentialed)\b|\((?:PMP|PE|CPA|CISSP|CISA|LEED),", "asserts a professional certification"),
+    (r"\b\d{1,2}\+?\s*years?\b[^.]{0,40}\bexperience\b", "asserts years of experience"),
+    (r"\b(we|our firm|the firm)\b[^.]{0,50}\b(previously|have|has)\s+(delivered|completed|performed|supported)\b", "asserts past performance"),
+    (r"\b(security clearance|facility clearance|bonded|insured for)\b", "asserts a clearance or bond"),
+    (r"\bISO\s?\d{4,5}\b|\bCMMI\b|\bSOC\s?2\b", "asserts a certification standard"),
+]
+
+
+def unsupported_claims(text: str, bidder: Bidder) -> list[str]:
+    """Every forbidden assertion the draft makes that the bidder profile does not support."""
+    import re as _re
+    held = " ".join(filter(None, [bidder.uei, bidder.cage])).upper()
+    out = []
+    for pat, why in _FORBIDDEN:
+        for m in _re.finditer(pat, text, _re.I):
+            frag = text[max(0, m.start() - 60):m.end() + 60].replace("\n", " ")
+            if held and any(h and h in frag.upper() for h in held.split()):
+                continue
+            out.append(f"{why}: ...{frag.strip()}...")
+            break
+    return out
+
+
 def draft(opp: Opportunity, text: str, pricing: dict[str, Any], match: dict[str, Any] | None, llm: LLM,
           context_id: str | None) -> tuple[str, dict[str, Any]]:
     ask = pricing.get("ask_value") or 0
     target = round(ask * 0.92, -2) if ask else 0          # bid just under the comparable median by default
-    user = (f"SOLICITATION: {opp.title}\nBUYER: {opp.buyer}\nJURISDICTION: {opp.jurisdiction.value}/{opp.tier.value} {opp.region}\n"
+    bidder = Bidder.load()
+    user = (f"BIDDER (use this identity verbatim):\n{bidder.block(redact_ein=False)}\n\n"
+            f"SOLICITATION: {opp.title}\nBUYER: {opp.buyer}\nJURISDICTION: {opp.jurisdiction.value}/{opp.tier.value} {opp.region}\n"
             f"CLOSES: {opp.deadline}\nNOTICE TYPE: {opp.notice_type}\nURL: {opp.url}\n\n"
             f"SCOPE ESTIMATE: {pricing.get('hours_low', 0):.0f}-{pricing.get('hours_high', 0):.0f} hours; skill mix {pricing.get('skill_mix')}; "
             f"deliverables already identified: {pricing.get('deliverables', [])[:8]}\n"
             f"COMPARABLE AWARDS: {pricing.get('benchmark', {})}\nBID PRICE TO USE (USD): {target:,.0f}\n\n"
             f"OPENING OF THE SOLICITATION:\n{text[:3000]}")
     data = llm.json(SYSTEM, user, PROPOSAL_SCHEMA, max_tokens=6000, context_id=context_id, top_k=32)
-    md = [f"# {data.get('title') or opp.title}", "", f"*Response to {opp.buyer} · {opp.title} · closes {opp.deadline[:10]}*", "",
+    md = [f"# {data.get('title') or opp.title}", "",
+          f"*Response to {opp.buyer} · {opp.title} · closes {opp.deadline[:10]}*", "",
+          "```", bidder.block(), "```", "",
           "## Executive summary", data.get("executive_summary", ""), "", "## Our understanding", data.get("understanding", ""), "",
           "## Approach"] + [f"- {a}" for a in data.get("approach", [])] + ["", "## Deliverables and acceptance"]
     md += [f"- **{d.get('name')}** -- {d.get('acceptance')}" for d in data.get("deliverables", [])]
@@ -77,4 +122,13 @@ def draft(opp: Opportunity, text: str, pricing: dict[str, Any], match: dict[str,
     md += ["", "## Assumptions"] + [f"- {a}" for a in data.get("assumptions", [])]
     md += ["", "## Questions for the buyer"] + [f"- {q}" for q in data.get("questions_for_buyer", [])]
     md += ["", "## Price", f"**${float(data.get('price_usd') or target):,.0f}** -- {data.get('price_rationale', '')}"]
-    return "\n".join(md), data
+    text = "\n".join(md)
+    problems = unsupported_claims(text, bidder)
+    if problems:
+        banner = ["> **NOT SUBMITTABLE AS WRITTEN.** The draft asserts things this bidder cannot support.",
+                  "> A human must correct each line below, or the claim must come out, before this is sent.", ">"]
+        banner += [f"> - {p[:300]}" for p in problems]
+        text = "\n".join(banner) + "\n\n" + text
+        data["unsupported_claims"] = problems
+    data["bidder"] = bidder.to_dict() | {"ein": "redacted"}
+    return text, data

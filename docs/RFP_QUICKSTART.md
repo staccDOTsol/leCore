@@ -1,6 +1,6 @@
 # Run it locally
 
-Five minutes, three terminals. Everything else is automatic.
+Five minutes, then one command. Everything else is automatic.
 
 ## 1. Install
 
@@ -8,8 +8,15 @@ Five minutes, three terminals. Everything else is automatic.
 git clone https://github.com/staccDOTsol/leCore
 cd leCore
 git checkout claude/rfp-contract-arbitrage-er4c0f
+
+python3 -m venv .venv          # never install into the system python
+source .venv/bin/activate      # Windows: .venv\Scripts\activate
 pip install -r requirements-rfp.txt
 ```
+
+Everything below assumes that venv is active — the prompt shows `(.venv)`. If you open a
+new terminal, `source .venv/bin/activate` again first. A bare `pip install` outside a venv
+writes into the interpreter your OS depends on; don't.
 
 ## 2. Tell it who is bidding
 
@@ -56,21 +63,53 @@ it. Wait for `listening on http://localhost:8402/v1`.
 
 A read costs about $0.03. Twenty-five dollars covers most of an open market.
 
-## 4. Run it
+## 4. One command
 
 ```bash
-export SAM_API_KEY=...                       # free: https://open.gsa.gov/api/get-opportunities-public-api/
+export SAM_API_KEY=...        # free: https://open.gsa.gov/api/get-opportunities-public-api/
+export GITHUB_TOKEN=ghp_...   # a token with ONLY the `gist` scope — nothing else is used
 export RFP_DB=rfp_arbitrage.sqlite3 RFP_CACHE=.rfp_cache
+
+python -m rfp_arbitrage daemon --budget 25
+```
+
+That is the whole thing. It starts the paying proxy, the crawler and the conveyor, restarts
+whichever one dies, and every 90 seconds rewrites **one gist, in place**, with the board and
+the drafts themselves. The gist id is remembered in `.rfp_cache/gist.json`, so a restart —
+tomorrow, next week — keeps writing to the same link instead of scattering new ones. A draft
+that drops off the board is deleted from the gist rather than left there stale.
+
+First run prints the link once it exists:
+
+```
+[daemon 04:11:07] starting. db=rfp_arbitrage.sqlite3 out=rfp_out
+[daemon 04:11:07] proxy at http://localhost:8402/v1 not answering (1/4)
+[daemon 04:12:22] restarting the openzoo proxy, then leaving it alone for four minutes
+[daemon 04:17:40] gist updated: https://gist.github.com/you/8f0c…
+```
+
+Then it only speaks when something changes. Nothing is published without `GITHUB_TOKEN`;
+without one the daemon says so and runs anyway, writing `rfp_out/` locally.
+
+Fill the price side once, at any point — it is slow and only needs doing occasionally:
+
+```bash
+python -m rfp_arbitrage awards        # the comparable-award index the bids are priced against
+```
+
+### Or drive the stages yourself
+
+```bash
 export LECORE_LLM_URL=http://localhost:8402/v1 LECORE_LLM_KEY=sk-openzoo
 export RFP_LLM_PROVIDER=openzoo
 export RFP_LLM_MODEL=claude-fable-5-1
 export RFP_LLM_MODELS=claude-fable-5-1,claude-fable-5,claude-opus-5,grok-4
 export RFP_LLM_BUDGET_USD=25                 # a hard cap, read from the payment receipts
 
+npx openzoo                                  # terminal 1
 python -m rfp_arbitrage crawl --days 30      # terminal 2 — first fill, a few minutes
-python -m rfp_arbitrage awards               # comparable awards, the price side
-python -m rfp_arbitrage pump --watch --verbose   # the conveyor: leave it running
-
+python -m rfp_arbitrage awards
+python -m rfp_arbitrage pump --watch --verbose   # the conveyor
 python -m rfp_arbitrage ingest --watch       # terminal 3 — keeps crawling for new work
 ```
 
@@ -113,15 +152,32 @@ detach the model until a door recovers.
 | `--conveyor-workers` | 2 | opportunities carried end to end in parallel |
 | `--threshold` | 0.6 | how confidently intellectual the work must be |
 
-## Running it as one thing
+## Daemon knobs
 
-`.rfp_cache/keep.sh` in this repo keeps the proxy, the pump and the ingest loop alive and
-restarts whichever dies. Point it at your paths and run it once:
+| flag | default | what it does |
+|---|---|---|
+| `--gist` | the id in `.rfp_cache/gist.json` | publish into a gist you already have |
+| `--gist-every` | 90 | seconds between rewrites; a round with nothing new spends no write |
+| `--gist-proposals` | 8 | how many drafts ride along in the gist beside the board |
+| `--gist-public` | off | only affects the run that creates it |
+| `--budget` | none | hard USD cap, read from the payment receipts |
+| `--models` | built-in chain | override the fallback chain |
+| `--no-proxy` | off | something else is already serving `LECORE_LLM_URL` |
+| `--conveyor-workers` | 3 | opportunities carried end to end in parallel |
+
+Leave it running detached:
 
 ```bash
-setsid nohup .rfp_cache/keep.sh > .rfp_cache/keep.log 2>&1 &
+setsid nohup python -m rfp_arbitrage daemon --budget 25 > .rfp_cache/daemon.log 2>&1 &
+tail -f .rfp_cache/daemon.log        # stage logs are under .rfp_cache/logs/
 ```
 
-Two hard-won details are in that script: the proxy gets four minutes to bind before
-anything touches it, and status is checked with `ps`, never `pgrep -fc openzoo` — that
-matches its own command line and answers 1 whether or not the service exists.
+Two hard-won details live in the supervisor. The proxy gets four consecutive failed health
+checks and then four minutes of silence before anything touches it again — it binds in 60 to
+90 seconds and prints nothing for the first 45, and every earlier version killed it
+mid-startup, forever, which is why nothing was ever drafted. And the children are owned as
+process handles, never looked up with `pgrep -f openzoo`: that pattern matches its own
+command line and answers yes whether or not the service exists.
+
+(`.rfp_cache/keep.sh` is the shell ancestor of this and still works, but `daemon` supersedes
+it and is the one that publishes.)

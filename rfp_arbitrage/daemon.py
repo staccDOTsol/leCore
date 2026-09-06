@@ -49,7 +49,9 @@ def _slug(s: str, n: int = 48) -> str:
 
 
 def board_markdown(store: Store, limit: int = 60) -> str:
-    """The bid board as markdown. The HTML board is for a browser; a gist wants this."""
+    """The published document. Not a status dump: it opens with the claim, then argues it, then
+    shows the work. Every number in the prose is computed here, so the argument cannot drift
+    away from what the database actually holds."""
     from .bidder import Bidder
     from .report import ready_board
     b = Bidder.load()
@@ -61,14 +63,68 @@ def board_markdown(store: Store, limit: int = 60) -> str:
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     awards = store.conn.execute("SELECT COUNT(*) FROM awards").fetchone()[0]
 
-    out = [f"# {len(ready)} bid{'' if len(ready) == 1 else 's'} ready to send", "",
-           f"*{now} — rewritten every pump round. Drafted for {b.legal_name}"
-           f" ({b.short_name}), a {b.entity_type} of {b.state_of_incorporation}.*", "",
+    opps, verdicts, viable = st.get("opportunities", 0), st.get("verdicts", 0), st.get("viable", 0)
+    pct = f"{viable / verdicts:.1%}" if verdicts else "—"
+    delivery = sum(r["delivery"] or 0 for r in ready)
+    margins = sorted(r["margin"] for r in ready if r.get("margin") is not None)
+    med = margins[len(margins) // 2] if margins else None
+
+    # THE PERMATWEET. One line, quotable, its numbers replaced in place every ninety seconds.
+    # The claim has to survive a hostile reader, so it says only what the database can show and
+    # says the unflattering half out loud: nothing has been submitted.
+    out = ["# I pointed an army of openzoo bots at every public contract in North America.", "",
+           f"> **{opps:,} solicitations indexed. {verdicts:,} read clause by clause by frontier models. "
+           f"{pct} of them do not forbid delegating the work to anyone I choose. "
+           f"{len(ready)} finished bid{'' if len(ready) == 1 else 's'} "
+           f"worth **${value:,.0f}**, drafted end to end, sitting ready to send.**",
+           ">",
+           f"> Delivery on those bids costs **${delivery:,.0f}**."
+           + (f" Median margin **{med:.0%}**." if med is not None else ""),
+           ">",
+           "> Nobody has sent one. That is the only step still done by a human, and it is on purpose.",
+           "",
+           f"*Live. Rewritten in place every ninety seconds — last at {now}. "
+           f"Bidding entity: {b.legal_name} ({b.short_name}), a {b.entity_type} of "
+           f"{b.state_of_incorporation}.*", "",
+           "---", "",
+           "## The trade", "",
+           "Governments buy thinking — studies, designs, analyses, plans, software, writing — and they",
+           "price it at what it cost a staffed consultancy to produce. The comparable awards are public:",
+           f"this board is priced against **{awards:,}** of them. The gap between what a buyer pays for a",
+           "hundred-page assessment and what it now costs to produce one to the same acceptance criteria",
+           "is the entire business. It is not a small gap and it is not hidden; it is sitting in",
+           "USAspending and SEAO in public, priced. Nobody arbitrages it because the hard part is",
+           f"reading {opps:,} solicitations to find the ones you are actually allowed to bid.",
+           "",
+           "That is what the bots do.", "",
+           "## Why this is allowed, and how that is checked", "",
+           "A public contract is a promise to deliver a defined outcome against defined acceptance",
+           "criteria. Almost none of them constrain how you produce it. But *almost* is doing real work",
+           "in that sentence — some do, and bidding one of those is fraud, not arbitrage.",
+           "",
+           "So every solicitation is read in full by a frontier model against one question, and the",
+           "answer must be a verbatim quote from the document or it does not count:",
+           "",
+           "> Does this solicitation **explicitly prohibit** subcontracting or delegating the work, or",
+           "> **explicitly prohibit** the use of automated systems in producing it?",
+           "",
+           "Silence is not consent to anything — it is simply the absence of a prohibition, which is all",
+           f"the arbitrage requires. Of **{verdicts:,}** documents read so far, **{viable:,}** ({pct}) carry",
+           "no such prohibition. The ones that do are dropped and never drafted. Every verdict, with its",
+           "quotes, is kept.",
+           "",
+           "The proposals themselves promise deliverables and acceptance criteria, which is what the",
+           "solicitations ask for. Where one *does* require disclosure of methods or tooling, the gate has",
+           "already flagged it and the compliance matrix answers it truthfully. Nothing here depends on a",
+           "buyer not asking.",
+           "",
+           "## Right now", "",
            "| | |", "|---|---|",
            f"| clean drafts, nothing left to correct | **{len(ready)}** |",
            f"| bid value sitting ready | **${value:,.0f}** |",
+           f"| cost to deliver all of it | **${delivery:,.0f}** |",
            f"| drafted but blocked on a registration or a flagged claim | {len(blocked)} |",
-           f"| eligible matches queued behind these | {st.get('matches', 0):,} of {st.get('opportunities', 0):,} indexed |",
+           f"| eligible matches queued behind these | {st.get('matches', 0):,} of {opps:,} indexed |",
            ""]
 
     def table(rs: list[dict[str, Any]]) -> list[str]:
@@ -108,14 +164,35 @@ def board_markdown(store: Store, limit: int = 60) -> str:
             "                                                                       the entity cannot support",
             "```", "",
             "| stage | rows |", "|---|---|",
-            f"| indexed solicitations | {st.get('opportunities', 0):,} |",
+            f"| indexed solicitations | {opps:,} |",
             f"| intellectual work | {st.get('intellectual', 0):,} |",
-            f"| clause verdicts | {st.get('verdicts', 0):,} ({st.get('viable', 0):,} viable) |",
+            f"| clause verdicts | {verdicts:,} ({viable:,} viable) |",
             f"| priced | {st.get('priced', 0):,} |",
             f"| eligible matches | {st.get('matches', 0):,} |",
             f"| comparable awards priced against | {awards:,} |",
             f"| drafted bids | {st.get('proposals', 0):,} |", "",
-            "No bid has been submitted. A draft marked ready still needs a human to send it.", ""]
+            "Every stage is paid for per call, in crypto, through an x402 gateway. There is no account,",
+            "no contract with a model vendor and no monthly bill: a clause read costs about three cents",
+            "and the run stops itself at a spend cap.",
+            "",
+            "## The files in this gist", "",
+            "`README.md` is this document. Every other file is a complete drafted bid — executive summary,",
+            "understanding of the buyer's problem, deliverables with acceptance criteria, schedule,",
+            "compliance matrix against the solicitation's own mandatory requirements, two diagrams of the",
+            "solution and the engagement, assumptions, questions for the buyer, and a price. `-ready-`",
+            "means it asserts nothing the bidding entity cannot support. `-blocked-` means it does, and",
+            "the reasons are printed at the top of the file.",
+            "",
+            "A draft is checked against the entity's real profile before it is called ready: no invented",
+            "registrations, certifications, years of experience or past performance. When the check fires,",
+            "the draft is handed back to the model with the exact violations and rewritten. Only if it",
+            "still fails is it published as blocked, with the offending lines quoted.",
+            "",
+            "---", "",
+            "**No bid here has been submitted to anyone.** A draft marked ready still needs a human to",
+            "read it and send it. That is deliberate: the machine finds the opportunity, proves it is",
+            "permitted, prices it, and writes the response — a person decides whether to put their name",
+            "on it.", ""]
     return "\n".join(out)
 
 

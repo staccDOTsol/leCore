@@ -152,7 +152,8 @@ def ready_board(store: Store, limit: int = 40) -> list[dict[str, Any]]:
             "delivery": best.get("labor_cost"), "hours": best.get("hours_estimate"),
             "contact": r["contact"] or "", "route": "email" if (r["contact"] or "").count("@") else "portal",
             "sendable": ready and not claims, "blockers": blockers, "claims": claims[:4],
-            "deliverables": (data.get("deliverables") or [])[:4], "created": r["created"],
+            "deliverables": [(f"{d.get('name')} — {d.get('acceptance')}" if isinstance(d, dict) else str(d))
+                             for d in (data.get("deliverables") or [])[:4]], "created": r["created"],
         })
     return out
 

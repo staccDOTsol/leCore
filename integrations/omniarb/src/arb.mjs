@@ -30,6 +30,32 @@ export function numToWei(n) {
   return parseEther(n.toFixed(18));
 }
 
+/**
+ * Run `fn` over `items` with at most `limit` in flight.
+ *
+ * The route search is RPC-bound, not CPU-bound: a nine-chain pass is thousands
+ * of independent eth_calls, and serially it is dominated by round-trip latency.
+ * Fanning the search out cuts a pass from minutes to seconds.
+ *
+ * Only the SEARCH is parallel. Signing stays serial on purpose — the wallet has
+ * one nonce, and these pools are shallow enough that a fill moves the price the
+ * next trade was quoted against, so concurrent sends would race each other into
+ * prices that no longer exist.
+ */
+export async function mapPool(items, fn, limit = 8) {
+  const out = new Array(items.length);
+  let next = 0;
+  const workers = Array.from({ length: Math.max(1, Math.min(limit, items.length)) }, async () => {
+    for (;;) {
+      const i = next++;
+      if (i >= items.length) return;
+      try { out[i] = await fn(items[i], i); } catch { out[i] = null; }
+    }
+  });
+  await Promise.all(workers);
+  return out;
+}
+
 /** Sizes probed before refining, in native units. */
 const LADDER = ['0.00005', '0.0002', '0.001', '0.005', '0.02', '0.08', '0.3', '1', '3', '10'];
 
@@ -362,7 +388,8 @@ export async function fundableCapital(chains, address, { reserveMultiple = 3n } 
  * Search the full route space, restricted to what the wallet can actually fund.
  * Returns routes ranked by USD profit, each annotated with whether it is atomic.
  */
-export async function findRoutes(token, byChain, funds, { minUsd = 0, capUsd = null, mobileUsd = 0 } = {}) {
+export async function findRoutes(token, byChain, funds,
+  { minUsd = 0, capUsd = null, mobileUsd = 0, concurrency = 8 } = {}) {
   const prices = await nativePrices();
   const out = [];
   const entries = [...byChain.entries()];
@@ -370,9 +397,14 @@ export async function findRoutes(token, byChain, funds, { minUsd = 0, capUsd = n
   const gasCache = new Map();
   const gasFor = async (c, units) => {
     const k = `${c.id}:${units}`;
-    if (!gasCache.has(k)) gasCache.set(k, await gasWei(c, units));
+    if (!gasCache.has(k)) gasCache.set(k, gasWei(c, units));
     return gasCache.get(k);
   };
+
+  // Enumerate every candidate pairing first, then price them concurrently.
+  // Pricing one pairing is dozens of sequential eth_calls, and the pairings are
+  // independent of each other, so this is where the wall-clock time goes.
+  const tasks = [];
 
   for (const [srcId, src] of entries) {
     const fund = funds.get(srcId) ?? { usable: 0n, balance: 0n };
@@ -432,32 +464,44 @@ export async function findRoutes(token, byChain, funds, { minUsd = 0, capUsd = n
             return { score: gotUsd - spentUsd - srcGasUsd - dstGasUsd, tokens, back, spentUsd, gotUsd };
           };
 
-          const best = await optimiseUsd(evaluate, { cap });
-          if (!best || best.score <= minUsd) continue;
+          // A hookless pool can always be QUOTED (the helper is simulated in
+          // place), but buying from one for real needs it actually deployed on
+          // that chain. Flag it so the executor never picks a leg it cannot send.
+          const buyNeedsHelper = !atomic && !buyV.viaOmniRouter && buyV.kind !== 'curve';
+          const sellNeedsHelper = !atomic && !sellV.viaOmniRouter && sellV.kind !== 'curve';
 
-          out.push({
-            type: atomic ? 'route-atomic' : (sameChain ? 'route-same-chain' : 'route-bridged'),
-            atomic, token,
-            chain: src.chain, src: src.chain, dst: dst.chain,
-            buy: buyV, sell: sellV,
-            sizeIn: best.size, tokens: best.tokens, back: best.back,
-            spentUsd: best.spentUsd ?? toUsd(prices, srcId, best.size),
-            gotUsd: best.gotUsd ?? null,
-            gasUsd: srcGasUsd + (sameChain ? 0 : dstGasUsd),
-            netUsd: best.score,
-            fundedBy: { chain: src.chain.short, usable: fund.usable, balance: fund.balance },
-            needsFunding: fund.usable < best.size ? best.size - fund.usable : 0n,
-            call: best.atomicDetail ? { fn: best.atomicDetail.fn, args: best.atomicDetail.args } : null,
-            note: atomic
-              ? 'single transaction — reverts instead of losing if the edge moves'
-              : sameChain
-                ? 'two transactions on one chain — no bridge, but not atomic'
-                : 'buy, bridge, sell — the token is in the bridge until the relayer mints',
+          tasks.push(async () => {
+            const best = await optimiseUsd(evaluate, { cap });
+            if (!best || best.score <= minUsd) return null;
+            return {
+              buyNeedsHelper,
+              sellNeedsHelper,
+              executable: atomic || (!buyNeedsHelper && !sellNeedsHelper),
+              type: atomic ? 'route-atomic' : (sameChain ? 'route-same-chain' : 'route-bridged'),
+              atomic, token,
+              chain: src.chain, src: src.chain, dst: dst.chain,
+              buy: buyV, sell: sellV,
+              sizeIn: best.size, tokens: best.tokens, back: best.back,
+              spentUsd: best.spentUsd ?? toUsd(prices, srcId, best.size),
+              gotUsd: best.gotUsd ?? null,
+              gasUsd: srcGasUsd + (sameChain ? 0 : dstGasUsd),
+              netUsd: best.score,
+              fundedBy: { chain: src.chain.short, usable: fund.usable, balance: fund.balance },
+              needsFunding: fund.usable < best.size ? best.size - fund.usable : 0n,
+              call: best.atomicDetail ? { fn: best.atomicDetail.fn, args: best.atomicDetail.args } : null,
+              note: atomic
+                ? 'single transaction — reverts instead of losing if the edge moves'
+                : sameChain
+                  ? 'two transactions on one chain — no bridge, but not atomic'
+                  : 'buy, bridge, sell — the token is in the bridge until the relayer mints',
+            };
           });
         }
       }
     }
   }
+
+  for (const r of await mapPool(tasks, (t) => t(), concurrency)) if (r) out.push(r);
   return out.sort((a, b) => b.netUsd - a.netUsd);
 }
 

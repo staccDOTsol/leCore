@@ -159,11 +159,20 @@ export async function sellOnVenue(c, account, token, venue, amount, { slippageBp
     await pc.waitForTransactionReceipt({ hash: ah });
   }
 
-  const hash = venue.kind === 'curve'
-    ? await wc.writeContract({ address: PAD, abi: PAD_ABI, functionName: 'sell', args: [token, amount, minOut] })
-    : await wc.writeContract({
-        address: c.router, abi: ROUTER_ABI, functionName: 'sell',
-        args: [token, c.hook, amount, minOut, account.address, deadline(900)] });
+  // Preflight the real call, not just the view quote. The pad's quoteSell can
+  // return a price for a sell its state-changing path then rejects, and finding
+  // that out by broadcasting costs gas and strands the tokens mid-route.
+  const call = venue.kind === 'curve'
+    ? { address: PAD, abi: PAD_ABI, functionName: 'sell', args: [token, amount, minOut] }
+    : { address: c.router, abi: ROUTER_ABI, functionName: 'sell',
+        args: [token, c.hook, amount, minOut, account.address, deadline(900)] };
+  try {
+    await pc.simulateContract({ ...call, account: account.address });
+  } catch (e) {
+    throw new Error(`sell would revert on ${c.name} (${venue.kind}): ${String(e.shortMessage || e.message).split('\n')[0]}`);
+  }
+
+  const hash = await wc.writeContract(call);
 
   const rec = await pc.waitForTransactionReceipt({ hash });
   if (rec.status !== 'success') throw new Error(`sell reverted on ${c.name} (${hash})`);

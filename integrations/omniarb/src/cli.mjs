@@ -9,6 +9,7 @@
 //   omniarb run     --token 0x.. --live execute the best opportunity
 //   omniarb bridge  --token 0x.. --from Base --to Pol --amount 1000
 
+import { cpus } from 'node:os';
 import { formatEther, formatUnits, getAddress, parseEther } from 'viem';
 import { CHAINS, chainById, HOME_CHAIN, arbHelperFor } from './config.mjs';
 import { publicClient, loadAccount, allChains, supportsOverrides, verifyTokenLayout } from './chain.mjs';
@@ -283,7 +284,8 @@ async function routePass({ token, chains, minUsd, capUsd, relay = false, quiet =
     if (!quiet) console.log(`mobile capital over Relay: ${usdStr(mobileUsd)}\n`);
   }
 
-  let routes = await findRoutes(token, byChain, funds, { minUsd, capUsd, mobileUsd });
+  const concurrency = Number(flag('concurrency', String(Math.max(4, cpus().length * 4))));
+  let routes = await findRoutes(token, byChain, funds, { minUsd, capUsd, mobileUsd, concurrency });
   if (relay) routes = await priceRelayFunding(routes, funds, account.address);
   return { routes, account, byChain };
 }
@@ -310,6 +312,10 @@ function printRoutes(routes, limit = 10) {
     }
     console.log(`     ${r.note}`);
     if (r.atomic && !helperFor(r.chain).deployed) console.log(`     needs: omniarb deploy --chain ${r.chain.short} --live`);
+    else if (!r.executable) {
+      const where = r.buyNeedsHelper ? r.src.short : r.dst.short;
+      console.log(`     not takeable yet: hookless leg needs "omniarb deploy --chain ${where} --live"`);
+    }
     console.log('');
   }
 }
@@ -383,7 +389,9 @@ async function cmdFire() {
     if (wantAtomic && !r.atomic) return false;
     if (wantBridged && r.atomic) return false;
     if (r.funding === 'relay') return false; // reposition with `move` first, deliberately
-    return true;
+    // Hookless legs need the helper on that chain; atomic ones need it too.
+    if (r.atomic) return helperFor(r.chain).deployed;
+    return r.executable;
   });
   if (!wanted.length) { console.log('no route matches those filters.'); return; }
 
@@ -457,7 +465,10 @@ async function cmdWatch() {
       const { routes, account } = await routePass({ token, chains, minUsd, capUsd, relay: useRelay, quiet: true });
       // Relay-funded routes need a deliberate `move` first, so they are not
       // something the loop should take on its own.
-      const usable = routes.filter((r) => (atomicOnly ? r.atomic : true) && r.funding !== 'relay');
+      const usable = routes.filter((r) =>
+        (atomicOnly ? r.atomic : true)
+        && r.funding !== 'relay'          // needs a deliberate `move` first
+        && (r.executable || (r.atomic && helperFor(r.chain).deployed)));
       const best = usable[0] ?? null;
 
       if (!best) {
@@ -550,7 +561,7 @@ if (!cmd || !commands[cmd] || has('help')) {
   venues    --token 0x.. [--chain Pol]     every pool per CA per chain, with live price
   balances  [--token 0x..]                 wallet balances and gas prices
   bag       --token 0x..                   what your existing tokens are worth, and where to sell them
-  route     --token 0x.. [--relay] [--max-usd 5] [--min-usd 0]
+  route     --token 0x.. [--relay] [--max-usd 5] [--min-usd 0] [--concurrency N]
             funded routes: native you hold -> token -> bridge -> token -> native
             --relay also positions capital across chains through relay.link
   watch     --token 0x.. [--interval 60] [--relay] [--atomic] [--live]

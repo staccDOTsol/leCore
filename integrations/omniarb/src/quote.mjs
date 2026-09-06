@@ -43,11 +43,16 @@ let _cacheStamp = 0;
 export function resetQuoteCache() { _cache.clear(); _cacheStamp = Date.now(); }
 export const quoteCacheSize = () => _cache.size;
 
+/**
+ * Memoise the in-flight promise, not the resolved value.
+ *
+ * With the search running concurrently, several workers ask for the same quote
+ * at the same moment; caching only after resolution lets every one of them miss
+ * and fire its own RPC call, which is the bulk of the duplicate traffic.
+ */
 async function memo(key, fn) {
-  if (_cache.has(key)) return _cache.get(key);
-  const v = await fn();
-  _cache.set(key, v);
-  return v;
+  if (!_cache.has(key)) _cache.set(key, fn());
+  return _cache.get(key);
 }
 
 const venueKey = (v) => (v.kind === 'curve' ? 'curve' : v.poolId ?? `${v.key?.hooks}`);

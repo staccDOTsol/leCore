@@ -10,7 +10,9 @@
   "scripts": {
     "compile": "node scripts/compile.mjs",
     "scan": "node src/cli.mjs scan",
-    "balances": "node src/cli.mjs balances"
+    "balances": "node src/cli.mjs balances",
+    "desk": "node site/server.mjs",
+    "desk:live": "OMNIVIEW_WRITE=1 node site/server.mjs"
   },
   "dependencies": {
     "playwright": "^1.63.0",

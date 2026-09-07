@@ -1,0 +1,13 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "functions": {
+    "api/index.mjs": {
+      "memory": 1024,
+      "maxDuration": 60,
+      "includeFiles": "{site/public/**,build/**,live-config.json,deployments.json}"
+    }
+  },
+  "rewrites": [
+    { "source": "/(.*)", "destination": "/api/index" }
+  ]
+}

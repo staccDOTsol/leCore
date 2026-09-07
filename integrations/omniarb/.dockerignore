@@ -1,0 +1,7 @@
+node_modules
+.git
+*.log
+*.scratch.mjs
+state.json
+pending-mints.json
+api

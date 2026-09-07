@@ -67,3 +67,39 @@ export function ohlcv(address, chainId, type = '15m', hours = 24) {
   return get(`/defi/ohlcv?address=${address}&type=${type}&time_from=${from}&time_to=${now}`,
     chainId, { ttl: 30_000 });
 }
+
+/** Birdeye's own chain names, for the browser passthrough. */
+export const NAMES = new Set(Object.values(BIRDEYE_CHAIN).filter(Boolean));
+export const nameOf = (chainId) => BIRDEYE_CHAIN[Number(chainId)] ?? null;
+
+/**
+ * Raw passthrough for the browser.
+ *
+ * The desk's client core needs the same Birdeye surface the server uses, but
+ * shipping the key to the page would publish it to anyone with devtools. So the
+ * page asks for a path and a chain name and this process holds the credential —
+ * the allowlist is here rather than on the client for the same reason.
+ */
+const ALLOWED = new Set([
+  '/defi/price', '/defi/multi_price', '/defi/history_price',
+  '/defi/token_overview', '/defi/ohlcv',
+]);
+
+export async function passthrough(path, params, chain, { ttl = TTL } = {}) {
+  if (!ALLOWED.has(path)) throw new Error(`birdeye path not allowed: ${path}`);
+  if (!NAMES.has(chain)) throw new Error(`birdeye does not cover: ${chain}`);
+  const qs = new URLSearchParams(params).toString();
+  const url = `${BASE}${path}${qs ? `?${qs}` : ''}`;
+  const key = `${chain}:${url}`;
+  const hit = cache.get(key);
+  if (hit && Date.now() - hit.at < ttl) return hit.value;
+  const r = await fetch(url, {
+    headers: { 'X-API-KEY': KEY, 'x-chain': chain, accept: 'application/json' },
+    signal: AbortSignal.timeout(20_000),
+  });
+  if (!r.ok) throw new Error(`birdeye ${r.status}`);
+  const j = await r.json();
+  const value = j?.success === false ? null : (j.data ?? null);
+  cache.set(key, { at: Date.now(), value });
+  return value;
+}

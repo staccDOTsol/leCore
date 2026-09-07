@@ -1,0 +1,176 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>omniarb desk</title>
+<link rel="icon" href="/mark.svg" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Space+Grotesk:wght@500;700&display=swap" rel="stylesheet" />
+<style>
+  html, body { margin: 0; background: #08090b; }
+  body { font-family: "JetBrains Mono", ui-monospace, monospace; color: #e8e6e1; -webkit-font-smoothing: antialiased; }
+  a { color: #c9f24d; text-decoration: none; }
+  a:hover { color: #e4ff8f; text-decoration: underline; }
+  ::selection { background: #c9f24d; color: #08090b; }
+  input, select, textarea, button { font-family: inherit; }
+  @keyframes pulse { 0%,100% { opacity: 1 } 50% { opacity: .25 } }
+
+  .page { min-height: 100vh; padding: 0 0 64px;
+    background:
+      radial-gradient(1200px 400px at 12% -10%, #14180f 0%, rgba(8,9,11,0) 70%),
+      radial-gradient(900px 380px at 92% -6%, #0d1418 0%, rgba(8,9,11,0) 70%), #08090b; }
+  .wrap { max-width: 1440px; margin: 0 auto; padding: 0 20px; }
+
+  header.top { display: flex; flex-wrap: wrap; gap: 20px; align-items: flex-end;
+    justify-content: space-between; padding: 26px 0 18px; border-bottom: 1px solid #1c2027; }
+  .brand { display: flex; gap: 14px; align-items: center; min-width: 0; }
+  .brand img { width: 44px; height: 44px; border-radius: 10px; background: #101319; padding: 4px; box-sizing: border-box; }
+  .brand h1 { font-family: 'Space Grotesk', sans-serif; font-weight: 700; font-size: 26px;
+    letter-spacing: -.02em; line-height: 1; margin: 0; }
+  .brand h1 span { color: #5f6672; font-weight: 500; }
+  .brand p { color: #7d8590; font-size: 12px; margin: 5px 0 0; text-wrap: pretty; }
+
+  .pill { display: flex; gap: 8px; align-items: center; border: 1px solid #1e2530; background: #0d1014;
+    border-radius: 8px; padding: 7px 11px; font-size: 11px; color: #7d8590; }
+  .pill b { color: #e8e6e1; font-weight: 400; }
+  .dot { width: 7px; height: 7px; border-radius: 50%; background: #4de2a0; animation: pulse 2s ease-in-out infinite; }
+  .btn { border: 1px solid #2a3340; background: #12161c; color: #e8e6e1; border-radius: 8px;
+    padding: 8px 13px; font-size: 11px; cursor: pointer; }
+  .btn:hover { background: #1a2028; border-color: #3d4a5c; }
+  .btn.go { border-color: #3c4a20; background: #1a2110; color: #c9f24d; padding: 10px 16px; font-size: 12px; }
+  .btn.go:hover { background: #222b14; }
+  .btn.go[disabled] { opacity: .45; cursor: not-allowed; }
+  .btn.small { padding: 6px 10px; font-size: 11px; }
+  .btn.on { background: #1a2110; color: #c9f24d; border-color: #3c4a20; }
+  .btn.off { background: #12161c; color: #5f6672; }
+
+  .rail { display: grid; grid-template-columns: repeat(auto-fit, minmax(148px, 1fr)); gap: 8px; padding: 14px 0; }
+  .rail .c { border: 1px solid #1a1f27; background: linear-gradient(#0e1116, #0b0d11); border-radius: 10px; padding: 10px 11px; }
+  .rail .h { display: flex; justify-content: space-between; align-items: center; gap: 6px; }
+  .rail .h b { font-weight: 700; font-size: 12px; letter-spacing: .02em; }
+  .rail .s { width: 6px; height: 6px; border-radius: 50%; }
+  .rail .kv { font-size: 10px; color: #5f6672; margin-top: 3px; display: flex; justify-content: space-between; }
+  .rail .kv:first-of-type { margin-top: 7px; }
+  .rail .kv span:last-child { color: #a8b0bb; }
+
+  nav.tabs { display: flex; gap: 4px; border-bottom: 1px solid #1c2027; margin-top: 6px; overflow: auto; }
+  nav.tabs button { border: 0; background: transparent; color: #5f6672; border-bottom: 2px solid transparent;
+    padding: 11px 16px; font-size: 12px; cursor: pointer; letter-spacing: .02em; white-space: nowrap; }
+  nav.tabs button[aria-selected="true"] { background: #101419; color: #e8e6e1; border-bottom-color: #c9f24d; }
+  nav.tabs .sel { align-self: center; font-size: 11px; color: #5f6672; padding: 0 8px; white-space: nowrap; }
+
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 10px; padding: 16px 0 12px; }
+  .card { border: 1px solid #1a1f27; background: #0e1116; border-radius: 11px; padding: 13px 14px; }
+  .card.accent { border-color: #263019; background: linear-gradient(#111608, #0b0d11); }
+  .card .k { font-size: 10px; color: #5f6672; letter-spacing: .08em; text-transform: uppercase; }
+  .card .v { font-family: 'Space Grotesk', sans-serif; font-weight: 700; font-size: 22px; margin-top: 6px; }
+  .card.accent .v { color: #c9f24d; }
+  .card .n { font-size: 10.5px; color: #5f6672; margin-top: 3px; text-wrap: pretty; }
+
+  input[type=text], input[type=number], select, textarea {
+    background: #0d1014; border: 1px solid #1e2530; border-radius: 8px; color: #e8e6e1;
+    padding: 10px 12px; font-size: 12px; outline: none; box-sizing: border-box; }
+  input:focus, select:focus, textarea:focus { border-color: #3c4a20; }
+  label.f { display: block; font-size: 10px; color: #5f6672; letter-spacing: .08em; text-transform: uppercase; margin-bottom: 6px; }
+  .row { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
+  .grow { flex: 1; min-width: 260px; }
+
+  .table { border: 1px solid #1a1f27; border-radius: 12px; overflow: hidden; background: #0b0d11; }
+  .table .th, .table .tr { display: grid; gap: 8px; align-items: center; }
+  .table .th { padding: 11px 14px; background: #0e1116; border-bottom: 1px solid #1a1f27;
+    font-size: 10px; color: #5f6672; letter-spacing: .08em; text-transform: uppercase; }
+  .table .tr { padding: 12px 14px; border-bottom: 1px solid #14181e; font-size: 11.5px; }
+  .table .tr.pick { cursor: pointer; font-size: 12px; padding: 13px 14px; }
+  .table .tr.pick:hover { background: #12161c; }
+  .table .note { padding: 16px 14px; font-size: 11px; color: #5f6672; text-wrap: pretty; }
+  .r { text-align: right; }
+  .mut { color: #7d8590; } .dim { color: #5f6672; } .soft { color: #a8b0bb; }
+  .up { color: #4de2a0; } .down { color: #ff5f56; } .warn { color: #ffb040; } .acc { color: #c9f24d; }
+  .ell { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  .panel { border: 1px solid #1a1f27; background: linear-gradient(#0e1116, #0b0d11); border-radius: 12px; padding: 14px 16px; }
+  .panel.accent { border-color: #263019; background: linear-gradient(#111608, #0b0d11); }
+
+  /* chart */
+  .chartbox { position: relative; border: 1px solid #1a1f27; background: #0b0d11; border-radius: 12px; padding: 12px 14px 8px; }
+  .chartbox svg { display: block; width: 100%; }
+  .tip { position: absolute; pointer-events: none; z-index: 5; background: #0d1014; border: 1px solid #2a3340;
+    border-radius: 8px; padding: 9px 11px; font-size: 11px; min-width: 168px; box-shadow: 0 8px 24px rgba(0,0,0,.55); }
+  .tip .t { color: #5f6672; font-size: 10px; margin-bottom: 6px; }
+  .tip .l { display: flex; justify-content: space-between; gap: 12px; align-items: center; margin-top: 3px; }
+  .tip .sw { width: 8px; height: 8px; border-radius: 2px; display: inline-block; margin-right: 6px; }
+  .legend { display: flex; flex-wrap: wrap; gap: 6px; padding: 12px 0 4px; }
+  .legend button { display: flex; gap: 7px; align-items: center; border: 1px solid #1e2530; background: #0d1014;
+    color: #a8b0bb; border-radius: 7px; padding: 6px 10px; font-size: 11px; cursor: pointer; }
+  .legend button[aria-pressed="false"] { color: #4d545e; }
+  .legend button[aria-pressed="false"] .sw { opacity: .25; }
+  .legend .sw { width: 10px; height: 3px; border-radius: 2px; }
+  .legend .sw.fat { height: 5px; }
+
+  /* jobs */
+  .log { border: 1px solid #1a1f27; background: #0b0d11; border-radius: 10px; padding: 11px 13px;
+    font-size: 11px; color: #a8b0bb; max-height: 320px; overflow: auto; }
+  .log .s { display: flex; gap: 10px; padding: 2px 0; }
+  .log .s time { color: #4d545e; white-space: nowrap; }
+  .log .s span { text-wrap: pretty; word-break: break-word; }
+
+  footer.bot { margin-top: 26px; padding-top: 16px; border-top: 1px solid #1c2027; display: flex;
+    flex-wrap: wrap; gap: 12px; justify-content: space-between; font-size: 10.5px; color: #4d545e; }
+  .hidden { display: none !important; }
+</style>
+</head>
+<body>
+<div class="page"><div class="wrap">
+
+  <header class="top">
+    <div class="brand">
+      <img src="/mark.svg" alt="" />
+      <div style="min-width:0">
+        <h1>omniarb <span>desk</span></h1>
+        <p>live arbitrage surface for omnichain.family — nine chains, two v4 pools per CA, one 1:1 portal. nfa.</p>
+      </div>
+    </div>
+    <div class="row" style="gap:8px">
+      <div class="pill"><span class="dot"></span><b id="rpcUp">0/9</b> rpc</div>
+      <div class="pill">birdeye <span class="acc" id="beStatus">…</span></div>
+      <div class="pill" id="signer">read-only</div>
+      <button class="btn" id="refresh">refresh · <span id="tickText">live</span></button>
+    </div>
+  </header>
+
+  <div class="rail" id="rail"></div>
+
+  <nav class="tabs" id="tabs">
+    <button data-tab="board" aria-selected="true">board</button>
+    <button data-tab="chart" aria-selected="false">chart</button>
+    <button data-tab="venues" aria-selected="false">venues</button>
+    <button data-tab="routes" aria-selected="false">routes</button>
+    <button data-tab="curve" aria-selected="false">curve</button>
+    <button data-tab="launch" aria-selected="false">launch</button>
+    <button data-tab="bridge" aria-selected="false">bridge</button>
+    <button data-tab="bag" aria-selected="false">bag</button>
+    <div style="flex:1"></div>
+    <div class="sel" id="selLabel">no token selected</div>
+  </nav>
+
+  <section id="tab-board"></section>
+  <section id="tab-chart" class="hidden"></section>
+  <section id="tab-venues" class="hidden"></section>
+  <section id="tab-routes" class="hidden"></section>
+  <section id="tab-curve" class="hidden"></section>
+  <section id="tab-launch" class="hidden"></section>
+  <section id="tab-bridge" class="hidden"></section>
+  <section id="tab-bag" class="hidden"></section>
+
+  <footer class="bot">
+    <div>portal <a href="https://basescan.org/address/0xa3324d514708049883167aD817Db97Aefe29c96c" target="_blank" rel="noreferrer">0xa3324d…29c96c</a>
+      · burn on source, relayer mints on destination · writes are off unless this process was started with a key</div>
+    <div id="statusLine">booting</div>
+  </footer>
+
+</div></div>
+<script type="module" src="/desk.js"></script>
+</body>
+</html>

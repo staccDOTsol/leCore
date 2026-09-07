@@ -1,0 +1,32 @@
+# fly deploy from integrations/omniarb.
+#
+# Deliberately no [env] entry for STACCOVERFLOW_KP or OMNIVIEW_WRITE: a Fly app
+# is a public URL, and the write endpoints sign real transactions. Keep them on
+# the machine that holds the key.
+app = "omniarb-desk"
+primary_region = "iad"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  PORT = "8080"
+  HOST = "0.0.0.0"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = "suspend"
+  auto_start_machines = true
+  min_machines_running = 0
+
+  [[http_service.checks]]
+    interval = "30s"
+    timeout = "5s"
+    grace_period = "10s"
+    method = "GET"
+    path = "/api/me"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"

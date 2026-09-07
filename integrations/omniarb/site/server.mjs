@@ -860,15 +860,15 @@ async function txLaunch(body) {
   // What the relayer will charge to carry this across nine chains, and whether it
   // can. Refusing here is the point: the alternative is a launch that lands on
   // Base and then cannot be finished anywhere.
-  let owed = 0n; let funding = null;
+  let owed = 0n; let funding = null; let gate = { failure: null, requiredOnly: false, blocked: [] };
   if (predicted) {
     funding = await apiRelay({ action: 'relayerFunding', token: predicted }).catch(() => null);
     // The site answers this in two shapes. The new one quotes a complete launch
     // and is worth refusing on; the old one only reports what the relayer is
     // missing, and refusing on that would block every launch today.
     if (funding?.launchCostWei != null || funding?.quoteReady != null) {
-      const fail = fundingFailureOf(funding, oneSignature);
-      if (fail) throw new Error(`${fail} — nothing signed`);
+      gate = launchGate(funding, oneSignature);
+      if (gate.failure) throw new Error(`${gate.failure} — nothing signed`);
       owed = BigInt(funding.launchCostWei ?? '0');
     } else if (oneSignature && /^[0-9]+$/.test(String(funding?.totalToFundWei ?? ''))) {
       // The older relay does not quote a launch, but it does say what the
@@ -909,6 +909,9 @@ async function txLaunch(body) {
         : `the site has not shipped the one-signature launcher yet (${caps.unavailable}) — launching the two-step way`)
       : null,
     predicted, salt: userSalt,
+    // The seed loop reads this: with it, initialize opens the CA, the curve and
+    // the native pools everywhere and skips the extras the relayer cannot stock.
+    requiredOnly: gate.requiredOnly === true, blocked: gate.blocked ?? [],
     // What the relayer is short of right now, whether or not the launch pays it.
     relayerShortWei: funding?.totalToFundWei ?? null,
     relayerShortChains: funding?.shortChains ?? null,
@@ -916,27 +919,34 @@ async function txLaunch(body) {
   });
 }
 
-/** The site's own refusal rules, so a launch is not signed into a hole. */
-function fundingFailureOf(d, oneSignature) {
-  if (!d || d.httpOk === false) return d?.error ?? 'pool funding quote unavailable';
-  if (!Array.isArray(d.unreadable) || d.unreadable.length) {
-    return 'cannot verify funding on every chain; retry before paying';
-  }
-  // The relay only says `quoteReady` when it has something to say about it;
-  // today it quotes a complete launch without the field at all, and refusing on
-  // its absence blocked every launch while the number to pay sat right there.
-  if (d.quoteReady === false) {
-    const where = Array.isArray(d.quoteBlockedChains) ? d.quoteBlockedChains.join(', ') : '';
-    return `OMNI quote funding or price unavailable${where ? ` on ${where}` : ''}; retry before paying`;
-  }
+/**
+ * What the relayer's quote means for a launch that is about to be signed.
+ *
+ * There are two very different things in that reply and the site's own form
+ * treats them the same. One is "this launch cannot be priced" — no cost, no
+ * authorization, the quote unreachable — and signing through that is how you
+ * pay for a fan-out that never happens. The other is "the relayer is out of
+ * OMNI on three chains", which is inventory, on someone else's balance sheet,
+ * and refusing the launch over it makes the creator the site's treasury desk:
+ * stock the relayer, arbitrage its pools, then ask to launch. That is not one
+ * click and it is not their job.
+ *
+ * So only the first is a refusal. The second lands as requiredOnly: every
+ * chain still gets its CA, its curve and its native pools, and the OMNI,
+ * stable and memecoin extras are opened later, by whoever has the inventory,
+ * through the same initialize call.
+ */
+function launchGate(d, oneSignature) {
+  if (!d || d.httpOk === false) return { failure: d?.error ?? 'pool funding quote unavailable' };
   if (typeof d.launchCostWei !== 'string' || !/^[1-9][0-9]*$/.test(d.launchCostWei)) {
-    return 'complete launch cost unavailable; retry before paying';
+    return { failure: 'the relayer cannot price this launch right now; retry before paying' };
   }
   // Only the two-signature path needs the token-bound authorization blob.
   if (!oneSignature && (typeof d.fundingData !== 'string' || !/^0x(?:[0-9a-fA-F]{2})+$/.test(d.fundingData))) {
-    return 'token-bound funding authorization unavailable; retry before paying';
+    return { failure: 'token-bound funding authorization unavailable; retry before paying' };
   }
-  return null;
+  const blocked = [...new Set([...(d.quoteBlockedChains ?? []), ...(d.unreadable ?? [])])];
+  return { failure: null, requiredOnly: d.quoteReady !== true, blocked };
 }
 
 /** Read the new CA out of a launch receipt, the same way the bot does. */
@@ -1252,10 +1262,11 @@ async function apiLaunchReady(token) {
       hookedTpn: p?.hooked?.tokensPerNative ?? null, hooklessTpn: p?.hookless?.tokensPerNative ?? null,
       helper: Boolean(arbHelperFor(c)) };
   }));
+  const gate = launchGate(f, true);
   return jsonSafe({
-    quoteReady: f.quoteReady === true, blocked: f.quoteBlockedChains ?? [],
+    quoteReady: f.quoteReady === true, blocked: gate.blocked ?? f.quoteBlockedChains ?? [],
     launchCostWei: f.launchCostWei ?? null, relayer: RELAYER,
-    failure: fundingFailureOf(f, true), chains: rows,
+    failure: gate.failure, requiredOnly: gate.requiredOnly === true, chains: rows,
   });
 }
 

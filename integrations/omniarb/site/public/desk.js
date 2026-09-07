@@ -428,6 +428,7 @@ function go(tab) {
   if (tab === 'chart' && S.sel && !S.charts) loadCharts();
   if (tab === 'curve' && S.sel && !S.curve) loadCurve();
   if (tab === 'bridge') { loadBridgeBag(); if (!S.pending) loadPending(); }
+  if (tab === 'launch' && !S.ready) loadReady();
 }
 
 function paintRail() {
@@ -1761,6 +1762,7 @@ function mountLaunch() {
         </div>
         <button class="btn go" id="lnGo">launch</button>
       </div>
+      <div id="lnReady" class="dim" style="margin-top:10px;font-size:11px"></div>
     </div>
 
     <div class="panel" style="margin-bottom:12px">
@@ -1801,6 +1803,11 @@ function mountLaunch() {
       description: $('lnDesc').value.trim() || $('lnTagline').value.trim(),
       image: S.launchImage?.data ?? null, imageName: S.launchImage?.name ?? null });
     log(`${meta.generated ? 'generated a mark · ' : ''}${meta.logoURI}`);
+    // The site will not quote a launch until its relayer can pay for every
+    // pool on every chain. Whatever that takes from this wallet — OMNI where
+    // the relayer is short, a trade where two OMNI pools drifted apart — is
+    // done here first, and only then is the launch built.
+    if (!await prepareRelayer()) return;
     // `from` is not optional: without it the server cannot predict the CA, so it
     // cannot price the relayer's work and cannot simulate the call — which is
     // how a launch reached the wallet and came back as a bare "execution
@@ -1849,6 +1856,132 @@ function mountLaunch() {
     }
     guard(() => seedChain(Number(id), ca));
   });
+}
+
+/* ------------------------------------------------------------ readiness */
+
+const OMNI_CA = '0x9a5baA12664c89cFbF5cFcD9d0D4805bDcAB29E8';
+//
+// The launch is one signature, but the site only quotes it when its relayer can
+// pay for every pool on every chain — and OMNI is the quote asset in half of
+// them. What blocks that is fixable from the wallet about to launch: OMNI the
+// relayer is short of on a chain, and a chain whose two OMNI pools drifted more
+// than 5% apart. The launch button reads that state and repairs it, bridging
+// from wherever this wallet actually holds the funds, then launches. The person
+// pressed launch; that is the consent. Nothing here asks twice.
+
+async function loadReady(token = null) {
+  try { S.ready = await C.api('/api/launchready', token ? { token } : {}); }
+  catch (e) { S.ready = null; log('relayer readiness failed: ' + e.message, 'down'); }
+  paintReady();
+  return S.ready;
+}
+
+function paintReady() {
+  const el = $('lnReady');
+  if (!el) return;
+  const r = S.ready;
+  if (!r) { el.innerHTML = ''; return; }
+  const bad = r.chains.filter((c) => c.stockWei || c.drift || (!c.omniOk && c.omniError));
+  const lines = bad.map((c) => {
+    const bits = [];
+    if (c.stockWei) bits.push(`relayer holds ${C.fmtNum(c.omniHave, 0)} OMNI, needs ${C.fmtNum(c.omniNeed, 0)}`);
+    if (c.drift) bits.push(`OMNI pools ${c.gapBps} bps apart (${c.hookedTpn > c.hooklessTpn ? 'hooked' : 'hookless'} cheaper)`);
+    if (!bits.length && c.omniError) bits.push(c.omniError);
+    return `<div><b>${h(c.short)}</b> · ${h(bits.join(' · '))}</div>`;
+  }).join('');
+  el.innerHTML = r.quoteReady
+    ? `<span class="up">relayer ready</span> · launch cost ${C.fmtNum(Number(r.launchCostWei ?? 0) / 1e18, 5)} ETH`
+    : `<span class="warn">relayer not ready</span> — ${h(r.failure ?? 'the site cannot quote a launch yet')}. ` +
+      `pressing launch fixes what it can from your wallet first.${lines}`;
+}
+
+/** OMNI into the relayer's hands on one chain, from wherever this wallet has it. */
+async function stockOmni(ch) {
+  const tx = await C.apiPost('/api/tx/stockomni', { chain: ch.id, from: W.address, amountWei: ch.stockWei });
+  if (tx.error) throw new Error(tx.error);
+  log(`${ch.short}: relayer needs ${C.fmtNum(tx.amount, 0)} OMNI — ${tx.route === 'direct' ? 'sending it' : `bridging it from ${tx.via}`}`);
+  const done = await runSteps(tx.steps);
+  if (!done.length) throw new Error('cancelled');
+  if (tx.mintFrom) await requestMintFor(tx.mintFrom, done[0].hash);
+  log(`${ch.short}: relayer stocked`, 'up');
+}
+
+/** Two OMNI pools on one chain back within tolerance, trading from this wallet. */
+async function alignPools(ch, depth = 0) {
+  const tx = await C.apiPost('/api/tx/align', { chain: ch.id, from: W.address });
+  if (tx.error) throw new Error(tx.error);
+  if (!tx.steps?.length && !tx.short) { log(`${ch.short}: pools within tolerance`); return false; }
+  if (tx.short) {
+    if (depth > 1) { log(`${ch.short}: still short after bringing funds over — ${tx.short.what}`, 'down'); return false; }
+    // Every shortage in one pass — an align on Linea can need both the OMNI to
+    // sell and the gas to sell it with, and neither is on Linea yet.
+    for (const short of tx.shorts ?? [tx.short]) {
+    const need = (BigInt(short.needWei) * 11n) / 10n;
+    if (short.what === 'omni') {
+      if (!tx.source) { log(`${ch.short}: the align needs ${C.fmtNum(Number(need) / 1e18, 0)} OMNI here and no chain of yours holds that much`, 'down'); return false; }
+      log(`${ch.short}: bringing ${C.fmtNum(Number(need) / 1e18, 0)} OMNI over from ${tx.source.short} for the align`);
+      const b = await C.apiPost('/api/tx/bridge', { ca: OMNI_CA,
+        from: tx.source.id, to: ch.id, amount: String(Number(need) / 1e18), recipient: W.address });
+      if (b.error) throw new Error(b.error);
+      const done = await runSteps(b.steps);
+      if (!done.length) throw new Error('cancelled');
+      await requestMintFor(tx.source.id, done[0].hash);
+    } else {
+      log(`${ch.short}: the align needs ${C.fmtNum(Number(need) / 1e18, 4)} ${ch.nativeSymbol} here — bringing it over`);
+      const f = await C.apiPost('/api/tx/fundrelayer', { chain: ch.id, amountWei: need.toString(), from: W.address,
+        origin: W.chainId, recipient: W.address });
+      if (f.error) throw new Error(f.error);
+      const done = await runSteps(f.steps);
+      if (!done.length) throw new Error('cancelled');
+      if (f.route === 'relay') { log(`${ch.short}: waiting for Relay to land…`); await sleep(Math.min(90000, Math.max(15000, (f.seconds || 30) * 1500))); }
+    }
+    }
+    return alignPools(ch, depth + 1);
+  }
+  log(`${ch.short}: OMNI pools ${tx.gapBps} bps apart — ` +
+    tx.legs.map((l) => `${l.side} ${C.fmtNum(l.amount, 4)} ${l.unit} on the ${l.venue} pool`).join(', '));
+  const done = await runSteps(tx.steps);
+  if (!done.length) throw new Error('cancelled');
+  log(`${ch.short}: pools nudged`, 'up');
+  return true;
+}
+
+/**
+ * Get the relayer to where the site will quote the launch, then say so.
+ * Returns true when it is ready. Each pass repairs every chain it can and then
+ * re-reads; when nothing is left to do from here it waits for the site, which
+ * re-samples its price references on a five-minute clock.
+ */
+async function prepareRelayer() {
+  S.seedStop = false;
+  const stocked = new Set();
+  const aligned = new Map();
+  for (let round = 1; round <= 12; round += 1) {
+    const r = await loadReady();
+    if (!r) return false;
+    if (r.quoteReady) { log(`relayer can pay everywhere — launch costs ${C.fmtNum(Number(r.launchCostWei ?? 0) / 1e18, 5)} ETH`, 'up'); return true; }
+    if (round === 1) log(`relayer not ready: ${r.failure ?? 'the site cannot quote a launch yet'} — fixing what this wallet can`, 'warn');
+    let acted = 0;
+    for (const ch of r.chains) {
+      if (S.seedStop) return false;
+      try {
+        if (ch.stockWei && !stocked.has(ch.id)) { stocked.add(ch.id); await stockOmni(ch); acted += 1; }
+        if (ch.drift && (aligned.get(ch.id) ?? 0) < 2) {
+          aligned.set(ch.id, (aligned.get(ch.id) ?? 0) + 1);
+          if (await alignPools(ch)) acted += 1;
+        }
+      } catch (e) {
+        const m = String(e?.message ?? e);
+        if (/user rejected|denied|4001|cancelled/i.test(m)) { log('you cancelled — not launching', 'warn'); return false; }
+        log(`${ch.short}: ${m.split('\n')[0]}`, 'down');
+      }
+    }
+    if (!acted) log(`nothing more to fix from here — waiting for the site to re-read its quotes (${r.blocked?.join(' ') || '…'})`, 'warn');
+    await sleep(acted ? 15000 : 60000);
+  }
+  log(`relayer still not ready — ${S.ready?.failure ?? 'the site cannot quote a launch'}. not launching`, 'down');
+  return false;
 }
 
 /* ------------------------------------------------------------ seeding */

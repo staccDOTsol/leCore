@@ -1208,6 +1208,179 @@ async function apiSeedState(ca, address, hash) {
   });
 }
 
+// ------------------------------------------------------------ readiness
+//
+// The site will not quote a launch until its relayer can pay for every pool on
+// every chain — and OMNI is the quote asset in half of them. Two things block
+// that today, and both can be fixed by the wallet that is about to launch:
+// the relayer holding too little OMNI on a chain, and a chain's two OMNI pools
+// having drifted past the 5% the site tolerates between them. So the launch
+// button reads this first and repairs it before asking for the launch itself.
+
+const OMNI = EPOCH_TOKEN;
+const DRIFT_BPS = 500n;          // the site's PAIR_TOLERANCE_BPS
+const SETTLE_BPS = 150n;         // land this far inside it, not on the line
+
+/** OMNI's two native pools on a chain, priced, plus how far apart they are. */
+async function omniPools(c) {
+  const key = (hooks) => ({ currency0: NATIVE, currency1: getAddress(OMNI),
+    fee: POOL_FEE, tickSpacing: POOL_TICK_SPACING, hooks: getAddress(hooks) });
+  const [hooked, hookless] = await Promise.all([c.hook, NATIVE].map((h) =>
+    readPoolState(c, poolId(key(h))).catch(() => null)));
+  if (!hooked?.initialized || !hookless?.initialized) return { hooked, hookless, gapBps: null };
+  const [lo, hi] = hooked.sqrtPriceX96 < hookless.sqrtPriceX96
+    ? [hooked.sqrtPriceX96, hookless.sqrtPriceX96] : [hookless.sqrtPriceX96, hooked.sqrtPriceX96];
+  // Price is sqrt², so the gap the site measures is on the squares.
+  const gapBps = Number(((hi * hi - lo * lo) * 10000n) / (lo * lo));
+  return { hooked, hookless, gapBps };
+}
+
+async function apiLaunchReady(token) {
+  const f = await apiRelay({ action: 'relayerFunding', token: token ? getAddress(token) : undefined })
+    .catch((e) => ({ error: e.message, httpOk: false }));
+  const rows = await Promise.all(CHAINS.map(async (c) => {
+    const q = (f.chains ?? []).find((r) => Number(r.chainId) === c.id);
+    const o = q?.omni ?? null;
+    const have = o?.have != null ? BigInt(o.have) : null;
+    const need = o?.need != null ? BigInt(o.need) : null;
+    const stock = have != null && need != null && have < need ? (need * 11n) / 10n - have : 0n;
+    const p = await omniPools(c).catch(() => null);
+    return { id: c.id, short: c.short, name: c.name, nativeSymbol: c.nativeSymbol,
+      omniOk: o?.available === true, omniError: o?.error ?? null,
+      omniHave: num(have), omniNeed: num(need), stockWei: stock > 0n ? stock.toString() : null,
+      gapBps: p?.gapBps ?? null, drift: p?.gapBps != null && BigInt(p.gapBps) > DRIFT_BPS,
+      hookedTpn: p?.hooked?.tokensPerNative ?? null, hooklessTpn: p?.hookless?.tokensPerNative ?? null,
+      helper: Boolean(arbHelperFor(c)) };
+  }));
+  return jsonSafe({
+    quoteReady: f.quoteReady === true, blocked: f.quoteBlockedChains ?? [],
+    launchCostWei: f.launchCostWei ?? null, relayer: RELAYER,
+    failure: fundingFailureOf(f, true), chains: rows,
+  });
+}
+
+/** OMNI held by `who` on every chain, richest first. */
+async function omniBalances(who) {
+  const rows = await Promise.all(CHAINS.map(async (c) => ({
+    c, bal: await publicClient(c).readContract({ address: getAddress(OMNI), abi: ERC20_ABI,
+      functionName: 'balanceOf', args: [who] }).catch(() => 0n) })));
+  return rows.sort((a, b) => (b.bal > a.bal ? 1 : b.bal < a.bal ? -1 : 0));
+}
+
+/**
+ * Put OMNI in the relayer's hands on one chain, from wherever the wallet has it.
+ * On the chain itself it is a transfer; otherwise a burn on the richest chain
+ * that the relayer then mints to itself on the far side (the page asks for the
+ * mint straight after, as with any bridge).
+ */
+async function txStockOmni({ chain, from, amountWei }) {
+  const c = chainById(chain);
+  if (!c) throw new Error(`unknown chain ${chain}`);
+  const who = getAddress(from);
+  const wei = BigInt(amountWei);
+  if (wei <= 0n) throw new Error('amount must be positive');
+  const bals = await omniBalances(who);
+  const here = bals.find((b) => b.c.id === c.id)?.bal ?? 0n;
+  if (here >= wei) {
+    return jsonSafe({ route: 'direct', chainId: c.id, amount: num(wei), to: RELAYER,
+      steps: [step(`stock the relayer with OMNI on ${c.short}`, c, OMNI,
+        encodeFunctionData({ abi: ERC20_ABI, functionName: 'transfer', args: [getAddress(RELAYER), wei] }),
+        0n, `${C_fmt(wei)} OMNI — the quote asset it needs to open the OMNI pools here`)] });
+  }
+  const src = bals.find((b) => b.c.id !== c.id && b.bal >= wei)?.c
+    ?? (bals.find((b) => b.c.id === HOME_CHAIN && b.bal >= wei)?.c);
+  if (!src) {
+    throw new Error(`you hold ${C_fmt(here)} OMNI on ${c.short} and not ${C_fmt(wei)} on any one chain — ` +
+      bals.filter((b) => b.bal > 0n).map((b) => `${b.c.short} ${C_fmt(b.bal)}`).join(', '));
+  }
+  return jsonSafe({ route: 'bridge', chainId: c.id, mintFrom: src.id, via: src.short, amount: num(wei), to: RELAYER,
+    steps: [step(`bridge OMNI ${src.short} → ${c.short} for the relayer`, src, PORTAL,
+      encodeFunctionData({ abi: PORTAL_ABI, functionName: 'bridgeOut',
+        args: [getAddress(OMNI), BigInt(c.id), getAddress(RELAYER), wei] }),
+      0n, `burns on ${src.name}; the relayer mints ${C_fmt(wei)} OMNI to itself on ${c.name}`)] });
+}
+
+const C_fmt = (wei) => Number(formatUnits(wei, 18)).toLocaleString('en-US', { maximumFractionDigits: 0 });
+
+/**
+ * Bring a chain's two OMNI pools back within the site's tolerance.
+ *
+ * Where the OmniArb helper is deployed both pools are reachable and this is the
+ * bot's own two-leg arb: buy the cheap one, sell into the dear one, each moved
+ * halfway. Where it is not (most chains) only the hooked pool can be traded, so
+ * it is moved the whole way on its own — a buy if it is the cheap one, a sell
+ * if it is the dear one — and the wallet ends up holding what that leg bought
+ * or raised. The size comes from the pool's own liquidity: for a v4 pool at
+ * sqrt price S with liquidity L, moving S by a fraction f costs L·f/((1−f)·S)
+ * of native going in, or L·S·f of token going in.
+ */
+async function txAlign({ chain, from }) {
+  const c = chainById(chain);
+  if (!c) throw new Error(`unknown chain ${chain}`);
+  const who = getAddress(from);
+  const p = await omniPools(c);
+  if (p.gapBps == null) throw new Error(`OMNI does not have both pools on ${c.name}`);
+  if (BigInt(p.gapBps) <= DRIFT_BPS) return jsonSafe({ chainId: c.id, gapBps: p.gapBps, steps: [], legs: [], note: 'within tolerance' });
+
+  // tokensPerNative is sqrt²: the higher it is, the cheaper the token there.
+  const cheap = p.hooked.tokensPerNative > p.hookless.tokensPerNative ? 'hooked' : 'hookless';
+  const dear = cheap === 'hooked' ? 'hookless' : 'hooked';
+  const S = { hooked: p.hooked.sqrtPriceX96, hookless: p.hookless.sqrtPriceX96 };
+  const L = { hooked: p.hooked.liquidity, hookless: p.hookless.liquidity };
+  // Gap on sqrt prices, in bps; take it down to SETTLE_BPS inside the line.
+  const sqrtGap = ((S[cheap] - S[dear]) * 10000n) / S[dear];
+  const target = (DRIFT_BPS - SETTLE_BPS) / 2n;   // on the sqrt, half the price tolerance
+  const move = sqrtGap > target ? sqrtGap - target : 0n;
+  if (move <= 0n) return jsonSafe({ chainId: c.id, gapBps: p.gapBps, steps: [], legs: [], note: 'within tolerance' });
+
+  const Q96 = 1n << 96n;
+  const nativeToLower = (venue, fb) => (L[venue] * Q96 * fb) / ((10000n - fb) * S[venue]);   // buy: S falls by fb
+  const tokenToRaise = (venue, fb) => (L[venue] * S[venue] * fb) / (10000n * Q96);          // sell: S rises by fb
+  const helper = arbHelperFor(c);
+  const legs = [];
+  if (helper) {
+    const half = (move + 1n) / 2n;
+    legs.push({ venue: cheap, side: 'buy', wei: nativeToLower(cheap, half) });
+    legs.push({ venue: dear, side: 'sell', wei: tokenToRaise(dear, half) });
+  } else if (cheap === 'hooked') {
+    legs.push({ venue: 'hooked', side: 'buy', wei: nativeToLower('hooked', move) });
+  } else {
+    legs.push({ venue: 'hooked', side: 'sell', wei: tokenToRaise('hooked', move) });
+  }
+
+  // What the wallet must hold on this chain for the legs, and whether it does.
+  const pc = publicClient(c);
+  const [nativeHave, omniHave, gasPrice] = await Promise.all([
+    pc.getBalance({ address: who }).catch(() => 0n),
+    pc.readContract({ address: getAddress(OMNI), abi: ERC20_ABI, functionName: 'balanceOf', args: [who] }).catch(() => 0n),
+    pc.getGasPrice().catch(() => 0n),
+  ]);
+  const nativeNeed = legs.filter((l) => l.side === 'buy').reduce((a, l) => a + l.wei, 0n) + gasPrice * 400_000n * BigInt(legs.length);
+  const omniNeed = legs.filter((l) => l.side === 'sell').reduce((a, l) => a + l.wei, 0n);
+  const shorts = [];
+  if (omniHave < omniNeed) shorts.push({ what: 'omni', needWei: (omniNeed - omniHave).toString(), haveWei: omniHave.toString() });
+  if (nativeHave < nativeNeed) shorts.push({ what: 'native', needWei: (nativeNeed - nativeHave).toString(), haveWei: nativeHave.toString() });
+  const brief = legs.map((l) => ({ venue: l.venue, side: l.side, amount: num(l.wei),
+    unit: l.side === 'buy' ? c.nativeSymbol : 'OMNI' }));
+  if (shorts.length) {
+    // Where the wallet does hold the OMNI, so the page can bring it over first.
+    const omniShort = shorts.find((x) => x.what === 'omni');
+    const source = omniShort
+      ? (await omniBalances(who)).find((b) => b.c.id !== c.id && b.bal >= BigInt(omniShort.needWei))?.c ?? null
+      : null;
+    return jsonSafe({ chainId: c.id, gapBps: p.gapBps, cheap, legs: brief, steps: [], short: shorts[0], shorts,
+      source: source ? { id: source.id, short: source.short } : null });
+  }
+
+  const steps = [];
+  for (const l of legs) {
+    const t = await txTrade({ ca: OMNI, chain: c.id, venue: l.venue, side: l.side,
+      amount: formatUnits(l.wei, 18), from: who, slippageBps: 3000 });
+    steps.push(...t.steps);
+  }
+  return jsonSafe({ chainId: c.id, gapBps: p.gapBps, cheap, legs: brief, steps, short: null });
+}
+
 /**
  * Move one chain's share of the float to the relayer.
  *
@@ -1273,10 +1446,16 @@ async function txSeed({ ca, chain, from, amountWei, amount, donate }) {
  * in words: "relayer short on Arbitrum: has …, needs …, send … more". Nothing
  * else in the flow can proceed, and it is a plain native transfer to fix.
  */
-async function txFundRelayer({ chain, amountWei, from, prefer, origin }) {
+async function txFundRelayer({ chain, amountWei, from, prefer, origin, recipient }) {
   const c = chainById(chain);
   if (!c) throw new Error(`unknown chain ${chain}`);
   const wei = BigInt(amountWei);
+  // Gas goes to the relayer, or back to the wallet that is paying — the same
+  // Relay hop lands native on a chain the wallet has never been on, which is
+  // what an align on Polygon needs before it can trade there.
+  const dest = recipient ? getAddress(recipient) : getAddress(RELAYER);
+  if (from && dest !== getAddress(from) && dest !== getAddress(RELAYER)) throw new Error('recipient must be you or the relayer');
+  const who_ = dest === getAddress(RELAYER) ? 'the relayer' : 'you';
   if (wei <= 0n) throw new Error('amount must be positive');
   // A cap, because this is parsed out of someone else's error string and the
   // shortfalls are cents: nothing here should ever be able to send real money.
@@ -1287,9 +1466,9 @@ async function txFundRelayer({ chain, amountWei, from, prefer, origin }) {
 
   const direct = () => jsonSafe({
     route: 'direct', chainId: c.id,
-    steps: [step(`send gas to the relayer on ${c.short}`, c, RELAYER, '0x', wei,
+    steps: [step(`send gas to ${who_} on ${c.short}`, c, dest, '0x', wei,
       `${formatUnits(wei, 18)} ${c.nativeSymbol} so it can open the pools`)],
-    amount: num(wei), to: RELAYER,
+    amount: num(wei), to: dest,
   });
   if (!from) return direct();
 
@@ -1340,19 +1519,25 @@ async function txFundRelayer({ chain, amountWei, from, prefer, origin }) {
       // EXACT_OUTPUT: the relayer needs this much on the far side, not "about
       // this much minus the bridge fee".
       const q = await quoteNative({ from: src, to: c, amount: wei, address: who,
-        recipient: getAddress(RELAYER), tradeType: 'EXACT_OUTPUT' });
+        recipient: dest, tradeType: 'EXACT_OUTPUT' });
       const steps = [];
       for (const st of q.steps ?? []) {
         for (const item of st.items ?? []) {
           if (item.status === 'complete' || !item.data?.to) continue;
           steps.push(step(`${st.action ?? 'relay'} on ${src.short}`, src, item.data.to,
             item.data.data ?? '0x', BigInt(item.data.value ?? '0'),
-            `bridges ${formatUnits(wei, 18)} ${c.nativeSymbol} to the relayer on ${c.name}`));
+            `bridges ${formatUnits(wei, 18)} ${c.nativeSymbol} to ${who_} on ${c.name}`));
         }
       }
       if (!steps.length) throw new Error('relay returned no transaction to send');
+      // The quote does not know what the wallet holds; a hop it cannot pay for
+      // reaches the wallet as an insufficient-funds revert on a chain the person
+      // did not choose. The next richest chain is the one to try instead.
+      const bal = balances.find((b) => b?.src.id === src.id)?.bal ?? 0n;
+      const cost = steps.reduce((a, st) => a + BigInt(st.value), 0n);
+      if (bal < cost + cost / 50n) throw new Error(`holds ${formatUnits(bal, 18)} ${src.nativeSymbol}, the hop needs ${formatUnits(cost, 18)}`);
       return jsonSafe({
-        route: 'relay', chainId: src.id, via: src.short, to: RELAYER, amount: num(wei),
+        route: 'relay', chainId: src.id, via: src.short, to: dest, amount: num(wei),
         spend: num(q.amountIn), costUsd: q.costUsd, seconds: q.timeEstimate, steps,
       });
     } catch (e) {
@@ -1724,6 +1909,7 @@ const routes = {
   '/api/pending': (q) => apiPending(q.get('address'), q.get('lookback'), q.get('chain')),
   '/api/pools': (q) => apiPools(q.get('ca'), q.get('chain')),
   '/api/seedstate': (q) => apiSeedState(q.get('ca'), q.get('address'), q.get('hash')),
+  '/api/launchready': (q) => apiLaunchReady(q.get('token')),
   // Name and symbol off the contract, logo off the site's index: a CA seeded in
   // a later session has no launch form to read them from, and the remote deploy
   // cannot be made without them.
@@ -1748,6 +1934,8 @@ const writeRoutes = {
   '/api/tx/bridge': (b) => txBridge(b),
   '/api/tx/seed': (b) => txSeed(b),
   '/api/tx/fundrelayer': (b) => txFundRelayer(b),
+  '/api/tx/stockomni': (b) => txStockOmni(b),
+  '/api/tx/align': (b) => txAlign(b),
   '/api/tx/launch': (b) => txLaunch(b),
   '/api/metadata': (b) => apiMetadata(b),
   '/api/relay': (b) => apiRelay(b),

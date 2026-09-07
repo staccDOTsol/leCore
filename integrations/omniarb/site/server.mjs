@@ -865,6 +865,12 @@ async function txLaunch(body) {
       const fail = fundingFailureOf(funding, oneSignature);
       if (fail) throw new Error(`${fail} — nothing signed`);
       owed = BigInt(funding.launchCostWei ?? '0');
+    } else if (oneSignature && /^[0-9]+$/.test(String(funding?.totalToFundWei ?? ''))) {
+      // The older relay does not quote a launch, but it does say what the
+      // relayer is short of across every chain. On a one-signature launcher
+      // that is the number worth paying: it is the difference between a token
+      // that fans out by itself and one that waits for somebody to notice.
+      owed = BigInt(funding.totalToFundWei);
     }
   }
 
@@ -951,13 +957,40 @@ async function apiLaunched({ hash }) {
  * an address baked in here becomes a dead contract that reverts every launch
  * with an unnamed custom error. Asking costs one request and cannot go stale.
  */
+/**
+ * The gate is the authority on which launcher is live.
+ *
+ * The site's own frontend config lags it — right now that config names
+ * 0x25538e30, the gate names 0x15973D89, and the factory answers the first with
+ * NotLauncher(). Every launch reverted for that reason and the error said
+ * nothing about it. So the address is read from the gate, which cannot be
+ * behind, and the version is probed rather than assumed.
+ */
+const GATE = '0x53064B36C663dDB18e1c8aafb3169A3B6d268867';
+const GATE_ABI = [{ type: 'function', name: 'launcher', stateMutability: 'view', inputs: [], outputs: [{ type: 'address' }] }];
+const DEST_CURVE_ABI = [{ type: 'function', name: 'DEST_CURVE_CHAINS', stateMutability: 'view', inputs: [], outputs: [{ type: 'uint256' }] }];
+
+async function launcherFromGate() {
+  const c = chainById(HOME_CHAIN);
+  const pc = publicClient(c);
+  const address = await pc.readContract({ address: getAddress(GATE), abi: GATE_ABI, functionName: 'launcher' });
+  if (!address || address === NATIVE) return null;
+  // A v3 launcher answers DEST_CURVE_CHAINS(); a v2 one does not. That probe is
+  // how the site itself decides, and it needs no deploy to start working.
+  const destCurveChains = await pc.readContract({ address, abi: DEST_CURVE_ABI, functionName: 'DEST_CURVE_CHAINS' })
+    .then((n) => Number(n)).catch(() => null);
+  return { address: getAddress(address), oneSignature: destCurveChains != null, destCurveChains, source: 'gate' };
+}
+
 async function apiLauncher() {
+  // The site's own answer first, when it has one — it knows more than the gate
+  // does about how it wants to be called.
   const r = await relayPost({ action: 'launcher' });
-  // "bad action" is the honest answer from a site that has not shipped the
-  // one-signature launcher yet. That is a capability report, not a failure —
-  // the older two-step path still works and is what runs until it lands.
-  if (!r.ok) return { launcher: null, unavailable: r.data?.error ?? `http ${r.status}` };
-  return r.data;
+  if (r.ok && r.data?.launcher?.address) return { ...r.data, launcher: { ...r.data.launcher, source: 'relay' } };
+
+  const gate = await launcherFromGate().catch(() => null);
+  if (gate) return { launcher: gate, unavailable: r.data?.error ?? `http ${r.status}` };
+  return { launcher: null, unavailable: r.data?.error ?? `http ${r.status}` };
 }
 
 /** POST to the site's relay, with the shape the rest of this file expects back. */

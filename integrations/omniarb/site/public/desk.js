@@ -1801,10 +1801,16 @@ function mountLaunch() {
       description: $('lnDesc').value.trim() || $('lnTagline').value.trim(),
       image: S.launchImage?.data ?? null, imageName: S.launchImage?.name ?? null });
     log(`${meta.generated ? 'generated a mark · ' : ''}${meta.logoURI}`);
-    const tx = await C.apiPost('/api/tx/launch', { name, symbol,
+    // `from` is not optional: without it the server cannot predict the CA, so it
+    // cannot price the relayer's work and cannot simulate the call — which is
+    // how a launch reached the wallet and came back as a bare "execution
+    // reverted" with nothing to go on.
+    const tx = await C.apiPost('/api/tx/launch', { name, symbol, from: W.address,
       tagline: $('lnTagline').value.trim(), logoURI: meta.logoURI,
       targetRaiseEth: $('lnRaise').value.trim() || '0.06',
       creatorBuyEth: $('lnBuy').value.trim() || '0' });
+    log(`launcher ${C.short(tx.launcher)}${tx.oneSignature ? ' · one signature' : ''}` +
+      `${tx.relayerCost ? ` · paying the relayer ${C.fmtNum(tx.relayerCost, 5)} ETH for the nine-chain fan-out` : ''}`);
     const done = await runSteps(tx.steps);
     if (!done.length) return;
     const r = await C.apiPost('/api/launched', { hash: done[0].hash });

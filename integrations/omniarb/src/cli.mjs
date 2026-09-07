@@ -22,7 +22,7 @@ import { helperFor, resetQuoteCache } from './quote.mjs';
 import { deployHelper, executeAtomic, executeRoute, sellOnVenue, passesGuards } from './exec.mjs';
 import { bridge, pendingMints, clearPendingMint, findUnmintedBurns, retryMint, mintProcessed } from './bridge.mjs';
 import { fetchLiveConfig, writeLiveConfig, diffAgainst } from './refresh.mjs';
-import { uploadMetadata, launchOnBase, seedAll, saltFor, LAUNCH_FEE_WEI } from './launch.mjs';
+import { uploadMetadata, launchOnBase, seedAll, saltFor, recoverMeta, LAUNCH_FEE_WEI } from './launch.mjs';
 import { ERC20_ABI } from './config.mjs';
 
 const argv = process.argv.slice(2);
@@ -542,8 +542,14 @@ async function cmdLaunch() {
 
   if (has('seed-only')) {
     const token = getAddress(String(flag('token') ?? die('pass --token with --seed-only')));
-    console.log(`\nseeding ${token} across ${CHAINS.length} chains\n`);
-    const r = await seedAll({ account, token, dryRun: !live, onStep: (m) => console.log(`  ${m}`) });
+    // A resumed seed still needs metadata: chains missing the token have to be
+    // deployed before anything can be bridged to them.
+    const meta = await recoverMeta(token);
+    if (meta && flag('logo') && flag('logo') !== true) meta.logoURI = String(flag('logo'));
+    console.log(`\nseeding ${token} across ${CHAINS.length} chains`);
+    if (meta) console.log(`  ${meta.name} (${meta.symbol})${meta.logoURI ? '' : ' — no logo found; pass --logo for chains needing a deploy'}\n`);
+    else console.log('  could not recover metadata — chains without the token cannot be deployed\n');
+    const r = await seedAll({ account, token, meta, dryRun: !live, onStep: (m) => console.log(`  ${m}`) });
     console.log(`\nfloat: ${formatUnits(r.held, 18)} held, ${formatUnits(r.perChain, 18)} per chain`);
     if (r.dryRun) console.log('dry run — re-run with --live');
     return;
@@ -841,7 +847,7 @@ if (!cmd || !commands[cmd] || has('help')) {
   refresh                                                      re-scrape the live contract map (their routers move)
   launch    --name "x" --symbol X --image a.png [--buy 0.018] [--target 0.06] [--live]
             upload art, create on Base, seed hooked+hookless pools on all 9 chains
-  launch    --seed-only --token 0x.. [--live]                   resume seeding an existing token
+  launch    --seed-only --token 0x.. [--logo URL] [--live]      resume seeding an existing token
 
 Nothing sends a transaction unless you pass --live.
 The wallet key is read from STACCOVERFLOW_KP and is never logged.`);

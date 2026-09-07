@@ -271,6 +271,35 @@ export async function deployRemote({ chainId, name, symbol, tagline, logoURI, cr
   return { hash: res.data?.hash ?? null, address: res.data?.address ?? null, skipped: res.data?.skipped === true };
 }
 
+/**
+ * Recover a token's launch metadata so a resumed seed can still deploy it.
+ *
+ * `--seed-only` picks up a launch someone else (or an earlier run) started, so
+ * it has no metadata in hand — and without it the remote deploy cannot be made
+ * at all. name and symbol come off the contract; the logo comes from the site's
+ * index, which is the same URI the original launch registered.
+ */
+export async function recoverMeta(token) {
+  const pc = publicClient(chainById(HOME_CHAIN));
+  const nameAbi = [{ type: 'function', name: 'name', stateMutability: 'view', inputs: [], outputs: [{ type: 'string' }] }];
+  const [name, symbol] = await Promise.all([
+    pc.readContract({ address: token, abi: nameAbi, functionName: 'name' }).catch(() => null),
+    pc.readContract({ address: token, abi: ERC20_ABI, functionName: 'symbol' }).catch(() => null),
+  ]);
+  if (!name || !symbol) return null;
+
+  let logoURI = '';
+  let tagline = '';
+  try {
+    const r = await fetch(`${API}/api/launches`, { signal: AbortSignal.timeout(20_000) });
+    const j = await r.json();
+    const hit = (j.tokens || []).find((t) => t.address?.toLowerCase() === token.toLowerCase());
+    if (hit) { logoURI = hit.logoURI ?? ''; tagline = hit.tagline ?? ''; }
+  } catch { /* index unavailable; caller can still pass --logo */ }
+
+  return { name, symbol, tagline, logoURI };
+}
+
 /** Does the token exist on this chain yet? */
 export async function isDeployedOn(chain, token) {
   try {

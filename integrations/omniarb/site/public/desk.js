@@ -18,7 +18,7 @@ const S = {
   tokens: [], live: {}, be: {}, supplies: {}, pools: {}, poolScan: 0, scan: '', boot: 'booting',
   sort: { key: 'mcap', dir: 'desc' },
   supplyMiss: new Set(), seedStop: false, seedRunning: false,
-  seedShareWei: null, fundedThisRun: new Set(),
+  seedShareWei: null, fundedThisRun: new Map(),
   sel: null, venues: [], beTok: null, dec: 18,
   charts: null, chartHours: 24, chartType: '15m', hiddenChains: new Set(), chartBusy: false,
   size: 50, bridged: true, hookless: true,
@@ -1616,7 +1616,10 @@ async function seedChain(chainId, ca) {
   } else if (!st.funded && !(st.hooked && st.hookless)) {
     // Only ever moved once: the relayer already holding this chain's share is
     // the check that stops a resumed run handing it another ninth for free.
-    if (!S.seedShareWei) throw new Error('no share fixed for this run — press seed again');
+    // A single-chain step outside a run has no fixed share yet; take the one on
+    // screen rather than letting the server derive a fresh, smaller one.
+    S.seedShareWei ??= (S.seed?.shareWei && S.seed.shareWei !== '0') ? S.seed.shareWei : null;
+    if (!S.seedShareWei) throw new Error('no float on Base to split — connect the launching wallet');
     const tx = await C.apiPost('/api/tx/seed', { ca, chain: chainId, from: W.address,
       amountWei: S.seedShareWei });
     // Log what the server actually built, not what this end believed it asked
@@ -1635,8 +1638,12 @@ async function seedChain(chainId, ca) {
     // "relayer short on X" is not a failure to retry: nothing changes until
     // somebody sends it gas, so the loop would spin here forever otherwise.
     const short = shortfallOf(r.hooked?.reason) ?? shortfallOf(r.hookless?.reason);
-    if (short && !S.fundedThisRun.has(chainId)) {
-      S.fundedThisRun.add(chainId);
+    // Twice per chain per run: gas moves between the estimate and the send, so
+    // one top-up can land just short. Beyond that something else is wrong and
+    // spending more will not fix it.
+    const tries = S.fundedThisRun.get(chainId) ?? 0;
+    if (short && tries < 2) {
+      S.fundedThisRun.set(chainId, tries + 1);
       if (await fundRelayer(chainId, short)) {
         await sleep(3000);
         const again = await C.apiPost('/api/relay', { action: 'wall', chainId, token: ca });
@@ -1723,7 +1730,7 @@ async function runSeed(ca) {
   if (!W.address) { await connect(); if (!W.address) return; }
   S.seedStop = false;
   S.seedRunning = true;
-  S.fundedThisRun = new Set();
+  S.fundedThisRun = new Map();
   paintSeed();
 
   try {

@@ -48,8 +48,30 @@ export function loadAccount() {
   return privateKeyToAccount(hex);
 }
 
+/**
+ * Wallet client whose sends carry an explicitly tracked nonce.
+ *
+ * Every write goes through `nextNonce`, and any failure resets the cached value
+ * so the following attempt re-reads it from the chain rather than compounding a
+ * bad guess. Wrapping the client means every send site gets this — there is no
+ * way to forget it at one of them.
+ */
 export function walletClient(c, account) {
-  return createWalletClient({ account, chain: viemChain(c), transport: transportFor(c) });
+  const wc = createWalletClient({ account, chain: viemChain(c), transport: transportFor(c) });
+  const withNonce = (fn) => async (args = {}) => {
+    const nonce = args.nonce ?? await nextNonce(c, account.address);
+    try {
+      return await fn({ ...args, nonce });
+    } catch (e) {
+      resetNonce(c);
+      throw e;
+    }
+  };
+  return Object.assign(Object.create(wc), {
+    writeContract: withNonce(wc.writeContract.bind(wc)),
+    sendTransaction: withNonce(wc.sendTransaction.bind(wc)),
+    deployContract: withNonce(wc.deployContract.bind(wc)),
+  });
 }
 
 // ------------------------------------------------------- state overrides
@@ -105,6 +127,34 @@ export async function supportsOverrides(c) {
     return BigInt(r.data || '0x0') === 777n;
   } catch { return false; }
 }
+
+// ------------------------------------------------------------ nonce tracking
+//
+// Letting viem fetch the nonce per transaction breaks under a failover
+// transport: consecutive sends can read eth_getTransactionCount from nodes at
+// different heights, so a send lands with a nonce the chain has already used.
+// That surfaces as "nonce too low" at best and an opaque "Missing or invalid
+// parameters" at worst — which is what silently dropped five of eight sells in
+// a bulk liquidation.
+//
+// So the nonce is tracked here: read once per chain, then handed out in order
+// and advanced locally.
+
+const _nonce = new Map();
+
+/** Next nonce for this chain, reserved and advanced locally. */
+export async function nextNonce(c, address) {
+  if (!_nonce.has(c.id)) {
+    const n = await publicClient(c).getTransactionCount({ address, blockTag: 'pending' });
+    _nonce.set(c.id, n);
+  }
+  const n = _nonce.get(c.id);
+  _nonce.set(c.id, n + 1);
+  return n;
+}
+
+/** Drop the cached nonce so the next send re-reads it from the chain. */
+export function resetNonce(c) { _nonce.delete(c.id); }
 
 export const deadline = (secs = 600) => BigInt(Math.floor(Date.now() / 1000) + secs);
 

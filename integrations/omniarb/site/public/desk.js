@@ -1227,18 +1227,18 @@ addEventListener('eip6963:announceProvider', (e) => {
 dispatchEvent(new Event('eip6963:requestProvider'));
 
 function pickProvider() {
-  if (W.providers.length === 1) return W.providers[0].provider;
-  if (W.providers.length > 1) {
-    const names = W.providers.map((p, i) => `${i + 1}. ${p.info.name}`).join('\n');
-    const n = Number(prompt(`which wallet?\n${names}`, '1'));
-    return (W.providers[n - 1] ?? W.providers[0]).provider;
+  if (W.providers.length) {
+    if (W.providers.length > 1) {
+      log(`wallets found: ${W.providers.map((p) => p.info.name).join(', ')} — using ${W.providers[0].info.name}`);
+    }
+    return W.providers[0].provider;
   }
   return window.ethereum ?? null;
 }
 
 async function connect() {
   const p = pickProvider();
-  if (!p) { alert('no wallet found — install MetaMask, Rabby, or anything EIP-1193'); return; }
+  if (!p) { log('no wallet found — install MetaMask, Rabby, or anything EIP-1193', 'down'); return; }
   W.provider = p;
   const accounts = await p.request({ method: 'eth_requestAccounts' });
   W.address = accounts[0];
@@ -1532,7 +1532,7 @@ function mountLaunch() {
 
   $('lnGo').onclick = () => guard(async () => {
     const name = $('lnName').value.trim(); const symbol = $('lnSymbol').value.trim();
-    if (!name || !symbol) { alert('name and ticker are required'); return; }
+    if (!name || !symbol) { log('name and ticker are required', 'down'); return; }
     if (!W.address) { await connect(); if (!W.address) return; }
     log(`uploading metadata for ${symbol}…`);
     const meta = await C.apiPost('/api/metadata', { name, symbol,
@@ -1556,7 +1556,7 @@ function mountLaunch() {
 
   $('lnSeedLoad').onclick = () => {
     const ca = $('lnSeedCa').value.trim();
-    if (!/^0x[0-9a-fA-F]{40}$/.test(ca)) { alert('need a 0x address'); return; }
+    if (!/^0x[0-9a-fA-F]{40}$/.test(ca)) { log('that is not a 0x address', 'down'); return; }
     loadSeedState(ca);
   };
   $('lnSeedGo').onclick = () => guard(() => runSeed($('lnSeedCa').value.trim()));
@@ -1704,11 +1704,7 @@ function shortfallOf(text) {
 async function fundRelayer(chainId, wei) {
   const c = C.byId[chainId];
   const amount = Number(wei) / 1e18;
-  if (!confirm(`the relayer cannot pay for gas on ${c.name}.\n\n` +
-      `send it ${amount.toPrecision(4)} ${c.gas} so it can open the pools?`)) {
-    log(`${c.short}: declined to fund the relayer — its pools stay closed`, 'warn');
-    return false;
-  }
+  log(`${c.short}: relayer cannot pay for the wall — sending it ${amount.toPrecision(4)} ${c.gas}`, 'warn');
   const tx = await C.apiPost('/api/tx/fundrelayer', { chain: chainId, amountWei: wei.toString() });
   const done = await runSteps(tx.steps);
   if (done.length) { log(`${c.short}: relayer funded`, 'up'); return true; }
@@ -1726,7 +1722,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
  * only stops when the state says complete, the rounds run out, or you stop it.
  */
 async function runSeed(ca) {
-  if (!/^0x[0-9a-fA-F]{40}$/.test(ca)) { alert('need a 0x address'); return; }
+  if (!/^0x[0-9a-fA-F]{40}$/.test(ca)) { log('that is not a 0x address', 'down'); return; }
   if (!W.address) { await connect(); if (!W.address) return; }
   S.seedStop = false;
   S.seedRunning = true;
@@ -1850,9 +1846,9 @@ function mountBridge() {
     const ca = $('brCa').value.trim();
     const from = Number($('brFrom').value); const to = Number($('brTo').value);
     const amount = $('brAmt').value.trim();
-    if (!/^0x[0-9a-fA-F]{40}$/.test(ca)) { alert('need a token address'); return; }
-    if (from === to) { alert('source and destination are the same chain'); return; }
-    if (!amount || Number(amount) <= 0) { alert('set an amount'); return; }
+    if (!/^0x[0-9a-fA-F]{40}$/.test(ca)) { log('that is not a token address', 'down'); return; }
+    if (from === to) { log('source and destination are the same chain', 'down'); return; }
+    if (!amount || Number(amount) <= 0) { log('set an amount', 'down'); return; }
     if (!W.address) { await connect(); if (!W.address) return; }
     const tx = await C.apiPost('/api/tx/bridge', { ca, from, to, amount, recipient: W.address });
     const done = await runSteps(tx.steps);

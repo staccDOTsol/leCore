@@ -927,6 +927,62 @@ async function txLaunch(body) {
 }
 
 /**
+ * The numbers a launch is actually shaped by, read from the contracts.
+ *
+ * How much of a token's supply ends up on the curves rather than in pools is
+ * not a setting anyone can pass: OmniLaunch mints
+ * `supply * (1 + DEST_CURVE_CHAINS + POOL_SUPPLY_MULTIPLE)` and the multiple is
+ * a constant in its source. So the split is reported rather than offered, with
+ * the constant that would change it, and the form spends its space on the
+ * levers that do bind — the target raise and the creator's own buy.
+ */
+const LAUNCH_SHAPE_ABI = [
+  { type: 'function', name: 'POOL_SUPPLY_MULTIPLE', stateMutability: 'view', inputs: [], outputs: [{ type: 'uint256' }] },
+  { type: 'function', name: 'DEST_CURVE_CHAINS', stateMutability: 'view', inputs: [], outputs: [{ type: 'uint256' }] },
+];
+const PAD_SHAPE_ABI = [
+  { type: 'function', name: 'SUPPLY', stateMutability: 'view', inputs: [], outputs: [{ type: 'uint256' }] },
+  { type: 'function', name: 'CURVE_SUPPLY', stateMutability: 'view', inputs: [], outputs: [{ type: 'uint256' }] },
+  { type: 'function', name: 'MAX_TARGET', stateMutability: 'view', inputs: [], outputs: [{ type: 'uint96' }] },
+];
+
+async function apiLaunchShape() {
+  const c = chainById(HOME_CHAIN);
+  const pc = publicClient(c);
+  const gate = await launcherFromGate().catch(() => null);
+  const launcher = gate?.address ?? null;
+  const pad = padFor(c);
+  const read = (address, abi, functionName) => (address
+    ? pc.readContract({ address, abi, functionName }).catch(() => null)
+    : Promise.resolve(null));
+  const [mult, dest, supply, curveSupply, maxTarget] = await Promise.all([
+    read(launcher, LAUNCH_SHAPE_ABI, 'POOL_SUPPLY_MULTIPLE'),
+    read(launcher, LAUNCH_SHAPE_ABI, 'DEST_CURVE_CHAINS'),
+    read(pad, PAD_SHAPE_ABI, 'SUPPLY'),
+    read(pad, PAD_SHAPE_ABI, 'CURVE_SUPPLY'),
+    read(pad, PAD_SHAPE_ABI, 'MAX_TARGET'),
+  ]);
+  const curves = mult != null && dest != null ? 1n + dest : null;
+  const parts = curves != null ? curves + mult : null;
+  // What a different split would take, so the ask has a number attached.
+  const multipleFor = (pct) => (curves == null ? null
+    : Math.max(0, Math.round(Number(curves) * (100 - pct) / pct)));
+  return jsonSafe({
+    launcher, pad,
+    destCurveChains: dest == null ? null : Number(dest),
+    poolSupplyMultiple: mult == null ? null : Number(mult),
+    mintedPerLaunch: parts != null && supply != null ? num(supply * parts) : null,
+    curvePct: parts != null ? Number(curves) * 100 / Number(parts) : null,
+    poolPct: parts != null ? Number(mult) * 100 / Number(parts) : null,
+    padSupply: num(supply), padCurveSupply: num(curveSupply),
+    onCurvePct: supply && curveSupply ? Number(curveSupply) * 100 / Number(supply) : null,
+    maxTargetNative: num(maxTarget),
+    multipleForNinety: multipleFor(90),
+    note: 'POOL_SUPPLY_MULTIPLE is a constant in OmniLaunch.sol — changing the split is a launcher deploy and a gate rotation, not a form field',
+  });
+}
+
+/**
  * What the relayer's quote means for a launch that is about to be signed.
  *
  * There are two very different things in that reply and the site's own form
@@ -1134,6 +1190,10 @@ async function apiRelay(body) {
       action, token: getAddress(body.token), chainId: Number(body.chainId),
       launchHash: body.launchHash, fundingTxHash: body.fundingTxHash,
       requiredOnly: body.requiredOnly === true,
+      // Honoured only for OMNI's own pools, and only with admin authorization
+      // (wallFunding.ts) — forwarded so an operator run can use it, ignored for
+      // everyone else rather than pretended at.
+      tokenBudget: /^\d+$/.test(String(body.tokenBudget ?? '')) ? String(body.tokenBudget) : undefined,
     });
     // 422 means "not complete yet", which is a state, not a failure: the same
     // call is the resume, so the page needs the body either way.
@@ -2302,6 +2362,7 @@ const routes = {
   '/api/poolcensus': (q) => apiPoolCensus(q.get('ca')),
   '/api/seedstate': (q) => apiSeedState(q.get('ca'), q.get('address'), q.get('hash')),
   '/api/launchready': (q) => apiLaunchReady(q.get('token')),
+  '/api/launchshape': () => apiLaunchShape(),
   '/api/queue': (q) => apiQueue(q.get('chain'), q.get('address')),
   '/api/unstick': () => apiUnstick({ dry: true }),
   // Name and symbol off the contract, logo off the site's index: a CA seeded in

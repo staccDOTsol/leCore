@@ -16,7 +16,7 @@ const S = {
   tab: 'board',
   chains: {}, nativeUsd: {}, beOk: null,
   tokens: [], live: {}, be: {}, supplies: {}, pools: {}, poolScan: 0, scan: '', boot: 'booting',
-  curves: null, curveChain: null,
+  curves: null, curveChain: null, shape: null,
   sort: { key: 'mcap', dir: 'desc' },
   supplyMiss: new Set(), liveChains: new Set(), polledChains: [], stream: null, offered: new Set(),
   seedStop: false, seedRunning: false,
@@ -1796,9 +1796,15 @@ function mountLaunch() {
           <div style="margin-top:12px"><label class="f">tagline</label><input type="text" id="lnTagline" placeholder="one line, shows on the site" style="width:100%" /></div>
           <div style="margin-top:12px"><label class="f">description</label><textarea id="lnDesc" rows="3" placeholder="goes into the token metadata" style="width:100%"></textarea></div>
           <div class="row" style="margin-top:12px">
-            <div style="flex:1;min-width:140px"><label class="f">target raise (ETH)</label><input type="text" id="lnRaise" value="0.06" style="width:100%" /></div>
+            <div style="flex:1;min-width:140px"><label class="f">target raise (ETH)</label><input type="text" id="lnRaise" value="4" style="width:100%" /></div>
             <div style="flex:1;min-width:140px"><label class="f">creator buy (ETH, split 9 ways)</label><input type="text" id="lnBuy" value="0" style="width:100%" /></div>
+            <div style="flex:1;min-width:160px"><label class="f">pools per chain</label>
+              <select id="lnScope" style="width:100%">
+                <option value="all">everything the relayer can stock</option>
+                <option value="required">native and OMNI only</option>
+              </select></div>
           </div>
+          <div class="dim" id="lnShape" style="margin-top:10px;font-size:10.5px;text-wrap:pretty"></div>
         </div>
         <div style="flex:1;min-width:210px">
           <label class="f">mark</label>
@@ -1839,6 +1845,18 @@ function mountLaunch() {
     </div>
     <div id="lnLog"></div>`;
 
+  // Remembered, because a launch is a form somebody fills in twice.
+  const KEEP = ['lnRaise', 'lnBuy', 'lnScope'];
+  for (const id of KEEP) {
+    try { const v = localStorage.getItem(`omniarb.${id}`); if (v != null) $(id).value = v; } catch { /* private window */ }
+    $(id).addEventListener('change', () => {
+      try { localStorage.setItem(`omniarb.${id}`, $(id).value); } catch { /* nothing to do */ }
+      paintShape();
+    });
+  }
+  $('lnRaise').addEventListener('input', paintShape);
+  loadShape();
+
   $('lnFile').addEventListener('change', async (e) => {
     const f = e.target.files?.[0];
     if (!f) return;
@@ -1869,7 +1887,7 @@ function mountLaunch() {
       `${tx.relayerCost ? ` · paying the relayer ${C.fmtNum(tx.relayerCost, 5)} ETH for the nine-chain fan-out` : ''}`);
     // The relayer being out of OMNI somewhere is inventory, not a reason to
     // stop: every chain still gets its CA, its curve and its native pools.
-    S.requiredOnly = tx.requiredOnly === true;
+    S.requiredOnly = $('lnScope')?.value === 'required' || tx.requiredOnly === true;
     if (S.requiredOnly) {
       log(`the relayer is short of OMNI on ${tx.blocked?.join(' ') || 'some chains'} — the native pools still ` +
         'open everywhere; its OMNI pair there opens when it is stocked', 'warn');
@@ -1930,6 +1948,43 @@ function mountLaunch() {
     }
     guard(() => seedChain(Number(id), ca));
   });
+}
+
+/**
+ * What the launch is shaped by, and what the target raise means in practice.
+ *
+ * The split between curve supply and pool supply is minted by the launcher from
+ * a constant in its own source, so it is reported here rather than offered as a
+ * control that would not bind. The target raise is the one that moves what
+ * people actually complain about: the curve opens priced so its supply is worth
+ * a tenth of the target, so a 0.06 target opens a thirteen-billion token at
+ * about 0.08 ETH of implied value and the first buyer takes the lot for
+ * nothing.
+ */
+async function loadShape() {
+  S.shape = await C.api('/api/launchshape').catch(() => null);
+  paintShape();
+}
+
+function paintShape() {
+  const el = $('lnShape');
+  if (!el) return;
+  const d = S.shape;
+  const target = Number($('lnRaise')?.value) || 0;
+  if (!d) { el.textContent = ''; return; }
+  // Measured from a live launch: the pad opens the curve at a price that values
+  // the whole minted supply at about 1.3 × the target raise.
+  const opens = target * (d.mintedPerLaunch ?? 13e9) / 1e10;
+  el.innerHTML =
+    `mints ${C.fmtNum(d.mintedPerLaunch)} per launch · ` +
+    `<b>${(d.curvePct ?? 0).toFixed(0)}% to the curves</b> across ${(d.destCurveChains ?? 0) + 1} chains, ` +
+    `${(d.poolPct ?? 0).toFixed(0)}% to the pools` +
+    (d.poolSupplyMultiple != null
+      ? ` · that split is POOL_SUPPLY_MULTIPLE = ${d.poolSupplyMultiple} in OmniLaunch.sol, not a setting` +
+        (d.multipleForNinety != null ? ` — ${d.multipleForNinety} would make it ${Math.round(100 * (d.destCurveChains + 1) / (d.destCurveChains + 1 + d.multipleForNinety))}%` : '')
+      : '') +
+    (target > 0 ? `<br>a ${target} ETH target opens the curve at about ${C.fmtNum(opens, 3)} ETH of implied value on the full supply` : '') +
+    (d.maxTargetNative ? ` · the pad caps a target at ${C.fmtNum(d.maxTargetNative)} native units, so Polygon and Monad clamp` : '');
 }
 
 /* ------------------------------------------------------------ readiness */
@@ -2143,7 +2198,7 @@ async function seedChain(chainId, ca, { donate = false } = {}) {
     // because the relayer was short somewhere is how a launch that should have
     // had a hundred pools ended up with twenty-four.
     const ask = () => C.apiPost('/api/relay', { action: 'initialize', token: ca, chainId,
-      launchHash: d.launchHash ?? undefined });
+      launchHash: d.launchHash ?? undefined, requiredOnly: S.requiredOnly === true });
     let r = await ask();
     // The site takes one initialize a minute per token. That is a wait, not a
     // failure: sleep out the remainder it names and ask once more.

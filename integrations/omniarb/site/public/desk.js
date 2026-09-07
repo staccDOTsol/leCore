@@ -32,11 +32,55 @@ const HERO = '0x9a5baA12664c89cFbF5cFcD9d0D4805bDcAB29E8';
 
 const HOURS = { '1h': [1, '1m'], '6h': [6, '5m'], '24h': [24, '15m'], '7d': [168, '1H'], '30d': [720, '4H'] };
 
+
+/* ------------------------------------------------------------ deeplinks */
+//
+// The URL says where you are: #chart/0x9a5b… is the chart tab on OMNI. Nav and
+// selection both write it, back and forward read it, and a link pasted to
+// somebody else opens on the same thing — including a CA that is not on the
+// board, which is how you hand someone a token the index has never heard of.
+
+let _hashLock = false;
+
+const hashNow = () => `#${S.tab}${S.sel ? '/' + S.sel.address : ''}`;
+
+function writeHash(push) {
+  const want = hashNow();
+  if (location.hash === want) return;
+  _hashLock = true;
+  try {
+    if (push) history.pushState(null, '', want);
+    else history.replaceState(null, '', want);
+  } catch { location.hash = want; }
+  _hashLock = false;
+}
+
+function parseHash(raw = location.hash) {
+  const m = /^#\/?([a-z]+)?(?:\/(0x[0-9a-fA-F]{40}))?/.exec(raw || '');
+  const TABS = ['board', 'chart', 'venues', 'routes', 'curve', 'launch', 'bridge', 'bag'];
+  return { tab: TABS.includes(m?.[1]) ? m[1] : null, ca: m?.[2] ?? null };
+}
+
+/** Back/forward, or somebody editing the address bar. */
+function onHashChange() {
+  if (_hashLock) return;
+  const { tab, ca } = parseHash();
+  if (ca && ca.toLowerCase() !== (S.sel?.address ?? '').toLowerCase()) {
+    const known = S.tokens.find((t) => t.address.toLowerCase() === ca.toLowerCase());
+    select(known ?? { address: ca, symbol: 'custom', name: ca }, true);
+  }
+  if (tab && tab !== S.tab) go(tab);
+}
+
 /* -------------------------------------------------------------- boot */
 
 async function boot() {
+  S.deeplink = parseHash();
+  if (S.deeplink.ca) S.picked = true;   // a link beats the board's own default
   wireShell();
   mountAll();
+  addEventListener('hashchange', onHashChange);
+  if (S.deeplink.tab) go(S.deeplink.tab);
   try { S.me = await C.api('/api/me'); } catch { S.me = null; }
   $('wallet').onclick = () => { if (!W.address) connect(); };
   paintWallet();
@@ -121,12 +165,18 @@ async function discover() {
   const fast = await C.api('/api/discover').catch(() => null);
   if (absorb(fast)) {
     liveness(S.tokens); supplies(S.tokens); poolCensus(S.tokens); beBoard(S.tokens);
+    const want = S.deeplink?.ca;
+    const linked = want && S.tokens.find((t) => t.address.toLowerCase() === want.toLowerCase());
     const hero = S.tokens.find((t) => t.address.toLowerCase() === HERO.toLowerCase());
-    select(hero ?? S.tokens[0]);
+    // A CA in the link that the board does not carry is still openable — the
+    // whole point of pasting one is that it might not be listed.
+    select(linked || (want ? { address: want, symbol: 'custom', name: want } : null) || hero || S.tokens[0], Boolean(want));
   } else if (!fast) {
     S.scan = 'discovery failed';
     paintBoard();
   }
+
+  if (!S.sel && S.deeplink?.ca) select({ address: S.deeplink.ca, symbol: 'custom', name: S.deeplink.ca }, true);
 
   const deep = await C.api('/api/discover', { deep: 1 }).catch(() => null);
   if (deep && deep.tokens.length !== (fast?.tokens.length ?? -1)) {
@@ -205,6 +255,7 @@ function select(t, byUser) {
   S.sel = t;
   S.venues = []; S.beTok = null; S.charts = null; S.curve = null;
   $('selLabel').textContent = `${t.symbol || 'token'} · ${C.short(t.address)}`;
+  writeHash(false);
   const ca = $('caInput'); if (ca) ca.value = t.address;
   const bca = $('brCa'); if (bca) bca.value = t.address;
   paintAll();
@@ -265,6 +316,7 @@ function go(tab) {
   for (const t of ['board', 'chart', 'venues', 'routes', 'curve', 'launch', 'bridge', 'bag']) {
     $('tab-' + t).classList.toggle('hidden', t !== tab);
   }
+  writeHash(true);
   paintActive();
   if (tab === 'chart' && S.sel && !S.charts) loadCharts();
   if (tab === 'curve' && S.sel && !S.curve) loadCurve();

@@ -32,6 +32,7 @@ import { quoteBuy, quoteSell, ARTIFACT } from '../src/quote.mjs';
 import { requestMint } from '../src/bridge.mjs';
 import { uploadMetadata, curveSqrtPrice, deployRemote, wallChain, tokenFromReceipt,
   saltFor, LAUNCH_ABI, LAUNCH_FEE_WEI, DEFAULT_HOOK_PARAMS } from '../src/launch.mjs';
+import { fetchLiveConfig, readLiveConfig } from '../src/refresh.mjs';
 import * as be from './birdeye.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -605,6 +606,13 @@ async function txTrade({ ca, chain, venue, side, amount, from, slippageBps }) {
           args: [token, getAddress(c.hook), wei, minOut, who, dl()] })));
   }
 
+  // Only the last step is simulated: an approve that has not happened yet makes
+  // the sell revert here for a reason that is not the interesting one.
+  if (steps.length === 1) {
+    const t = steps[0];
+    await preflight(c, { to: t.to, data: t.data, value: t.value, from: who, what: `the ${side}` });
+  }
+
   return jsonSafe({ steps, venue: v.kind, side, chain: c.short,
     quoted: num(quoted), minOut: num(minOut), slippageBps: Number(slip) });
 }
@@ -635,11 +643,13 @@ async function txBridge({ ca, from, to, amount, recipient }) {
     throw new Error(`${token} is not deployed on ${dst.name} yet — burning to it would strand the supply`);
   }
 
+  const data = encodeFunctionData({ abi: PORTAL_ABI, functionName: 'bridgeOut',
+    args: [token, BigInt(dst.id), dest, wei] });
+  await preflight(src, { to: PORTAL, data, value: '0x0', from: dest, what: 'the burn' });
+
   return jsonSafe({
-    steps: [step(`burn on ${src.short}`, src, PORTAL,
-      encodeFunctionData({ abi: PORTAL_ABI, functionName: 'bridgeOut',
-        args: [token, BigInt(dst.id), dest, wei] }),
-      0n, `the relayer mints the same amount to ${short(dest)} on ${dst.name}`)],
+    steps: [step(`burn on ${src.short}`, src, PORTAL, data, 0n,
+      `the relayer mints the same amount to ${short(dest)} on ${dst.name}`)],
     from: src.short, to: dst.short, destChainId: dst.id, amount: String(amount),
   });
 }
@@ -710,7 +720,31 @@ async function apiMetadata(body) {
  * launcher records it on chain, and a launch with an empty logo cannot be fixed
  * afterwards.
  */
-function txLaunch(body) {
+/**
+ * Simulate before handing a transaction to somebody's wallet.
+ *
+ * A wallet reports a failed gas estimate as "execution reverted" and nothing
+ * else, which is how a launcher that had simply moved address looked like a bad
+ * parameter for an hour. Simulating here gets the actual revert — and when the
+ * revert is an unnamed custom error, at least says which contract said it and
+ * how old our address for that contract is.
+ */
+async function preflight(c, { to, data, value, from, what }) {
+  try {
+    await publicClient(c).call({ to, data, value: BigInt(value), account: getAddress(from) });
+  } catch (e) {
+    const raw = String(e.shortMessage ?? e.message ?? e);
+    const sel = /(0x[0-9a-fA-F]{8})\b/.exec(raw.replace(/\s/g, ' '))?.[1];
+    const live = readLiveConfig();
+    const age = live?.fetchedAt ? `contract map fetched ${live.fetchedAt}` : 'contract map never fetched';
+    throw new Error(
+      `${what} would revert on ${c.name}: ${raw.split('\n')[0]}` +
+      (sel ? ` (custom error ${sel} from ${to})` : '') +
+      ` — ${age}. If these addresses are stale, restart the server: it refreshes them from the live app on boot.`);
+  }
+}
+
+async function txLaunch(body) {
   const c = chainById(HOME_CHAIN);
   const name = String(body.name ?? '').trim();
   const symbol = String(body.symbol ?? '').trim();
@@ -726,11 +760,13 @@ function txLaunch(body) {
     creatorBuyWei: perChain, minTokensOut: 0n, blueprintId: 0,
     custom: DEFAULT_HOOK_PARAMS, creatorFeeBps: 0,
   };
+  const data = encodeFunctionData({ abi: LAUNCH_ABI, functionName: 'launch', args: [params] });
+  if (body.from) await preflight(c, { to: c.launcher, data, value, from: body.from, what: 'the launch' });
+
   return jsonSafe({
-    steps: [step('launch on Base', c, c.launcher,
-      encodeFunctionData({ abi: LAUNCH_ABI, functionName: 'launch', args: [params] }), value,
+    steps: [step('launch on Base', c, c.launcher, data, value,
       `0.0002 ETH launch fee${perChain > 0n ? ` + ${formatUnits(perChain, 18)} ETH creator buy` : ''}`)],
-    salt: params.salt, value: num(value),
+    salt: params.salt, launcher: c.launcher, value: num(value),
   });
 }
 
@@ -911,6 +947,23 @@ async function apiPending(address, lookback, chain) {
 // limits. So the same failover list the bot uses is exposed here, restricted to
 // read methods.
 
+/**
+ * The app moves under us. Boot loads the current map; this notices when it moves
+ * again while the process is up, because in-memory addresses cannot be swapped
+ * safely mid-flight — the page shows a banner and the fix is a restart.
+ */
+let _stale = null;
+async function watchConfig() {
+  try {
+    const live = await fetchLiveConfig();
+    const now = chainById(HOME_CHAIN)?.launcher?.toLowerCase();
+    if (live.launcher && now && live.launcher.toLowerCase() !== now) {
+      _stale = { field: 'launcher', using: now, live: live.launcher, seenAt: new Date().toISOString() };
+      console.warn(`launcher moved to ${live.launcher} (using ${now}) — restart to pick it up`);
+    } else _stale = null;
+  } catch { /* the site being unreachable is not evidence of staleness */ }
+}
+
 const RPC_OK = new Set(['eth_blockNumber', 'eth_gasPrice', 'eth_call', 'eth_getCode',
   'eth_getBalance', 'eth_chainId', 'eth_getLogs', 'eth_getTransactionReceipt',
   'eth_getBlockByNumber', 'eth_estimateGas', 'eth_maxPriorityFeePerGas']);
@@ -954,6 +1007,12 @@ const routes = {
   '/api/quote': (q) => apiQuote(q.get('ca'), q.get('chain'), q.get('venue') ?? 'hooked',
     q.get('side') ?? 'buy', q.get('amount') ?? '0'),
   '/api/bag': (q) => apiBag(q.get('address'), q.get('ca')),
+  '/api/config': () => {
+    const live = readLiveConfig();
+    return { factory: live?.factory ?? null, portal: live?.portal ?? null,
+      launcher: chainById(HOME_CHAIN)?.launcher ?? null,
+      deployment: live?.deployment ?? null, fetchedAt: live?.fetchedAt ?? null, stale: _stale };
+  },
   '/api/me': () => ({
     // No signing here, by design: the desk is a dapp and the visitor's wallet
     // signs. What the page needs from this process is the chain map — including
@@ -963,7 +1022,7 @@ const routes = {
       nativeSymbol: c.nativeSymbol, rpc: rpcsFor(c)[0], poolManager: c.poolManager, hook: c.hook,
       router: c.router, launcher: c.launcher ?? null, helper: arbHelperFor(c),
       birdeye: be.nameOf(c.id) })),
-    portal: PORTAL, pad: PAD, homeChain: HOME_CHAIN,
+    portal: PORTAL, pad: PAD, homeChain: HOME_CHAIN, stale: _stale,
   }),
   '/api/be': (q) => {
     const path = q.get('path');
@@ -1063,13 +1122,19 @@ export async function handler(req, res) {
 
 export default handler;
 
-// Started directly (rather than imported by a serverless wrapper): bind a port.
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  createServer(handler).listen(PORT, HOST, () => {
+/** Bind a port. Not done on import: a serverless wrapper only wants the handler. */
+export function start() {
+  return createServer(handler).listen(PORT, HOST, () => {
     console.log(`desk       http://${HOST}:${PORT}/`);
     console.log(`omniview   http://${HOST}:${PORT}/explore`);
     console.log(`birdeye covers ${paintable().map((c) => c.short).join(', ')}` +
       ` · pool-derived prices on ${CHAINS.filter((c) => !be.covers(c.id)).map((c) => c.short).join(', ')}`);
     console.log('no key here: the visitor’s wallet signs every transaction');
+    watchConfig();
+    setInterval(watchConfig, 10 * 60_000).unref();
   }).on('error', (e) => { console.error(e.message); process.exit(1); });
 }
+
+// Run directly rather than through site/boot.mjs: still binds, but with whatever
+// contract addresses happen to be on disk.
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) start();

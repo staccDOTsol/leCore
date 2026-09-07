@@ -16,4 +16,4 @@ COPY live-config.json deployments.json package.json ./
 
 ENV PORT=8080 HOST=0.0.0.0 NODE_ENV=production
 EXPOSE 8080
-CMD ["node", "site/server.mjs"]
+CMD ["node", "site/boot.mjs"]

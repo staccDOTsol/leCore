@@ -1,10 +1,10 @@
 {
-  "fetchedAt": "2026-09-07T01:18:10.689Z",
-  "deployment": "dpl_4ZFUc6tByp9MUUbYAb3LgG6mA1Mu",
-  "chunk": "646-2d3a0422b7389947.js",
+  "fetchedAt": "2026-09-07T06:07:17.694Z",
+  "deployment": "dpl_DBYjMqtcrcnBiuu92YmwwgmB643b",
+  "chunk": "646-e1f2f6910da24142.js",
   "factory": "0xCF8C621000514043bC7AdFd3afD2fCF391fC761e",
   "portal": "0xa3324d514708049883167aD817Db97Aefe29c96c",
-  "launcher": "0xe3DCd4B6fE0B7B86234036E6d37bf5D2f2bdB857",
+  "launcher": "0x25538e309E1fDf9e27E64F4C852aE6b67bbbb273",
   "chains": [
     {
       "id": 4663,
@@ -27,7 +27,7 @@
       "poolManager": "0x498581fF718922c3f8e6A244956aF099B2652b2b",
       "hook": "0xCe5d52C0C2345260502872b6108d0cE2559280cc",
       "router": "0x3EC4d75F9fE806155f10B75AD8787d09fAb81229",
-      "launcher": "0xe3DCd4B6fE0B7B86234036E6d37bf5D2f2bdB857",
+      "launcher": "0x25538e309E1fDf9e27E64F4C852aE6b67bbbb273",
       "factoryFromBlock": "50927698"
     },
     {
@@ -58,7 +58,7 @@
       "id": 56,
       "name": "BNB",
       "short": "BNB",
-      "rpc": "https://bsc-dataseed.binance.org",
+      "rpc": "https://bsc-rpc.publicnode.com",
       "explorer": "https://bscscan.com",
       "poolManager": "0x28e2Ea090877bF75740558f6BFB36A5ffeE9e9dF",
       "hook": "0x2E119e43217CEe9ba42bB153C4F8A81226D400cC",

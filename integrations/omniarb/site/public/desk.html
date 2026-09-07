@@ -135,6 +135,16 @@
 
   footer.bot { margin-top: 26px; padding-top: 16px; border-top: 1px solid #1c2027; display: flex;
     flex-wrap: wrap; gap: 12px; justify-content: space-between; font-size: 10.5px; color: #4d545e; }
+  .wmenu { position: absolute; right: 0; top: calc(100% + 6px); z-index: 40; min-width: 210px;
+    background: #0d1014; border: 1px solid #2a3340; border-radius: 10px; padding: 5px;
+    box-shadow: 0 12px 32px rgba(0,0,0,.6); }
+  .wmenu button { display: flex; align-items: center; gap: 9px; width: 100%; text-align: left;
+    border: 0; background: transparent; color: #e8e6e1; border-radius: 7px;
+    padding: 8px 10px; font-size: 12px; cursor: pointer; }
+  .wmenu button:hover { background: #171d25; }
+  .wmenu img { width: 18px; height: 18px; border-radius: 4px; }
+  .wmenu .noicon { width: 18px; height: 18px; border-radius: 4px; background: #1e2530; }
+
   .hidden { display: none !important; }
 
   /* ------------------------------------------------------------- mobile
@@ -290,7 +300,10 @@
     <div class="row" style="gap:8px">
       <div class="pill"><span class="dot"></span><b id="rpcUp">0/9</b> rpc</div>
       <div class="pill">birdeye <span class="acc" id="beStatus">…</span></div>
-      <button class="btn" id="wallet">connect wallet</button>
+      <div style="position:relative">
+        <button class="btn" id="wallet">connect wallet</button>
+        <div class="wmenu hidden" id="walletMenu"></div>
+      </div>
       <button class="btn" id="refresh">refresh · <span id="tickText">live</span></button>
     </div>
   </header>

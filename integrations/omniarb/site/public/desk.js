@@ -111,7 +111,18 @@ async function boot() {
   addEventListener('hashchange', onHashChange);
   if (S.deeplink.tab) go(S.deeplink.tab);
   try { S.me = await C.api('/api/me'); } catch { S.me = null; }
-  $('wallet').onclick = () => { if (!W.address) connect(); };
+  $('wallet').onclick = () => {
+    if (W.providers.length > 1) openWalletPicker();
+    else if (!W.address) connect();
+  };
+  $('walletMenu').addEventListener('click', (e) => {
+    const b = e.target.closest('[data-wallet]');
+    if (b) guard(() => connect(W.providers[Number(b.dataset.wallet)]));
+  });
+  // Click anywhere else and the menu goes away.
+  addEventListener('click', (e) => {
+    if (!e.target.closest('#walletMenu') && !e.target.closest('#wallet')) closeWalletPicker();
+  });
   paintWallet();
   paintLog();
   openStream();
@@ -1293,35 +1304,79 @@ function paintRoutes() {
 // the visitor has, which signs it or refuses. MetaMask, Rabby, Frame: anything
 // that speaks EIP-1193.
 
-const W = { provider: null, address: null, chainId: null, providers: [] };
+const W = { provider: null, address: null, chainId: null, info: null, providers: [] };
 
 // EIP-6963: wallets announce themselves rather than fighting over
 // window.ethereum. Falls back to window.ethereum for anything older.
 addEventListener('eip6963:announceProvider', (e) => {
-  if (!W.providers.some((p) => p.info.uuid === e.detail.info.uuid)) W.providers.push(e.detail);
+  if (W.providers.some((p) => p.info.uuid === e.detail.info.uuid)) return;
+  W.providers.push(e.detail);
+  // Wallets announce asynchronously, some of them after the first paint, so the
+  // button has to learn there is now a choice to offer.
+  if ($('wallet')) paintWallet();
 });
 dispatchEvent(new Event('eip6963:requestProvider'));
 
-function pickProvider() {
-  if (W.providers.length) {
-    if (W.providers.length > 1) {
-      log(`wallets found: ${W.providers.map((p) => p.info.name).join(', ')} — using ${W.providers[0].info.name}`);
-    }
-    return W.providers[0].provider;
-  }
-  return window.ethereum ?? null;
+/** The last wallet chosen here, so a returning visitor is not asked again. */
+const REMEMBERED = 'omniarb.wallet';
+const remembered = () => { try { return localStorage.getItem(REMEMBERED); } catch { return null; } };
+const remember = (rdns) => { try { localStorage.setItem(REMEMBERED, rdns); } catch { /* private window */ } };
+
+/**
+ * Which wallet.
+ *
+ * Announced wallets get a picker, because a machine with MetaMask and Rabby on
+ * it has two answers and picking one silently is picking wrong half the time.
+ * One wallet, or one remembered from last time, skips it — a chooser with a
+ * single option is a dialog for its own sake.
+ */
+function openWalletPicker() {
+  const el = $('walletMenu');
+  if (!el) return;
+  if (el.dataset.open === '1') { closeWalletPicker(); return; }
+  el.innerHTML = W.providers.map((p, i) => `
+    <button data-wallet="${i}">
+      ${p.info.icon ? `<img src="${h(p.info.icon)}" alt="" />` : '<span class="noicon"></span>'}
+      <span>${h(p.info.name)}</span>
+      ${p.info.rdns === remembered() ? '<span class="dim" style="margin-left:auto;font-size:10px">last used</span>' : ''}
+    </button>`).join('')
+    || '<div class="dim" style="padding:8px 10px;font-size:11px">no wallet announced itself — install MetaMask, Rabby, or anything EIP-1193</div>';
+  el.dataset.open = '1';
+  el.classList.remove('hidden');
 }
 
-async function connect() {
-  const p = pickProvider();
+function closeWalletPicker() {
+  const el = $('walletMenu');
+  if (!el) return;
+  el.dataset.open = '0';
+  el.classList.add('hidden');
+}
+
+async function connect(chosen) {
+  let entry = chosen;
+  if (!entry) {
+    if (W.providers.length > 1) {
+      const last = W.providers.find((p) => p.info.rdns === remembered());
+      if (!last) { openWalletPicker(); return; }     // genuinely ambiguous: ask
+      entry = last;
+    } else entry = W.providers[0] ?? null;
+  }
+
+  const p = entry?.provider ?? window.ethereum ?? null;
   if (!p) { log('no wallet found — install MetaMask, Rabby, or anything EIP-1193', 'down'); return; }
+  closeWalletPicker();
+
   W.provider = p;
+  W.info = entry?.info ?? null;
+  if (entry?.info?.rdns) remember(entry.info.rdns);
+
   const accounts = await p.request({ method: 'eth_requestAccounts' });
   W.address = accounts[0];
   W.chainId = Number(await p.request({ method: 'eth_chainId' }));
   p.on?.('accountsChanged', (a) => { W.address = a[0] ?? null; paintWallet(); paintAll(); });
   p.on?.('chainChanged', (c) => { W.chainId = Number(c); paintWallet(); });
   paintWallet();
+  log(`connected ${entry?.info?.name ?? 'wallet'} · ${C.short(W.address)}`, 'up');
   $('bagAddr').value = W.address;
   loadBag();
   loadPending();
@@ -1330,16 +1385,15 @@ async function connect() {
 
 function paintWallet() {
   const el = $('wallet');
+  const n = W.providers.length;
   if (W.address) {
     const on = C.byId[W.chainId];
-    el.innerHTML = `<span class="dot"></span><b class="acc">${h(C.short(W.address))}</b> ${h(on ? on.short : 'chain ' + W.chainId)}`;
-    el.title = W.address;
-    el.classList.remove('btn');
-    el.classList.add('pill');
+    el.innerHTML = `<span class="dot"></span><b class="acc">${h(C.short(W.address))}</b> ` +
+      `${h(on ? on.short : 'chain ' + W.chainId)}${n > 1 ? ' <span class="dim">▾</span>' : ''}`;
+    el.title = `${W.info?.name ?? 'wallet'} · ${W.address}${n > 1 ? ' — click to switch wallet' : ''}`;
   } else {
-    el.textContent = 'connect wallet';
-    el.classList.add('btn');
-    el.classList.remove('pill');
+    el.innerHTML = `connect wallet${n > 1 ? ` <span class="dim">(${n}) ▾</span>` : ''}`;
+    el.title = n > 1 ? `${W.providers.map((p) => p.info.name).join(', ')}` : '';
   }
 }
 

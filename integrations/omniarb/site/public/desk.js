@@ -15,7 +15,7 @@ const h = (s) => String(s ?? '').replace(/[&<>"']/g, (m) =>
 const S = {
   tab: 'board',
   chains: {}, nativeUsd: {}, beOk: null,
-  tokens: [], live: {}, be: {}, supplies: {}, scan: '', boot: 'booting',
+  tokens: [], live: {}, be: {}, supplies: {}, pools: {}, poolScan: 0, scan: '', boot: 'booting',
   sel: null, venues: [], beTok: null, dec: 18,
   charts: null, chartHours: 24, chartType: '15m', hiddenChains: new Set(), chartBusy: false,
   size: 50, bridged: true, hookless: true,
@@ -119,7 +119,7 @@ function absorb(d) {
 async function discover() {
   const fast = await C.api('/api/discover').catch(() => null);
   if (absorb(fast)) {
-    liveness(S.tokens); supplies(S.tokens); beBoard(S.tokens);
+    liveness(S.tokens); supplies(S.tokens); poolCensus(S.tokens); beBoard(S.tokens);
     const hero = S.tokens.find((t) => t.address.toLowerCase() === HERO.toLowerCase());
     select(hero ?? S.tokens[0]);
   } else if (!fast) {
@@ -132,7 +132,7 @@ async function discover() {
     const known = new Set(S.tokens.map((t) => t.address.toLowerCase()));
     if (absorb(deep)) {
       const fresh = S.tokens.filter((t) => !known.has(t.address.toLowerCase()));
-      if (fresh.length) { liveness(fresh); supplies(fresh); beBoard(S.tokens); }
+      if (fresh.length) { liveness(fresh); supplies(fresh); poolCensus(fresh); beBoard(S.tokens); }
     }
   } else if (deep) { absorb(deep); }
 }
@@ -331,7 +331,7 @@ function mountBoard() {
     </div>
     <div class="table">
       <div class="th" style="grid-template-columns:${BOARD_COLS}">
-        <div>token</div><div>ca</div><div>age</div><div>live on</div>
+        <div>token</div><div>ca</div><div>age</div><div>pools · live</div>
         <div class="r">px (usd)</div><div class="r">24h</div><div class="r">mcap · 9ch</div><div class="r">liq (usd)</div>
       </div>
       <div id="bRows"></div>
@@ -344,6 +344,55 @@ function mountBoard() {
     const t = S.tokens.find((x) => x.address === r.dataset.ca);
     if (t) { select(t, true); go('venues'); }
   });
+}
+
+/**
+ * How many pools each launch actually has, across all nine chains.
+ *
+ * A CA with no open pool is not a market — it is a launch that never got
+ * seeded, and listing it as a tradeable token is a lie the board should not
+ * tell. Two extsload reads per chain per token, batched per chain: the pool ids
+ * are computable, so this needs no event scan.
+ */
+async function poolCensus(tokens) {
+  S.poolScan += C.CHAINS.length;
+  paintBoard();
+  await Promise.all(C.CHAINS.map(async (ch) => {
+    const calls = [];
+    for (const t of tokens) {
+      for (const hooks of [ch.hook, '0x0']) {
+        calls.push({ method: 'eth_call',
+          params: [{ to: ch.poolManager, data: C.extsloadData(C.poolStateSlot(C.poolIdFor(t.address, hooks))) }, 'latest'] });
+      }
+    }
+    try {
+      const r = await C.rpcBatch(ch, calls);
+      tokens.forEach((t, i) => {
+        const cur = { ...(S.pools[t.address] || {}) };
+        cur[ch.id] = {
+          hooked: Boolean(C.decodeSlot0(r[i * 2])),
+          hookless: Boolean(C.decodeSlot0(r[i * 2 + 1])),
+        };
+        S.pools[t.address] = cur;
+      });
+    } catch { /* a chain that will not answer leaves its column unknown */ }
+    S.poolScan -= 1;
+    paintBoard();
+  }));
+}
+
+/** Open pools for one CA, summed over the chains that have answered. */
+function poolCountOf(t) {
+  const m = S.pools[t.address];
+  if (!m) return null;
+  let n = 0;
+  for (const c of C.CHAINS) {
+    const p = m[c.id];
+    if (!p) continue;
+    if (p.hooked) n += 1;
+    if (p.hookless) n += 1;
+  }
+  return n;
 }
 
 function paintBoard() {
@@ -410,10 +459,14 @@ function paintHero() {
 
 function paintBoardRows() {
   const q = ($('q')?.value || '').trim().toLowerCase();
-  const rows = S.tokens.filter((t) => !q
+  // A launch with no open pool anywhere has no market, so it is not listed at
+  // all — not greyed out, not at the bottom. Rows appear as the census confirms
+  // them rather than appearing and then vanishing.
+  const rows = S.tokens.filter((t) => (poolCountOf(t) ?? 0) > 0).filter((t) => !q
     || (t.symbol || '').toLowerCase().includes(q)
     || (t.name || '').toLowerCase().includes(q)
     || t.address.toLowerCase().includes(q));
+  const unpooled = S.tokens.length - S.tokens.filter((t) => (poolCountOf(t) ?? 0) > 0).length;
 
   $('bRows').innerHTML = rows.map((t) => {
     const be = S.be[t.address.toLowerCase()];
@@ -424,10 +477,12 @@ function paintBoardRows() {
     const n = on.length;
     const sup = supTotalOf(t);
     const mc = be && sup ? be.value * sup : null;
+    const pc = poolCountOf(t);
     const liveText = !Object.keys(liveMap).length ? '…'
-      : `${n}/9${missing.length ? ' · −' + missing.map((c) => c.short).join(' −') : n === 9 ? ' everywhere' : ''}` +
+      : `${pc == null ? '…' : pc} pool${pc === 1 ? '' : 's'} · ${n}/9 live` +
+        `${missing.length ? ' · −' + missing.map((c) => c.short).join(' −') : ''}` +
         `${unknown.length ? ' · ?' + unknown.map((c) => c.short).join(' ?') : ''}`;
-    const liveColor = n === 9 ? '#4de2a0' : n ? '#ffb040' : '#5f6672';
+    const liveColor = pc >= 18 ? '#4de2a0' : pc > 2 ? '#ffb040' : '#a8b0bb';
     const chg = be && be.priceChange24h != null ? C.fmtPct(be.priceChange24h) : '—';
     const chgCls = be && be.priceChange24h > 0 ? 'up' : be && be.priceChange24h < 0 ? 'down' : 'dim';
     const bg = S.sel && S.sel.address === t.address ? '#111620' : 'transparent';
@@ -446,11 +501,15 @@ function paintBoardRows() {
     </div>`;
   }).join('');
 
+  const scanning = S.poolScan > 0;
   $('bNote').textContent = S.boot === 'empty'
     ? 'nothing found — neither the site index nor the launcher events returned a launch.'
     : rows.length
-      ? `${S.hidden ? `${S.hidden} pre-OMNI launch${S.hidden === 1 ? '' : 'es'} hidden, same as the site's own index. ` : ''}tap a row to read every pool for that CA on all nine chains. prices and 24h change are Birdeye prints on Base; liveness is eth_getCode on each chain. rows marked unindexed are on chain but missing from the site index — they trade exactly the same.`
-      : S.tokens.length ? 'no launch matches that filter.' : 'reading the site index and the launcher events…';
+      ? `${scanning ? 'reading pool state on nine chains… ' : ''}` +
+        `${unpooled ? `${unpooled} launch${unpooled === 1 ? '' : 'es'} with no open pool anywhere ${scanning ? 'not listed yet' : 'left off'} — a CA nobody seeded is not a market. ` : ''}` +
+        `${S.hidden ? `${S.hidden} pre-OMNI launch${S.hidden === 1 ? '' : 'es'} hidden, same as the site's own index. ` : ''}tap a row to read every pool for that CA on all nine chains. prices and 24h change are Birdeye prints on Base; liveness is eth_getCode on each chain. rows marked unindexed are on chain but missing from the site index — they trade exactly the same.`
+      : scanning ? 'reading pool state on nine chains…'
+      : S.tokens.length ? 'no launch here has an open pool.' : 'reading the site index and the launcher events…';
 }
 
 /* ================================================================= chart */

@@ -1418,10 +1418,14 @@ async function ensureChain(id) {
     // "The Provider is not connected to the requested chain" are all the same
     // situation, and matching only the first meant six of these nine chains
     // failed instead of being added.
-    if (!c?.rpc) throw new Error(`${name} is not in your wallet and no rpc is known for it`);
+    const rpcs = c?.rpcs?.length ? c.rpcs : (c?.rpc ? [c.rpc] : []);
+    if (!rpcs.length) throw new Error(`${name} is not in your wallet and no rpc is known for it`);
     try {
+      // Every public endpoint we know, not just the first. The wallet makes
+      // these calls itself and a single rate-limited node is how a bridge dies
+      // at "eth_getBlockByNumber: Request is being rate limited".
       await W.provider.request({ method: 'wallet_addEthereumChain', params: [{
-        chainId: want, chainName: name, rpcUrls: [c.rpc],
+        chainId: want, chainName: name, rpcUrls: rpcs,
         nativeCurrency: { name: c.nativeSymbol, symbol: c.nativeSymbol, decimals: 18 },
         blockExplorerUrls: [local?.explorer ?? c.explorer].filter(Boolean),
       }] });

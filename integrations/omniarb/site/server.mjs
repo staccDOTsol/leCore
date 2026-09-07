@@ -1371,7 +1371,14 @@ const routes = {
     // an rpc per chain, so a wallet can be asked to add a chain it lacks.
     signing: 'wallet',
     chains: CHAINS.map((c) => ({ id: c.id, short: c.short, name: c.name, explorer: c.explorer,
-      nativeSymbol: c.nativeSymbol, rpc: rpcsFor(c)[0], poolManager: c.poolManager, hook: c.hook,
+      nativeSymbol: c.nativeSymbol,
+      // The PUBLIC endpoints only, and never rpcsFor(): that list is led by the
+      // keyed Alchemy URL, and this object goes to every visitor. These exist so
+      // a wallet can be asked to add a chain it does not know, which the wallet
+      // then calls itself — a key in there would be a key handed to every
+      // browser that loads the page.
+      rpcs: [...c.rpcs], rpc: c.rpcs[0],
+      poolManager: c.poolManager, hook: c.hook,
       router: c.router, launcher: c.launcher ?? null, helper: arbHelperFor(c),
       birdeye: be.nameOf(c.id) })),
     portal: PORTAL, pad: PAD, homeChain: HOME_CHAIN, stale: _stale,
@@ -1417,6 +1424,21 @@ const writeRoutes = {
   '/api/launched': (b) => apiLaunched(b),
 };
 
+/** Every secret this process holds, so no response can carry one out. */
+const SECRETS = () => [process.env.ALCHEMY_KEY, process.env.ETHERSCAN_KEY, process.env.BIRDEYE_KEY,
+  process.env.STACCOVERFLOW_KP, alchemy.httpUrl(HOME_CHAIN)?.split('/v2/')[1]]
+  .filter((x) => typeof x === 'string' && x.length > 12);
+
+function redactSecrets(text, where) {
+  let out = text;
+  for (const secret of SECRETS()) {
+    if (!out.includes(secret)) continue;
+    console.error(`REDACTED a secret from the response to ${where} — fix the endpoint`);
+    out = out.split(secret).join('[redacted]');
+  }
+  return out;
+}
+
 const readBody = (req) => new Promise((resolve, reject) => {
   let size = 0; const chunks = [];
   req.on('data', (d) => {
@@ -1441,8 +1463,13 @@ export async function handler(req, res) {
     res.writeHead(code, { 'content-type': type, 'cache-control': 'no-store' });
     // Buffers (static files) must go out as-is; stringifying one yields
     // {"type":"Buffer","data":[…]} and serves a broken page with a 200.
-    if (Buffer.isBuffer(body) || typeof body === 'string') res.end(body);
-    else res.end(JSON.stringify(body));
+    let out = (Buffer.isBuffer(body) || typeof body === 'string') ? body : JSON.stringify(body);
+    // Last line of defence. /api/me leaked the Alchemy key the moment Alchemy
+    // became the first entry in rpcsFor() — nothing about that edit looked like
+    // it touched a secret. A key never reaches a browser from here again,
+    // whoever writes the next endpoint.
+    if (typeof out === 'string') out = redactSecrets(out, url.pathname);
+    res.end(out);
   };
 
   if (req.method === 'POST') {

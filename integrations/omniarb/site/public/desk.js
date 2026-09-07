@@ -2017,6 +2017,21 @@ async function runSeed(ca) {
   try {
     const first = await loadSeedState(ca);
     if (!first) return;
+
+    // Fund the relayer before anything else, on every chain that cannot pay.
+    // The deploy is its transaction too, not only the wall, so a dry relayer
+    // blocks the chain from the first step — waiting for a wall to fail before
+    // topping it up means the run never gets far enough to ask.
+    const broke = first.chains.filter((c) => !c.done && c.relayerShortWei);
+    if (broke.length) {
+      log(`relayer cannot pay on ${broke.map((c) => c.short).join(' ')} — topping up first`, 'warn');
+      for (const c of broke) {
+        if (S.seedStop) break;
+        try { await fundRelayer(c.id, (BigInt(c.relayerShortWei) * 12n) / 10n); }
+        catch (e) { log(`${c.short}: top-up failed — ${String(e.message).split('\n')[0]}`, 'down'); }
+      }
+      await loadSeedState(ca);
+    }
     // Fix the share once. Recomputing it after each move takes a ninth of a
     // shrinking balance and short-changes every later chain.
     S.seedShareWei = first.shareWei && first.shareWei !== '0' ? first.shareWei : null;
@@ -2076,11 +2091,11 @@ function paintSeed() {
   rows.innerHTML = head + C.CHAINS.map((c) => {
     const st = d?.chains.find((x) => x.id === c.id);
     const mark = (on, label) => `<span class="${on ? 'up' : 'dim'}">${on ? '✓' : '·'} ${label}</span>`;
-    const dry = st && st.relayerGas != null && st.relayerGas < 0.0005 && !st.done;
+    const dry = st && st.relayerShortWei && !st.done;
     const state = !st ? '…'
       : `${mark(st.deployed, 'deployed')} ${mark(st.funded || (st.hooked && st.hookless), 'funded')} ` +
         `${mark(st.hooked, 'hooked')} ${mark(st.hookless, 'hookless')}` +
-        (dry ? ` <span class="warn" title="the relayer pays for the wall itself">· relayer ${C.fmtNum(st.relayerGas, 3)} ${h(st.nativeSymbol)}</span>` : '');
+        (dry ? ` <span class="warn" title="the relayer pays for the deploy and the wall itself">· relayer has ${C.fmtNum(st.relayerGas, 3)} of ${C.fmtNum(st.relayerNeeds, 3)} ${h(st.nativeSymbol)}</span>` : '');
     return `<div class="tr" style="grid-template-columns:90px 110px minmax(0,1fr) minmax(0,1.6fr)">
       <div style="font-weight:700">${h(c.short)}</div>
       <div class="${st?.done ? 'up' : st?.next ? 'warn' : 'dim'}">${st ? (st.done ? 'done' : st.next ?? '—') : '…'}</div>

@@ -889,9 +889,22 @@ async function apiSeedState(ca, address) {
       : deployed && hooked && hookless ? null
         : !address ? 'connect'
           : !funded ? 'move' : 'wall';
+    // What the relayer must be able to pay for on this chain, not just what it
+    // holds. Every remaining step here — the deploy of the CA, and the wall that
+    // opens both pools — is the relayer's own transaction paid from the
+    // relayer's own wallet, so a dry relayer blocks the whole chain and does it
+    // silently until something tries and fails.
+    const [gas, price] = await Promise.all([
+      publicClient(c).getBalance({ address: getAddress(RELAYER) }).catch(() => null),
+      publicClient(c).getGasPrice().catch(() => null),
+    ]);
+    const need = price != null ? price * 2_500_000n : null;   // a deploy plus a wall
+    const short = gas != null && need != null && gas < need ? need - gas : 0n;
+
     return { id: c.id, short: c.short, name: c.name, explorer: c.explorer,
       nativeSymbol: c.nativeSymbol,
-      relayerGas: num(await publicClient(c).getBalance({ address: getAddress(RELAYER) }).catch(() => null)),
+      relayerGas: num(gas), relayerNeeds: num(need),
+      relayerShortWei: short > 0n ? short.toString() : null,
       deployed, hooked, hookless, funded,
       done: deployed && hooked && hookless, next };
   }));

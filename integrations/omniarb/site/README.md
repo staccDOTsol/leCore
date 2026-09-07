@@ -83,31 +83,38 @@ separated under simulated protanopia and deuteranopia, every line at least 3:1
 against the card. Colour never carries it alone: the aggregate is thicker,
 every line is labelled at its right end, and the crosshair names every chain.
 
+### signing
+
+Nothing on the server holds a key. The visitor connects their own wallet
+(EIP-6963, so MetaMask / Rabby / Frame all announce themselves) and signs their
+own transactions. What the server does is the part a browser is bad at: quote
+against live pool state, derive the slippage floor, encode the calldata, and
+hand back an unsigned step list. A sell comes back as approve-then-swap, because
+the page should not have to know which venues need one.
+
+Two calls are forwarded rather than signed, because a browser cannot make them:
+the multipart metadata upload to omnichain.family (no CORS header), and the
+relayer's permissioned `deploy` / `wall` / `bridgeIn`.
+
+### no database
+
+Pending bridges are not stored anywhere. The burn is a `BridgeOut` log on the
+source Portal and the mint is `processed(messageId)` on the destination — so
+`/api/pending?address=` scans by the indexed `sender` topic on all nine chains
+and checks each destination. The chain is the index; a burn stays
+re-requestable until it lands.
+
 ### running it
 
 ```
-npm run desk                      # read-only, 127.0.0.1:8787
-npm run desk:live                 # + launch / bridge / trade, needs STACCOVERFLOW_KP
+npm run desk                      # 127.0.0.1:8787
 ```
-
-Writes are off unless **both** `OMNIVIEW_WRITE=1` and `STACCOVERFLOW_KP` are set,
-and the server binds loopback unless `HOST` says otherwise. A dashboard that can
-spend money should not be one misconfigured bind away from the open internet.
-
-Long writes are jobs: `POST /api/launch` returns an id, `GET /api/job?id=`
-follows the steps. A launch is metadata upload → sign on Base → deploy the CA on
-eight more chains → split the float → eight bridges → eight relayer mints →
-eighteen pools. Holding an HTTP request open across that is how you get a proxy
-timeout mid-bridge with nobody holding the record.
 
 ### deploying
 
-Both targets deploy the **read-only** desk. Neither gets the key.
-
 ```
 cd integrations/omniarb
-vercel --prod            # omniarb.fun — one function, static served through it
-fly deploy               # long-lived process, fly.toml is here
+vercel --prod            # omniarb.fun
 ```
 
 `vercel.json` routes everything through `api/index.mjs`, which re-exports the
@@ -115,6 +122,10 @@ same handler `site/server.mjs` binds locally — there is no second
 implementation. Set `BIRDEYE_KEY` in the host's env so the key is not the
 in-repo fallback.
 
-Do not set `STACCOVERFLOW_KP` or `OMNIVIEW_WRITE` on either host. The launch,
-bridge and trade tabs are for the machine that holds the key; on a public
-deployment they refuse with a 403 and the UI says so.
+There is nothing else to configure and no second host to link: the desk is
+stateless, so a serverless function is the right shape for it. `Dockerfile` and
+`fly.toml` are here for anyone who would rather run it as a long-lived process;
+they buy nothing extra.
+
+`STACCOVERFLOW_KP` belongs to the CLI bot, not to this. It is never read by the
+site server on any host.

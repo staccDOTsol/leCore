@@ -21,9 +21,13 @@ const S = {
   size: 50, bridged: true, hookless: true,
   curve: null, curveSize: '0.01', curveTok: '',
   bag: null, bagAddress: '',
-  me: null, jobs: [], job: null,
+  me: null, log: [], pending: null, seed: {}, seedCa: null, seedBag: null,
+  bridgeBag: null, launchImage: null, launchMeta: null,
   tick: 0,
 };
+
+/** The launch everything else is measured against. */
+const HERO = '0x9a5baA12664c89cFbF5cFcD9d0D4805bDcAB29E8';
 
 const HOURS = { '1h': [1, '1m'], '6h': [6, '5m'], '24h': [24, '15m'], '7d': [168, '1H'], '30d': [720, '4H'] };
 
@@ -33,12 +37,13 @@ async function boot() {
   wireShell();
   mountAll();
   try { S.me = await C.api('/api/me'); } catch { S.me = null; }
-  paintSigner();
+  $('wallet').onclick = () => { if (!W.address) connect(); };
+  paintWallet();
+  paintLog();
   pollChains();
   prices();
   discover();
   setInterval(refresh, 30_000);
-  setInterval(pollJob, 1500);
 }
 
 function refresh() {
@@ -96,14 +101,16 @@ async function discover() {
   let d = null;
   try { d = await C.api('/api/discover'); } catch { /* fall through to empty */ }
   S.tokens = (d?.tokens ?? []).map((t) => ({ ...t, ts: t.createdAt ? Math.floor(new Date(t.createdAt).getTime() / 1000) : 0 }));
-  S.scan = d ? `${d.indexed} indexed · ${d.fromEvents} from launcher events` : 'discovery failed';
+  S.hidden = d?.hiddenBeforeEpoch ?? 0;
+  S.scan = d ? `${d.indexed} indexed · ${d.fromEvents} from launcher events${S.hidden ? ` · ${S.hidden} pre-OMNI hidden` : ''}` : 'discovery failed';
   S.boot = S.tokens.length ? 'ready' : 'empty';
   paintBoard();
   if (!S.tokens.length) return;
   liveness(S.tokens);
   supplies(S.tokens);
   beBoard(S.tokens);
-  select(S.tokens[0]);
+  const hero = S.tokens.find((t) => t.address.toLowerCase() === HERO.toLowerCase());
+  select(hero ?? S.tokens[0]);
 }
 
 async function liveness(tokens) {
@@ -144,14 +151,21 @@ async function beBoard(tokens) {
   if (!d) return;
   for (const [a, v] of Object.entries(d)) S.be[a.toLowerCase()] = v;
   paintBoard();
-  // Default to the deepest launch: a board that opens on a token with one lonely
-  // pool shows nothing worth looking at.
-  let best = null; let bestLiq = -1;
-  for (const t of tokens) {
-    const v = S.be[t.address.toLowerCase()];
-    if (v && v.liquidity > bestLiq) { bestLiq = v.liquidity; best = t; }
+  // OMNI is the hero and the default: it is the launch the index starts at, the
+  // one with float on all nine chains, and the only one where every panel here
+  // has something real to show.
+  if (!S.picked) {
+    const hero = tokens.find((t) => t.address.toLowerCase() === HERO.toLowerCase());
+    if (hero) select(hero);
+    else {
+      let best = null; let bestLiq = -1;
+      for (const t of tokens) {
+        const v = S.be[t.address.toLowerCase()];
+        if (v && v.liquidity > bestLiq) { bestLiq = v.liquidity; best = t; }
+      }
+      if (best) select(best);
+    }
   }
-  if (best && !S.picked) select(best);
 }
 
 const supTotalOf = (t) => {
@@ -173,7 +187,7 @@ function select(t, byUser) {
   loadBirdeyeToken(t.address);
   if (S.tab === 'chart') loadCharts();
   if (S.tab === 'curve') loadCurve();
-  if (S.tab === 'bridge') loadBridgeBag();
+  if (S.tab === 'bridge') { loadBridgeBag(); loadPending(); }
 }
 
 async function loadBirdeyeToken(address) {
@@ -229,18 +243,7 @@ function go(tab) {
   paintActive();
   if (tab === 'chart' && S.sel && !S.charts) loadCharts();
   if (tab === 'curve' && S.sel && !S.curve) loadCurve();
-  if (tab === 'bridge' && S.sel && !S.bridgeBag) loadBridgeBag();
-}
-
-function paintSigner() {
-  const el = $('signer');
-  if (S.me?.canWrite) {
-    el.innerHTML = `signing <b class="acc">${h(C.short(S.me.address))}</b>`;
-    el.title = S.me.address;
-  } else {
-    el.innerHTML = 'read-only';
-    el.title = 'start the server with OMNIVIEW_WRITE=1 and STACCOVERFLOW_KP set to enable launch / bridge / trade';
-  }
+  if (tab === 'bridge') { loadBridgeBag(); if (!S.pending) loadPending(); }
 }
 
 function paintRail() {
@@ -265,10 +268,10 @@ function mountAll() {
   mountBoard(); mountChart(); mountVenues(); mountRoutes();
   mountCurve(); mountLaunch(); mountBridge(); mountBag();
 }
-function paintAll() { paintRail(); paintBoard(); paintChart(); paintVenues(); paintRoutes(); paintCurve(); paintBridge(); paintBag(); }
+function paintAll() { paintRail(); paintBoard(); paintChart(); paintVenues(); paintRoutes(); paintCurve(); paintSeed(); paintBridge(); paintBag(); }
 function paintActive() {
   ({ board: paintBoard, chart: paintChart, venues: paintVenues, routes: paintRoutes,
-    curve: paintCurve, launch: paintJobs, bridge: paintBridge, bag: paintBag })[S.tab]?.();
+    curve: paintCurve, launch: paintSeed, bridge: paintBridge, bag: paintBag })[S.tab]?.();
 }
 
 /* ================================================================= board */
@@ -277,6 +280,7 @@ const BOARD_COLS = 'minmax(0,1.6fr) 118px 62px minmax(0,1.7fr) 86px 78px 104px 9
 
 function mountBoard() {
   $('tab-board').innerHTML = `
+    <div class="hero" id="hero"></div>
     <div class="cards">
       <div class="card accent">
         <div class="k">aggregate mcap · all chains</div>
@@ -331,7 +335,53 @@ function paintBoard() {
   $('bCount').textContent = S.tokens.length || '…';
   $('bCov').textContent = `${supplied}/${S.tokens.length || '…'} float read · ${priced} priced by birdeye`;
   $('bScan').textContent = S.scan || 'scanning';
+  paintHero();
   paintBoardRows();
+}
+
+/**
+ * OMNI, up top, always.
+ *
+ * It is the launch the index starts at and the only CA with float on all nine
+ * chains, so it is the one the rest of the board is read against — and it is the
+ * default selection rather than whichever token happens to have the deepest
+ * Birdeye pool this minute.
+ */
+function paintHero() {
+  const el = $('hero');
+  if (!el) return;
+  const t = S.tokens.find((x) => x.address.toLowerCase() === HERO.toLowerCase());
+  if (!t) { el.innerHTML = ''; return; }
+  const be = S.be[t.address.toLowerCase()];
+  const sup = supTotalOf(t);
+  const liveMap = S.live[t.address] || {};
+  const on = C.CHAINS.filter((c) => liveMap[c.id] === true).length;
+  const chg = be?.priceChange24h;
+  el.innerHTML = `
+    <div class="heroMark">${h((t.symbol || 'OMNI').slice(0, 4))}</div>
+    <div class="heroBody">
+      <div class="heroName">${h(t.symbol || 'OMNI')} <span class="dim">${h(t.name || '')}</span></div>
+      <div class="dim" style="font-size:11px;margin-top:4px">
+        <a href="https://basescan.org/address/${h(t.address)}" target="_blank" rel="noreferrer">${h(t.address)}</a>
+        · the launch this board starts at · ${on || '…'}/9 chains live
+      </div>
+    </div>
+    <div class="heroStats">
+      <div><div class="k">price</div><div class="v">${be ? C.fmtUsd(be.value) : '…'}</div></div>
+      <div><div class="k">24h</div><div class="v ${chg > 0 ? 'up' : chg < 0 ? 'down' : 'dim'}">${chg != null ? C.fmtPct(chg) : '—'}</div></div>
+      <div><div class="k">mcap · 9ch</div><div class="v acc">${be && sup ? C.fmtUsd(be.value * sup) : '…'}</div></div>
+      <div><div class="k">float</div><div class="v">${sup ? C.fmtNum(sup, 5) : '…'}</div></div>
+    </div>
+    <div class="heroActs">
+      <button class="btn go" data-hero="chart">chart</button>
+      <button class="btn go" data-hero="curve">trade</button>
+    </div>`;
+  el.onclick = (e) => {
+    const b = e.target.closest('[data-hero]');
+    if (!b) return;
+    select(t, true);
+    go(b.dataset.hero);
+  };
 }
 
 function paintBoardRows() {
@@ -375,7 +425,7 @@ function paintBoardRows() {
   $('bNote').textContent = S.boot === 'empty'
     ? 'nothing found — neither the site index nor the launcher events returned a launch.'
     : rows.length
-      ? 'tap a row to read every pool for that CA on all nine chains. prices and 24h change are Birdeye prints on Base; liveness is eth_getCode on each chain. rows marked unindexed are on chain but missing from the site index — they trade exactly the same.'
+      ? `${S.hidden ? `${S.hidden} pre-OMNI launch${S.hidden === 1 ? '' : 'es'} hidden, same as the site's own index. ` : ''}tap a row to read every pool for that CA on all nine chains. prices and 24h change are Birdeye prints on Base; liveness is eth_getCode on each chain. rows marked unindexed are on chain but missing from the site index — they trade exactly the same.`
       : S.tokens.length ? 'no launch matches that filter.' : 'reading the site index and the launcher events…';
 }
 
@@ -881,74 +931,153 @@ function paintRoutes() {
   }).join('');
 }
 
-/* ============================================================ job runner */
+/* ================================================================ wallet */
 //
-// Every write returns a job id. The page follows the steps; nothing is optimistic,
-// and a job that fails says which step it died on.
+// The desk holds no key. Every transaction is built by the server against live
+// pool state — quote, slippage floor, calldata — and handed to whatever wallet
+// the visitor has, which signs it or refuses. MetaMask, Rabby, Frame: anything
+// that speaks EIP-1193.
 
-async function startJob(path, body, onDone) {
-  if (!S.me?.canWrite) {
-    S.jobs.unshift({ id: 'local', kind: 'refused', state: 'error', steps: [],
-      error: 'this server is read-only — restart it with OMNIVIEW_WRITE=1 and STACCOVERFLOW_KP set' });
-    paintJobs();
-    return null;
+const W = { provider: null, address: null, chainId: null, providers: [] };
+
+// EIP-6963: wallets announce themselves rather than fighting over
+// window.ethereum. Falls back to window.ethereum for anything older.
+addEventListener('eip6963:announceProvider', (e) => {
+  if (!W.providers.some((p) => p.info.uuid === e.detail.info.uuid)) W.providers.push(e.detail);
+});
+dispatchEvent(new Event('eip6963:requestProvider'));
+
+function pickProvider() {
+  if (W.providers.length === 1) return W.providers[0].provider;
+  if (W.providers.length > 1) {
+    const names = W.providers.map((p, i) => `${i + 1}. ${p.info.name}`).join('\n');
+    const n = Number(prompt(`which wallet?\n${names}`, '1'));
+    return (W.providers[n - 1] ?? W.providers[0]).provider;
   }
+  return window.ethereum ?? null;
+}
+
+async function connect() {
+  const p = pickProvider();
+  if (!p) { alert('no wallet found — install MetaMask, Rabby, or anything EIP-1193'); return; }
+  W.provider = p;
+  const accounts = await p.request({ method: 'eth_requestAccounts' });
+  W.address = accounts[0];
+  W.chainId = Number(await p.request({ method: 'eth_chainId' }));
+  p.on?.('accountsChanged', (a) => { W.address = a[0] ?? null; paintWallet(); paintAll(); });
+  p.on?.('chainChanged', (c) => { W.chainId = Number(c); paintWallet(); });
+  paintWallet();
+  $('bagAddr').value = W.address;
+  loadBag();
+  loadPending();
+  paintAll();
+}
+
+function paintWallet() {
+  const el = $('wallet');
+  if (W.address) {
+    const on = C.byId[W.chainId];
+    el.innerHTML = `<span class="dot"></span><b class="acc">${h(C.short(W.address))}</b> ${h(on ? on.short : 'chain ' + W.chainId)}`;
+    el.title = W.address;
+    el.classList.remove('btn');
+    el.classList.add('pill');
+  } else {
+    el.textContent = 'connect wallet';
+    el.classList.add('btn');
+    el.classList.remove('pill');
+  }
+}
+
+/**
+ * Put the wallet on the right chain, adding it when the wallet has never heard
+ * of it. Six of these nine are chains no wallet ships with.
+ */
+async function ensureChain(id) {
+  const want = '0x' + Number(id).toString(16);
+  if (Number(W.chainId) === Number(id)) return;
   try {
-    const j = await C.apiPost(path, body);
-    S.job = { id: j.id, kind: j.kind, state: 'running', steps: [], onDone };
-    S.jobs.unshift(S.job);
-    paintJobs();
-    return j.id;
+    await W.provider.request({ method: 'wallet_switchEthereumChain', params: [{ chainId: want }] });
   } catch (e) {
-    S.jobs.unshift({ id: '—', kind: path.split('/').pop(), state: 'error', steps: [], error: e.message });
-    paintJobs();
-    return null;
+    if (e?.code !== 4902 && !/unrecognized|not added|Unrecognized/i.test(String(e?.message))) throw e;
+    const c = (S.me?.chains ?? []).find((x) => x.id === Number(id));
+    const local = C.byId[Number(id)];
+    if (!c) throw new Error(`no rpc known for chain ${id}`);
+    await W.provider.request({ method: 'wallet_addEthereumChain', params: [{
+      chainId: want, chainName: c.name, rpcUrls: [c.rpc],
+      nativeCurrency: { name: c.nativeSymbol, symbol: c.nativeSymbol, decimals: 18 },
+      blockExplorerUrls: [local?.explorer ?? c.explorer],
+    }] });
+    await W.provider.request({ method: 'wallet_switchEthereumChain', params: [{ chainId: want }] });
   }
+  W.chainId = Number(id);
+  paintWallet();
 }
 
-async function pollJob() {
-  if (!S.job || S.job.state !== 'running' || S.job.id === 'local') return;
-  let j;
-  try { j = await C.api('/api/job', { id: S.job.id }); } catch { return; }
-  Object.assign(S.job, j);
-  paintJobs();
-  if (j.state !== 'running') {
-    const done = S.job.onDone;
-    S.job = null;
-    if (done) done(j);
+/** Poll for a receipt through this server's proxy: the wallet's own node lags. */
+async function waitReceipt(chainId, hash, timeoutMs = 300_000) {
+  const until = Date.now() + timeoutMs;
+  while (Date.now() < until) {
+    const r = await C.rpc(chainId, 'eth_getTransactionReceipt', [hash]).catch(() => null);
+    if (r) return r;
+    await new Promise((res) => setTimeout(res, 3000));
   }
+  throw new Error(`no receipt for ${hash} after ${Math.round(timeoutMs / 1000)}s`);
 }
 
-function jobsHtml() {
-  if (!S.jobs.length) {
-    return `<div class="log dim">no jobs yet. ${S.me?.canWrite
-      ? 'anything you start here signs with ' + h(C.short(S.me.address)) + ' and spends real money.'
-      : 'this server is read-only: restart it with OMNIVIEW_WRITE=1 and STACCOVERFLOW_KP set to enable writes.'}</div>`;
-  }
-  return S.jobs.slice(0, 4).map((j) => {
-    const state = j.state === 'running' ? '<span class="warn">running</span>'
-      : j.state === 'done' ? '<span class="up">done</span>' : '<span class="down">failed</span>';
-    const steps = (j.steps || []).map((s) =>
-      `<div class="s"><time>${new Date(s.at).toLocaleTimeString()}</time><span>${linkify(s.text)}</span></div>`).join('');
-    const err = j.error ? `<div class="s"><time></time><span class="down">${h(j.error)}</span></div>` : '';
-    const res = j.result?.token
-      ? `<div class="s"><time></time><span class="acc">token ${h(j.result.token)}</span></div>` : '';
-    return `<div class="log" style="margin-bottom:8px">
-      <div class="s"><time>${h(j.id)}</time><span><b>${h(j.kind)}</b> ${state}</span></div>
-      ${steps}${res}${err}</div>`;
-  }).join('');
+/* ------------------------------------------------------------- the log */
+//
+// One transcript, shown on every tab that can start something. No job ids and
+// no server state: the page ran it, so the page has it.
+
+function log(text, cls) {
+  S.log.unshift({ at: Date.now(), text: String(text), cls: cls || '' });
+  S.log = S.log.slice(0, 200);
+  paintLog();
 }
 
-// Explorer links inside a step line should be clickable; everything else in a
-// step is untrusted text and gets escaped.
+function paintLog() {
+  const html = !S.log.length
+    ? `<div class="log dim">nothing yet. every transaction here is built by the server against live pool state and signed by your wallet — this page never sees a key.</div>`
+    : `<div class="log">${S.log.map((l) =>
+      `<div class="s"><time>${new Date(l.at).toLocaleTimeString()}</time><span class="${l.cls}">${linkify(l.text)}</span></div>`).join('')}</div>`;
+  for (const id of ['cvLog', 'lnLog', 'brLog']) { const el = $(id); if (el) el.innerHTML = html; }
+}
+
+// Explorer links inside a line should be clickable; the rest is escaped.
 function linkify(text) {
   return h(text).replace(/https?:\/\/[^\s)]+/g, (u) => `<a href="${u}" target="_blank" rel="noreferrer">${u}</a>`);
 }
 
-function paintJobs() {
-  for (const id of ['cvLog', 'lnLog', 'brLog']) {
-    const el = $(id);
-    if (el) el.innerHTML = jobsHtml();
+/**
+ * Run a server-built step list through the wallet.
+ *
+ * A sell is an approve and then a swap, so steps come as a list; each one is
+ * confirmed before the next is offered, because the second is invalid until the
+ * first has landed.
+ */
+async function runSteps(steps) {
+  if (!W.address) { await connect(); if (!W.address) return []; }
+  const done = [];
+  for (const s of steps) {
+    await ensureChain(s.chainId);
+    log(`${s.label} on ${s.chainName}${s.note ? ` — ${s.note}` : ''}…`);
+    const hash = await W.provider.request({ method: 'eth_sendTransaction', params: [{
+      from: W.address, to: s.to, data: s.data, value: s.value }] });
+    const ex = C.byId[s.chainId]?.explorer;
+    log(`sent ${ex ? `${ex}/tx/${hash}` : hash}`);
+    const rec = await waitReceipt(s.chainId, hash);
+    if (Number(rec.status) !== 1 && rec.status !== '0x1') throw new Error(`${s.label} reverted (${hash})`);
+    log(`${s.label} confirmed`, 'up');
+    done.push({ ...s, hash, receipt: rec });
+  }
+  return done;
+}
+
+/** Wrap a flow so a rejected signature reads as a rejected signature. */
+async function guard(fn) {
+  try { await fn(); } catch (e) {
+    const m = String(e?.message ?? e);
+    log(/user rejected|denied|4001/i.test(m) ? 'you rejected the transaction' : m, 'down');
   }
 }
 
@@ -956,7 +1085,7 @@ function paintJobs() {
 //
 // The bonding curve lives on Base only, and only until the token graduates. It
 // is the "buy cheap on the pad" half of the trade — so this prices the pad and
-// both Base pools with the same size, and says which one is actually cheaper.
+// both Base pools at the same size and says which one is actually cheaper.
 
 function mountCurve() {
   $('tab-curve').innerHTML = `
@@ -973,14 +1102,16 @@ function mountCurve() {
           <input type="text" id="cvEth" value="0.01" style="width:100%" /></div>
         <div style="flex:1;min-width:150px"><label class="f">sell size (tokens)</label>
           <input type="text" id="cvTok" placeholder="0" style="width:100%" /></div>
+        <div style="min-width:120px"><label class="f">slippage bps</label>
+          <input type="text" id="cvSlip" value="1000" style="width:100%" /></div>
         <button class="btn go" id="cvQuote">quote</button>
       </div>
       <div class="table" style="margin-top:14px">
-        <div class="th" style="grid-template-columns:130px minmax(0,1fr) minmax(0,1fr) 150px">
+        <div class="th" style="grid-template-columns:130px minmax(0,1fr) minmax(0,1fr) 170px">
           <div>venue</div><div class="r">tokens for the buy</div><div class="r">eth for the sell</div><div>act</div>
         </div>
         <div id="cvRows"></div>
-        <div class="note" id="cvNote">the pad is a fixed curve; the pools move. when the pad is cheaper than the hooked pool by more than the surge fee, that is the "buy the pad, sell the dex" trade — and it is the same wallet on the same chain, so it settles in two txs with no bridge.</div>
+        <div class="note" id="cvNote">the pad is a fixed curve; the pools move. when the pad hands you more tokens than the hooked pool for the same ETH, that is the "buy the pad, sell the dex" trade — same wallet, same chain, two transactions, no bridge.</div>
       </div>
     </div>
     <div id="cvLog"></div>`;
@@ -991,8 +1122,14 @@ function mountCurve() {
     const [venue, side] = b.dataset.trade.split(':');
     const amount = side === 'buy' ? $('cvEth').value.trim() : $('cvTok').value.trim();
     if (!amount || Number(amount) <= 0) { $('cvNote').textContent = 'set a size first.'; return; }
-    if (!confirm(`${side} ${amount} on Base ${venue}? this signs and spends.`)) return;
-    startJob('/api/trade', { ca: S.sel.address, chain: C.HOME_CHAIN, venue, side, amount }, () => loadCurve());
+    guard(async () => {
+      if (!W.address) { await connect(); if (!W.address) return; }
+      const tx = await C.apiPost('/api/tx/trade', { ca: S.sel.address, chain: C.HOME_CHAIN,
+        venue, side, amount, from: W.address, slippageBps: Number($('cvSlip').value) || undefined });
+      log(`${side} ${amount} on Base ${venue}: quoted ${C.fmtNum(tx.quoted, 6)}, floor ${C.fmtNum(tx.minOut, 6)} at ${tx.slippageBps}bps`);
+      await runSteps(tx.steps);
+      loadCurve(); loadBag();
+    });
   });
 }
 
@@ -1028,12 +1165,11 @@ function paintCurve() {
       : `${dexBest.kind} is the cheaper buy right now`;
   } else { $('cvEdge').textContent = '—'; $('cvEdgeNote').textContent = 'quote a size to compare'; }
 
-  const act = (venue) => S.me?.canWrite
-    ? `<button class="btn small" data-trade="${venue}:buy">buy</button> <button class="btn small" data-trade="${venue}:sell">sell</button>`
-    : '<span class="dim">read-only</span>';
+  const act = (venue) =>
+    `<button class="btn small" data-trade="${venue}:buy">buy</button> <button class="btn small" data-trade="${venue}:sell">sell</button>`;
   const rows = [];
   if (d.onCurve) {
-    rows.push(`<div class="tr" style="grid-template-columns:130px minmax(0,1fr) minmax(0,1fr) 150px">
+    rows.push(`<div class="tr" style="grid-template-columns:130px minmax(0,1fr) minmax(0,1fr) 170px">
       <div class="acc" style="font-weight:700">curve</div>
       <div class="r">${d.buy ? C.fmtNum(d.buy.tokensOut, 6) : '—'}</div>
       <div class="r">${d.sell ? C.fmtNum(d.sell.nativeOut, 6) : '—'}</div>
@@ -1041,7 +1177,7 @@ function paintCurve() {
   }
   for (const q of d.dex) {
     const venue = q.kind === 'v4-hooked' ? 'hooked' : 'hookless';
-    rows.push(`<div class="tr" style="grid-template-columns:130px minmax(0,1fr) minmax(0,1fr) 150px">
+    rows.push(`<div class="tr" style="grid-template-columns:130px minmax(0,1fr) minmax(0,1fr) 170px">
       <div style="font-weight:700">${h(venue)}</div>
       <div class="r">${q.tokensOut != null ? C.fmtNum(q.tokensOut, 6) : '—'}</div>
       <div class="r">${q.nativeOut != null ? C.fmtNum(q.nativeOut, 6) : '—'}</div>
@@ -1073,27 +1209,35 @@ function mountLaunch() {
           <div style="border:1px solid #1e2530;background:#0d1014;border-radius:10px;padding:12px;text-align:center">
             <img id="lnPreview" alt="" style="width:120px;height:120px;border-radius:12px;background:#101319;object-fit:cover" src="/mark.svg" />
             <div style="margin-top:10px"><input type="file" id="lnFile" accept="image/*" style="font-size:11px;color:#7d8590;width:100%" /></div>
-            <div class="dim" style="font-size:10.5px;margin-top:8px;text-wrap:pretty" id="lnImgNote">no file: the server generates a mark from the ticker, deterministically, so a retry keeps the same logo.</div>
+            <div class="dim" style="font-size:10.5px;margin-top:8px;text-wrap:pretty" id="lnImgNote">no file: a mark is generated from the ticker, deterministically, so a retry keeps the same logo.</div>
           </div>
         </div>
       </div>
       <div class="row" style="margin-top:14px;justify-content:space-between">
-        <label class="mut" style="font-size:11px"><input type="checkbox" id="lnSeed" checked style="accent-color:#c9f24d;vertical-align:middle" /> seed all nine chains after launching</label>
+        <div class="dim" style="font-size:10.5px;max-width:640px;text-wrap:pretty">
+          two signatures: the metadata upload is a server-side forward (their endpoint sends no CORS header), then your
+          wallet signs the launch on Base. 0.0002 ETH fee plus whatever creator buy you set.
+        </div>
         <button class="btn go" id="lnGo">launch</button>
       </div>
-      <div class="dim" style="font-size:10.5px;margin-top:10px;text-wrap:pretty">
-        launch fee is 0.0002 ETH on Base plus the creator buy. seeding splits the float nine ways, has the relayer deploy
-        the same CA on the other eight chains, bridges each share out, and opens both pools per chain — hooked and hookless.
-        it takes minutes and every step lands below. a chain that does not open on the first pass is retried against real
-        pool state, not against what the relay says it did.
-      </div>
     </div>
+
     <div class="panel" style="margin-bottom:12px">
-      <div class="row" style="align-items:flex-end">
-        <div class="grow"><label class="f">or seed a CA that already launched</label><input type="text" id="lnSeedCa" placeholder="0x…" style="width:100%" /></div>
-        <button class="btn go" id="lnSeedGo">seed only</button>
+      <div class="row" style="justify-content:space-between;align-items:flex-end">
+        <div class="grow"><label class="f">seed a launched CA across nine chains</label>
+          <input type="text" id="lnSeedCa" placeholder="0x…" style="width:100%" /></div>
+        <button class="btn go" id="lnSeedLoad">read state</button>
       </div>
-      <div class="dim" style="font-size:10.5px;margin-top:8px">seeding is idempotent: it checks whether the relayer already holds that chain’s float before bridging any more out.</div>
+      <div class="table" style="margin-top:14px">
+        <div class="th" style="grid-template-columns:90px 110px minmax(0,1fr) minmax(0,1.6fr)">
+          <div>chain</div><div>deployed</div><div>pools</div><div>steps</div>
+        </div>
+        <div id="lnSeedRows"></div>
+        <div class="note">seeding is three moves per chain and they are ordered: the relayer deploys the CA, you bridge
+          that chain's share of the float to it, then the relayer opens both pools from what it now holds. bridging to a
+          chain with no contract burns supply that cannot be minted — so deploy is not optional, and the state here is
+          read from the chain rather than from what the relay claims.</div>
+      </div>
     </div>
     <div id="lnLog"></div>`;
 
@@ -1105,27 +1249,120 @@ function mountLaunch() {
     $('lnPreview').src = b64;
     $('lnImgNote').textContent = `${f.name} · ${(f.size / 1024).toFixed(0)} kB`;
   });
-  $('lnGo').onclick = () => {
+
+  $('lnGo').onclick = () => guard(async () => {
     const name = $('lnName').value.trim(); const symbol = $('lnSymbol').value.trim();
     if (!name || !symbol) { alert('name and ticker are required'); return; }
-    if (!confirm(`launch ${symbol} on Base and ${$('lnSeed').checked ? 'seed nine chains' : 'stop after Base'}? this signs and spends.`)) return;
-    startJob('/api/launch', {
-      name, symbol,
-      tagline: $('lnTagline').value.trim(),
-      description: $('lnDesc').value.trim(),
+    if (!W.address) { await connect(); if (!W.address) return; }
+    log(`uploading metadata for ${symbol}…`);
+    const meta = await C.apiPost('/api/metadata', { name, symbol,
+      description: $('lnDesc').value.trim() || $('lnTagline').value.trim(),
+      image: S.launchImage?.data ?? null, imageName: S.launchImage?.name ?? null });
+    log(`${meta.generated ? 'generated a mark · ' : ''}${meta.logoURI}`);
+    const tx = await C.apiPost('/api/tx/launch', { name, symbol,
+      tagline: $('lnTagline').value.trim(), logoURI: meta.logoURI,
       targetRaiseEth: $('lnRaise').value.trim() || '0.06',
-      creatorBuyEth: $('lnBuy').value.trim() || '0',
-      seed: $('lnSeed').checked,
-      image: S.launchImage?.data ?? null,
-      imageName: S.launchImage?.name ?? null,
-    }, (j) => { if (j.result?.token) { discover(); } });
-  };
-  $('lnSeedGo').onclick = () => {
+      creatorBuyEth: $('lnBuy').value.trim() || '0' });
+    const done = await runSteps(tx.steps);
+    if (!done.length) return;
+    const r = await C.apiPost('/api/launched', { hash: done[0].hash });
+    log(`launched ${r.token}`, 'acc');
+    $('lnSeedCa').value = r.token;
+    S.launchMeta = { name, symbol, tagline: $('lnTagline').value.trim(), logoURI: meta.logoURI };
+    discover();
+    loadSeedState(r.token);
+  });
+
+  $('lnSeedLoad').onclick = () => {
     const ca = $('lnSeedCa').value.trim();
     if (!/^0x[0-9a-fA-F]{40}$/.test(ca)) { alert('need a 0x address'); return; }
-    if (!confirm(`seed ${ca} across nine chains? this bridges float and opens pools.`)) return;
-    startJob('/api/seed', { ca });
+    loadSeedState(ca);
   };
+
+  $('lnSeedRows').addEventListener('click', (e) => {
+    const b = e.target.closest('[data-seed]');
+    if (!b) return;
+    const [act, id] = b.dataset.seed.split(':');
+    const ca = $('lnSeedCa').value.trim();
+    guard(() => seedStep(act, Number(id), ca));
+  });
+}
+
+async function loadSeedState(ca) {
+  S.seedCa = ca;
+  S.seed = {};
+  paintSeed();
+  await Promise.all(C.CHAINS.map(async (c) => {
+    S.seed[c.id] = await C.api('/api/pools', { ca, chain: c.id }).catch(() => null);
+    paintSeed();
+  }));
+  if (W.address) {
+    S.seedBag = await C.api('/api/bag', { address: W.address, ca }).catch(() => null);
+    paintSeed();
+  }
+}
+
+function paintSeed() {
+  const rows = $('lnSeedRows');
+  if (!rows) return;
+  if (!S.seedCa) { rows.innerHTML = ''; return; }
+  rows.innerHTML = C.CHAINS.map((c) => {
+    const s = S.seed[c.id];
+    const bag = S.seedBag?.chains.find((x) => x.id === c.id);
+    const dep = !s ? '…' : s.deployed ? '<span class="up">yes</span>' : '<span class="warn">no</span>';
+    const pools = !s ? '…' : `${s.hooked ? '<span class="up">hooked</span>' : '<span class="dim">hooked</span>'} · ${s.hookless ? '<span class="up">hookless</span>' : '<span class="dim">hookless</span>'}`;
+    const btn = (act, label, on) =>
+      `<button class="btn small ${on ? '' : 'off'}" data-seed="${act}:${c.id}"${on ? '' : ' disabled'}>${label}</button>`;
+    const acts = [
+      btn('deploy', 'deploy', s && !s.deployed),
+      c.id === C.HOME_CHAIN ? '' : btn('bridge', 'bridge share', Boolean(s?.deployed)),
+      btn('wall', 'open pools', Boolean(s?.deployed && (!s.hooked || !s.hookless))),
+      btn('check', 'recheck', true),
+    ].filter(Boolean).join(' ');
+    return `<div class="tr" style="grid-template-columns:90px 110px minmax(0,1fr) minmax(0,1.6fr)">
+      <div style="font-weight:700">${h(c.short)}${bag?.token ? `<div class="dim" style="font-size:10px;font-weight:400">${C.fmtNum(bag.token, 4)}</div>` : ''}</div>
+      <div>${dep}</div><div style="font-size:11px">${pools}</div><div>${acts}</div>
+    </div>`;
+  }).join('');
+}
+
+async function seedStep(act, chainId, ca) {
+  const c = C.byId[chainId];
+  if (act === 'check') { S.seed[chainId] = await C.api('/api/pools', { ca, chain: chainId }); paintSeed(); return; }
+
+  if (act === 'deploy') {
+    const meta = S.launchMeta ?? await recoverLaunchMeta(ca);
+    log(`asking the relayer to deploy ${ca} on ${c.short}…`);
+    const r = await C.apiPost('/api/relay', { action: 'deploy', chainId, token: ca,
+      name: meta.name, symbol: meta.symbol, tagline: meta.tagline ?? '', logoURI: meta.logoURI,
+      creator: W.address });
+    log(r.skipped ? `${c.short}: already deployed` : `${c.short}: deploy ${r.hash ?? 'requested'}`, 'up');
+  } else if (act === 'bridge') {
+    if (!W.address) { await connect(); if (!W.address) return; }
+    const bag = await C.api('/api/bag', { address: W.address, ca });
+    const home = bag.chains.find((x) => x.id === C.HOME_CHAIN);
+    const share = (home?.token ?? 0) / C.CHAINS.filter((x) => x.id !== C.HOME_CHAIN).length;
+    const amount = prompt(`how much to bridge to ${c.short}?`, String(share.toFixed(6)));
+    if (!amount) return;
+    const tx = await C.apiPost('/api/tx/bridge', { ca, from: C.HOME_CHAIN, to: chainId,
+      amount, recipient: W.address });
+    const done = await runSteps(tx.steps);
+    if (done.length) await requestMintFor(C.HOME_CHAIN, done[0].hash);
+  } else if (act === 'wall') {
+    log(`asking the relayer to open ${c.short}’s pools…`);
+    const r = await C.apiPost('/api/relay', { action: 'wall', chainId, token: ca });
+    log(`${c.short}: hooked ${r.hooked?.ok ? 'ok' : r.hooked?.reason ?? '—'}, hookless ${r.hookless?.ok ? 'ok' : r.hookless?.reason ?? '—'}`);
+  }
+  // The relay's answer is not evidence: it has reported failures for pools that
+  // opened and successes for pools that did not. Read the chain.
+  S.seed[chainId] = await C.api('/api/pools', { ca, chain: chainId }).catch(() => null);
+  paintSeed();
+}
+
+async function recoverLaunchMeta(ca) {
+  const t = S.tokens.find((x) => x.address.toLowerCase() === ca.toLowerCase());
+  if (!t) throw new Error('no metadata for that CA — launch it here, or fill the launch form first');
+  return { name: t.name ?? t.symbol, symbol: t.symbol, tagline: t.tagline ?? '', logoURI: t.logoURI ?? '' };
 }
 
 /* ================================================================ bridge */
@@ -1141,13 +1378,11 @@ function mountBridge() {
         <div style="min-width:170px"><label class="f">amount</label><input type="text" id="brAmt" placeholder="0" style="width:100%" /></div>
         <button class="btn go" id="brGo">bridge</button>
       </div>
-      <div class="row" style="margin-top:10px;justify-content:space-between">
-        <div class="dim" style="font-size:10.5px;max-width:760px;text-wrap:pretty">
-          bridgeOut burns on the source immediately; the mint on the destination is a separate permissioned call the
-          relayer makes. so a relayer that is down leaves value burned with nothing on the other side — that burn is
-          recorded and re-requestable, which is why this waits for the mint and says so when it does not arrive.
-        </div>
-        <label class="mut" style="font-size:11px"><input type="checkbox" id="brWait" checked style="accent-color:#c9f24d;vertical-align:middle" /> wait for the mint</label>
+      <div class="dim" style="margin-top:10px;font-size:10.5px;max-width:860px;text-wrap:pretty">
+        your wallet signs the burn. the mint on the destination is a permissioned call only the relayer can make, so this
+        asks for it straight afterwards — and if the relayer is down, the burn is still recorded on chain and shows up
+        below as unminted, re-requestable, until it lands. that is the whole index: BridgeOut logs on the source,
+        processed() on the destination. no database.
       </div>
     </div>
     <div class="table" style="margin-bottom:12px">
@@ -1155,20 +1390,30 @@ function mountBridge() {
         <div>chain</div><div class="r">token balance</div><div class="r">native</div><div>use as source</div>
       </div>
       <div id="brRows"></div>
-      <div class="note" id="brNote">balances for the signing wallet, on all nine chains.</div>
+      <div class="note" id="brNote">connect a wallet to read balances.</div>
+    </div>
+    <div class="table" style="margin-bottom:12px">
+      <div class="th" style="grid-template-columns:150px minmax(0,1fr) minmax(0,1.4fr) 140px">
+        <div>burned → owed</div><div class="r">amount</div><div>message</div><div>act</div>
+      </div>
+      <div id="brPending"></div>
+      <div class="note" id="brPendNote">burns that never minted, for the connected wallet.</div>
     </div>
     <div id="brLog"></div>`;
   $('brTo').value = String(C.HOME_CHAIN);
-  $('brGo').onclick = () => {
+  $('brGo').onclick = () => guard(async () => {
     const ca = $('brCa').value.trim();
     const from = Number($('brFrom').value); const to = Number($('brTo').value);
     const amount = $('brAmt').value.trim();
     if (!/^0x[0-9a-fA-F]{40}$/.test(ca)) { alert('need a token address'); return; }
     if (from === to) { alert('source and destination are the same chain'); return; }
     if (!amount || Number(amount) <= 0) { alert('set an amount'); return; }
-    if (!confirm(`burn ${amount} on ${C.byId[from].short} and mint on ${C.byId[to].short}?`)) return;
-    startJob('/api/bridge', { ca, from, to, amount, wait: $('brWait').checked }, () => loadBridgeBag());
-  };
+    if (!W.address) { await connect(); if (!W.address) return; }
+    const tx = await C.apiPost('/api/tx/bridge', { ca, from, to, amount, recipient: W.address });
+    const done = await runSteps(tx.steps);
+    if (done.length) await requestMintFor(from, done[0].hash);
+    loadBridgeBag(); loadPending();
+  });
   $('brRows').addEventListener('click', (e) => {
     const b = e.target.closest('[data-src]');
     if (!b) return;
@@ -1176,33 +1421,73 @@ function mountBridge() {
     const row = S.bridgeBag?.chains.find((c) => String(c.id) === b.dataset.src);
     if (row?.token) $('brAmt').value = String(row.token);
   });
+  $('brPending').addEventListener('click', (e) => {
+    const b = e.target.closest('[data-mint]');
+    if (!b) return;
+    const [chain, hash] = b.dataset.mint.split(':');
+    guard(() => requestMintFor(Number(chain), hash));
+  });
+}
+
+/** Ask the relayer to mint a burn that already happened, then verify on chain. */
+async function requestMintFor(chainId, hash) {
+  log('asking the relayer to mint…');
+  const r = await C.apiPost('/api/mint', { chain: chainId, hash });
+  log(`mint requested: ${C.fmtNum(r.amount, 6)} ${r.from} → ${r.to}`);
+  for (let i = 0; i < 20; i += 1) {
+    await new Promise((res) => setTimeout(res, 5000));
+    const dst = C.CHAINS.find((c) => c.short === r.to);
+    const m = await C.api('/api/minted', { chain: dst.id, messageId: r.messageId }).catch(() => null);
+    if (m?.processed) { log(`minted on ${r.to}`, 'up'); loadPending(); return; }
+  }
+  log(`not minted yet — the burn is on chain and stays re-requestable (message ${C.short(r.messageId)})`, 'warn');
+  loadPending();
 }
 
 async function loadBridgeBag() {
-  if (!S.me?.address || !S.sel) return;
-  try { S.bridgeBag = await C.api('/api/bag', { address: S.me.address, ca: S.sel.address }); }
+  if (!W.address || !S.sel) return;
+  try { S.bridgeBag = await C.api('/api/bag', { address: W.address, ca: S.sel.address }); }
   catch { S.bridgeBag = null; }
   paintBridge();
 }
 
+async function loadPending() {
+  if (!W.address) return;
+  try { S.pending = await C.api('/api/pending', { address: W.address }); }
+  catch { S.pending = null; }
+  paintBridge();
+}
+
 function paintBridge() {
-  const d = S.bridgeBag;
   const rows = $('brRows');
   if (!rows) return;
+  const d = S.bridgeBag;
   if (!d) {
     rows.innerHTML = '';
-    $('brNote').textContent = S.me?.canWrite
-      ? 'pick a token on the board to read balances.'
-      : 'read-only server: no signing wallet to read balances for.';
-    return;
+    $('brNote').textContent = W.address ? 'pick a token on the board to read balances.' : 'connect a wallet to read balances.';
+  } else {
+    rows.innerHTML = d.chains.map((c) => `<div class="tr" style="grid-template-columns:110px minmax(0,1fr) minmax(0,1fr) 120px">
+      <div style="font-weight:700">${h(c.short)}</div>
+      <div class="r ${c.token > 0 ? '' : 'dim'}">${c.token != null ? C.fmtNum(c.token, 6) : '—'}</div>
+      <div class="r soft">${c.native != null ? `${C.fmtNum(c.native, 5)} ${h(c.nativeSymbol)}` : '—'}</div>
+      <div><button class="btn small" data-src="${c.id}">from ${h(c.short)}</button></div>
+    </div>`).join('');
+    $('brNote').textContent = `balances for ${C.short(d.address)} · ${C.fmtUsd(d.nativeUsdTotal)} of gas across nine chains`;
   }
-  rows.innerHTML = d.chains.map((c) => `<div class="tr" style="grid-template-columns:110px minmax(0,1fr) minmax(0,1fr) 120px">
-    <div style="font-weight:700">${h(c.short)}</div>
-    <div class="r ${c.token > 0 ? '' : 'dim'}">${c.token != null ? C.fmtNum(c.token, 6) : '—'}</div>
-    <div class="r soft">${c.native != null ? `${C.fmtNum(c.native, 5)} ${h(c.nativeSymbol)}` : '—'}</div>
-    <div><button class="btn small" data-src="${c.id}">from ${h(c.short)}</button></div>
+
+  const p = $('brPending');
+  if (!p) return;
+  const stuck = S.pending?.stuck ?? [];
+  p.innerHTML = stuck.map((s) => `<div class="tr" style="grid-template-columns:150px minmax(0,1fr) minmax(0,1.4fr) 140px">
+    <div style="font-weight:700">${h(s.from)} → ${h(s.to ?? '?')}</div>
+    <div class="r warn">${C.fmtNum(s.amount, 6)}</div>
+    <div class="dim ell" style="font-size:10.5px">${h(C.short(s.messageId))}${s.txUrl ? ` · <a href="${h(s.txUrl)}" target="_blank" rel="noreferrer">burn</a>` : ''}</div>
+    <div>${s.txHash ? `<button class="btn small" data-mint="${s.fromId}:${h(s.txHash)}">request mint</button>` : ''}</div>
   </div>`).join('');
-  $('brNote').textContent = `balances for ${C.short(d.address)} · ${C.fmtUsd(d.nativeUsdTotal)} of gas across nine chains`;
+  $('brPendNote').textContent = !W.address ? 'connect a wallet to scan for unminted burns.'
+    : !S.pending ? 'scanning BridgeOut logs on all nine chains…'
+    : stuck.length ? `${stuck.length} burn${stuck.length === 1 ? '' : 's'} owed a mint, ${C.fmtNum(S.pending.total, 6)} tokens, over the last ${S.pending.scannedBlocks.toLocaleString()} blocks per chain`
+    : `nothing owed: every burn in the last ${S.pending.scannedBlocks.toLocaleString()} blocks per chain has been minted.`;
 }
 
 /* =================================================================== bag */

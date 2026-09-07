@@ -16,23 +16,22 @@
 
 import { createServer } from 'node:http';
 import { readFile, writeFile, mkdtemp } from 'node:fs/promises';
-import { randomUUID, createHash } from 'node:crypto';
+import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { dirname, join, extname } from 'node:path';
-import { formatUnits, parseUnits, parseEther, getAddress } from 'viem';
+import { formatUnits, parseUnits, parseEther, getAddress, encodeFunctionData, decodeEventLog } from 'viem';
 
-import { CHAINS, chainById, HOME_CHAIN, PORTAL, PORTAL_ABI, ERC20_ABI, PAD, PAD_ABI,
-  NATIVE, POOL_FEE, POOL_TICK_SPACING, rpcsFor } from '../src/config.mjs';
+import { CHAINS, chainById, HOME_CHAIN, PORTAL, PORTAL_ABI, ERC20_ABI, PAD, PAD_ABI, ROUTER_ABI,
+  NATIVE, POOL_FEE, POOL_TICK_SPACING, rpcsFor, arbHelperFor } from '../src/config.mjs';
 import { publicClient } from '../src/chain.mjs';
 import { fetchIndexedTokens, fetchLaunchedTokens, discoverCurve, getLogsChunked, poolId,
   readPoolState, tokenMeta } from '../src/discovery.mjs';
 import { nativePrices, toUsd } from '../src/prices.mjs';
-import { loadAccount } from '../src/chain.mjs';
-import { quoteBuy, quoteSell } from '../src/quote.mjs';
-import { buyOnVenue, sellOnVenue } from '../src/exec.mjs';
-import { bridge } from '../src/bridge.mjs';
-import { launchOnBase, seedAll, uploadMetadata, curveSqrtPrice } from '../src/launch.mjs';
+import { quoteBuy, quoteSell, ARTIFACT } from '../src/quote.mjs';
+import { requestMint } from '../src/bridge.mjs';
+import { uploadMetadata, curveSqrtPrice, deployRemote, wallChain, tokenFromReceipt,
+  saltFor, LAUNCH_ABI, LAUNCH_FEE_WEI, DEFAULT_HOOK_PARAMS } from '../src/launch.mjs';
 import * as be from './birdeye.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -41,6 +40,8 @@ const PORT = Number(process.env.PORT || 8787);
 // dashboard that can spend money should not be reachable just because it was
 // started on a box with a public interface. HOST=0.0.0.0 is opt-in.
 const HOST = process.env.HOST || '127.0.0.1';
+
+const ZERO32 = `0x${'0'.repeat(64)}`;
 
 const num = (v, d = 18) => (v === null || v === undefined ? null : Number(formatUnits(v, d)));
 
@@ -272,6 +273,9 @@ async function apiChart(ca, chainId, type, hours) {
 // happened to SWO. So the board reads both and says which source each row came
 // from; an unindexed launch is a real launch.
 
+/** The launch the index starts at: anything older is pre-launcher test noise. */
+const EPOCH_TOKEN = '0x9a5baA12664c89cFbF5cFcD9d0D4805bDcAB29E8';
+
 let _discovered = { at: 0, value: null };
 
 async function apiDiscover(lookback) {
@@ -303,9 +307,25 @@ async function apiDiscover(lookback) {
     });
   }));
 
+  // Cutoff: everything before OMNI is a test launch from before the launcher
+  // settled, and the site's own indexer ignores them — a board that showed them
+  // would disagree with every other surface for no gain. Kept as an address
+  // rather than a block because the launch chain is not always the same one.
+  const all = [...rows.values()].sort((a, b) => (b.block ?? 0) - (a.block ?? 0));
+  const floor = all.find((t) => t.address.toLowerCase() === EPOCH_TOKEN.toLowerCase());
+  const at = (t) => (t.createdAt ? Date.parse(t.createdAt) : null);
+  const keep = !floor ? all : all.filter((t) => {
+    if (t.address.toLowerCase() === EPOCH_TOKEN.toLowerCase()) return true;
+    const a = at(t); const b = at(floor);
+    if (a != null && b != null) return a >= b;
+    if (t.block != null && floor.block != null) return t.block >= floor.block;
+    return true;   // unknown age: show it rather than silently swallow a launch
+  });
+
   const value = {
-    tokens: [...rows.values()].sort((a, b) => (b.block ?? 0) - (a.block ?? 0)),
+    tokens: keep,
     indexed: indexed.length, fromEvents: extra.length,
+    hiddenBeforeEpoch: all.length - keep.length, epoch: EPOCH_TOKEN,
   };
   _discovered = { at: Date.now(), value };
   return value;
@@ -486,62 +506,288 @@ async function apiQuote(ca, chainId, kind, side, amount) {
   return { chain: c.short, venue: v.kind, side, in: String(amount), out: num(out) };
 }
 
-// -------------------------------------------------------------- write side
+// ------------------------------------------------------- transaction builder
 //
-// Everything below signs with the operator key. It is off unless the process was
-// started with OMNIVIEW_WRITE=1 AND the key is present, and the server binds to
-// loopback by default — a dashboard that can spend money should not be one
-// misconfigured bind away from the open internet.
+// Nothing here holds a key. The desk is a dapp: the visitor connects their own
+// wallet and signs their own transactions, exactly like every other front-end
+// for these pools. What this process does is the part a browser is bad at —
+// quoting against live pool state, deriving the slippage floor, and encoding
+// the calldata — and it hands back an unsigned transaction for the wallet to
+// sign or refuse.
+//
+// A step list rather than a single transaction, because a sell is an approve
+// and then a swap, and the page should not have to know which venues need one.
 
-const CAN_WRITE = process.env.OMNIVIEW_WRITE === '1' && Boolean(process.env.STACCOVERFLOW_KP);
-let _account = null;
-function operator() {
-  if (!CAN_WRITE) {
-    throw new Error('write endpoints are off — start with OMNIVIEW_WRITE=1 and STACCOVERFLOW_KP set');
+/** One unsigned transaction, in the shape `eth_sendTransaction` wants. */
+const step = (label, chain, to, data, value = 0n, note = null) => ({
+  label, note, chainId: chain.id, chainName: chain.name,
+  to: getAddress(to), data, value: '0x' + value.toString(16),
+});
+
+const MAX_UINT256 = (1n << 256n) - 1n;
+
+/** How much of `token` `owner` has already approved to `spender`. */
+const allowanceOf = (c, token, owner, spender) => publicClient(c)
+  .readContract({ address: token, abi: ERC20_ABI, functionName: 'allowance', args: [owner, spender] })
+  .catch(() => 0n);
+
+/**
+ * Buy or sell one venue: curve, hooked pool, or hookless pool.
+ *
+ * The floor is set from a quote taken against the pool's real state right now,
+ * so a stale edge reverts in the wallet instead of settling at a loss — the
+ * same rule the bot follows before it signs.
+ */
+async function txTrade({ ca, chain, venue, side, amount, from, slippageBps }) {
+  const token = getAddress(ca);
+  const c = chainById(chain);
+  if (!c) throw new Error(`unknown chain ${chain}`);
+  const kind = String(venue ?? 'hooked');
+  if (kind === 'curve' && c.id !== HOME_CHAIN) throw new Error('the curve only exists on Base');
+  const who = getAddress(from);
+  const v = venueFor(c, kind, token);
+  const wei = parseUnits(String(amount), 18);
+  if (wei <= 0n) throw new Error('amount must be positive');
+  const slip = BigInt(slippageBps ?? (side === 'sell' ? 1500 : 1000));
+
+  const quoted = side === 'buy'
+    ? await quoteBuy(c, token, v, wei)
+    : await quoteSell(c, token, v, wei);
+  if (!quoted || quoted === 0n) throw new Error(`no ${side} quote on ${c.name} ${v.kind}`);
+  const minOut = (quoted * (10000n - slip)) / 10000n;
+
+  // The hookless pool is unreachable through omnichain's own router: it builds
+  // the PoolKey with its own hook and rejects hooks = 0x0. It needs the OmniArb
+  // helper, which exists only where it has been deployed.
+  const helper = kind !== 'curve' && !v.viaOmniRouter ? arbHelperFor(c) : null;
+  if (helper !== null && !helper) {
+    throw new Error(`the hookless pool on ${c.name} has no OmniArb helper deployed — nothing on chain can reach it`);
   }
-  _account ??= loadAccount();
-  return _account;
+  const spender = kind === 'curve' ? PAD : (helper || c.router);
+
+  const steps = [];
+  if (side === 'sell') {
+    const have = await allowanceOf(c, token, who, spender);
+    if (have < wei) {
+      steps.push(step('approve', c, token,
+        encodeFunctionData({ abi: ERC20_ABI, functionName: 'approve', args: [spender, MAX_UINT256] }),
+        0n, `lets ${kind === 'curve' ? 'the pad' : helper ? 'the OmniArb helper' : 'the omnichain router'} move the tokens`));
+    }
+  }
+
+  if (kind === 'curve') {
+    steps.push(side === 'buy'
+      ? step('buy on the curve', c, PAD,
+        encodeFunctionData({ abi: PAD_ABI, functionName: 'buy', args: [token, minOut] }), wei)
+      : step('sell into the curve', c, PAD,
+        encodeFunctionData({ abi: PAD_ABI, functionName: 'sell', args: [token, wei, minOut] })));
+  } else if (helper) {
+    // Native is currency0 on every omnichain pool, so a buy is zeroForOne.
+    steps.push(step(`${side} the hookless pool`, c, helper,
+      encodeFunctionData({ abi: ARTIFACT.abi, functionName: 'swapV4',
+        args: [getAddress(c.poolManager), v.key, side === 'buy', wei, minOut] }),
+      side === 'buy' ? wei : 0n, 'through the OmniArb helper — the official router cannot reach this pool'));
+  } else {
+    steps.push(side === 'buy'
+      ? step('buy the hooked pool', c, c.router,
+        encodeFunctionData({ abi: ROUTER_ABI, functionName: 'buy',
+          args: [token, getAddress(c.hook), minOut, who, dl()] }), wei)
+      : step('sell the hooked pool', c, c.router,
+        encodeFunctionData({ abi: ROUTER_ABI, functionName: 'sell',
+          args: [token, getAddress(c.hook), wei, minOut, who, dl()] })));
+  }
+
+  return jsonSafe({ steps, venue: v.kind, side, chain: c.short,
+    quoted: num(quoted), minOut: num(minOut), slippageBps: Number(slip) });
+}
+
+const dl = (secs = 900) => BigInt(Math.floor(Date.now() / 1000) + secs);
+
+/**
+ * Burn on the source. The mint on the destination is a separate, permissioned
+ * call only the relayer can make — so the page must follow this transaction
+ * with /api/mint, or the tokens are burned with nothing on the other side.
+ */
+async function txBridge({ ca, from, to, amount, recipient }) {
+  const token = getAddress(ca);
+  const src = chainById(from);
+  const dst = chainById(to);
+  if (!src || !dst) throw new Error('from and to must both be known chain ids');
+  if (src.id === dst.id) throw new Error('source and destination are the same chain');
+  const wei = parseUnits(String(amount), 18);
+  if (wei <= 0n) throw new Error('amount must be positive');
+  const dest = getAddress(recipient);
+
+  // Refuse to build a burn into a chain where the token does not exist: bridgeOut
+  // burns unconditionally, while bridgeIn mints into the token contract on the
+  // destination. That mismatch is how 269 million tokens went into chains with no
+  // contract to mint them.
+  const code = await publicClient(dst).getBytecode({ address: token }).catch(() => null);
+  if (!code || code === '0x') {
+    throw new Error(`${token} is not deployed on ${dst.name} yet — burning to it would strand the supply`);
+  }
+
+  return jsonSafe({
+    steps: [step(`burn on ${src.short}`, src, PORTAL,
+      encodeFunctionData({ abi: PORTAL_ABI, functionName: 'bridgeOut',
+        args: [token, BigInt(dst.id), dest, wei] }),
+      0n, `the relayer mints the same amount to ${short(dest)} on ${dst.name}`)],
+    from: src.short, to: dst.short, destChainId: dst.id, amount: String(amount),
+  });
+}
+
+const short = (a) => `${a.slice(0, 6)}…${a.slice(-4)}`;
+
+/**
+ * Ask the relayer to mint, from a burn that already happened.
+ *
+ * Reads the BridgeOut event out of the receipt rather than trusting the caller
+ * for the nonce: the Portal guards each message by id, so a wrong nonce is a
+ * mint that can never be replayed correctly.
+ */
+async function apiMint({ chain, hash }) {
+  const src = chainById(chain);
+  if (!src) throw new Error(`unknown chain ${chain}`);
+  const rec = await publicClient(src).getTransactionReceipt({ hash });
+  if (rec.status !== 'success') throw new Error(`${hash} did not succeed on ${src.name}`);
+
+  let ev = null;
+  for (const log of rec.logs) {
+    if (log.address.toLowerCase() !== PORTAL.toLowerCase()) continue;
+    try {
+      const d = decodeEventLog({ abi: PORTAL_ABI, data: log.data, topics: log.topics });
+      if (d.eventName === 'BridgeOut') { ev = d.args; break; }
+    } catch { /* not ours */ }
+  }
+  if (!ev) throw new Error(`${hash} carries no BridgeOut event — nothing to mint`);
+
+  const dst = chainById(Number(ev.destChainId));
+  if (!dst) throw new Error(`burn names unknown destination chain ${ev.destChainId}`);
+
+  await requestMint({ srcChainId: src.id, dstChainId: dst.id, srcTxHash: hash,
+    token: ev.token, sender: ev.sender, to: ev.to, amount: ev.amount, srcNonce: ev.nonce });
+
+  return jsonSafe({ requested: true, from: src.short, to: dst.short,
+    token: ev.token, to_: ev.to, amount: num(ev.amount), nonce: ev.nonce, messageId: ev.messageId });
+}
+
+/** Has the destination actually minted it yet? */
+async function apiMinted({ chain, messageId }) {
+  const dst = chainById(chain);
+  if (!dst) throw new Error(`unknown chain ${chain}`);
+  const done = await publicClient(dst).readContract({
+    address: PORTAL, abi: PORTAL_ABI, functionName: 'processed', args: [messageId] }).catch(() => null);
+  return { processed: done === true, chain: dst.short };
 }
 
 /**
- * Jobs, because a launch takes minutes.
+ * Upload the launch mark and metadata.
  *
- * A launch is: upload metadata, sign on Base, deploy the CA on eight more
- * chains, split the float, bridge it out, wait for eight relayer mints, open
- * eighteen pools. Holding an HTTP request open across that is how you end up
- * with a proxy timeout in the middle of a bridge and no record of where it got
- * to — so the request starts the job and the page follows the steps.
+ * A browser cannot post this itself — it is a multipart upload to
+ * omnichain.family, cross-origin, and their endpoint sends no CORS header. So
+ * the page hands over the image and this forwards it.
  */
-const jobs = new Map();
-
-function startJob(kind, meta, fn) {
-  const id = randomUUID().slice(0, 8);
-  const job = { id, kind, meta, state: 'running', steps: [], startedAt: Date.now(),
-    result: null, error: null };
-  jobs.set(id, job);
-  const step = (s) => { job.steps.push({ at: Date.now(), text: String(s) }); };
-  step(`${kind} started`);
-  fn(step)
-    .then((r) => { job.result = jsonSafe(r ?? null); job.state = 'done'; step(`${kind} done`); })
-    .catch((e) => { job.error = String(e.message ?? e).split('\n')[0]; job.state = 'error'; step(`failed: ${job.error}`); })
-    .finally(() => { job.endedAt = Date.now(); });
-  return { id, kind, state: job.state };
+async function apiMetadata(body) {
+  const symbol = String(body.symbol ?? '').trim();
+  const name = String(body.name ?? '').trim();
+  if (!symbol || !name) throw new Error('name and symbol are required');
+  const img = await stageImage({ symbol, image: body.image, imageName: body.imageName });
+  const meta = await uploadMetadata({ file: img.path, name, symbol,
+    description: body.description ?? body.tagline ?? '' });
+  return { ...meta, generated: img.generated };
 }
 
-const jobView = (j) => ({ id: j.id, kind: j.kind, meta: j.meta, state: j.state,
-  steps: j.steps, result: j.result, error: j.error,
-  startedAt: j.startedAt, endedAt: j.endedAt ?? null });
+/**
+ * The launch call itself, unsigned. Needs a logoURI from /api/metadata: the
+ * launcher records it on chain, and a launch with an empty logo cannot be fixed
+ * afterwards.
+ */
+function txLaunch(body) {
+  const c = chainById(HOME_CHAIN);
+  const name = String(body.name ?? '').trim();
+  const symbol = String(body.symbol ?? '').trim();
+  if (!name || !symbol) throw new Error('name and symbol are required');
+  if (!body.logoURI) throw new Error('upload the metadata first — the launcher records the logo on chain');
+
+  const perChain = parseEther(String(body.creatorBuyEth ?? '0')) / BigInt(CHAINS.length);
+  const value = LAUNCH_FEE_WEI + perChain;
+  const params = {
+    name, symbol, tagline: body.tagline ?? '', logoURI: body.logoURI,
+    salt: saltFor(symbol), intentId: ZERO32, quoteToken: NATIVE,
+    targetRaiseWei: parseEther(String(body.targetRaiseEth ?? '0.06')),
+    creatorBuyWei: perChain, minTokensOut: 0n, blueprintId: 0,
+    custom: DEFAULT_HOOK_PARAMS, creatorFeeBps: 0,
+  };
+  return jsonSafe({
+    steps: [step('launch on Base', c, c.launcher,
+      encodeFunctionData({ abi: LAUNCH_ABI, functionName: 'launch', args: [params] }), value,
+      `0.0002 ETH launch fee${perChain > 0n ? ` + ${formatUnits(perChain, 18)} ETH creator buy` : ''}`)],
+    salt: params.salt, value: num(value),
+  });
+}
+
+/** Read the new CA out of a launch receipt, the same way the bot does. */
+async function apiLaunched({ hash }) {
+  const c = chainById(HOME_CHAIN);
+  const rec = await publicClient(c).getTransactionReceipt({ hash });
+  if (rec.status !== 'success') throw new Error(`launch ${hash} reverted`);
+  const token = await tokenFromReceipt(rec, c.launcher, rec.from);
+  if (!token) throw new Error(`${hash} succeeded but no token address could be read from its logs`);
+  _discovered = { at: 0, value: null };   // the board should show it immediately
+  return { token, explorer: `${c.explorer}/tx/${hash}` };
+}
+
+/**
+ * Relay actions: `deploy` puts the same CA on a remote chain, `wall` has the
+ * relayer open that chain's two pools from the float it holds. Both are calls
+ * only the relayer can make, so they are forwarded, not signed.
+ *
+ * The relay lies in both directions — it has reported an HTTP failure for a
+ * chain whose pool did open, and returned successful hashes for a chain where
+ * nothing opened — so the page is told to verify against pool state, and
+ * /api/pools is what it verifies with.
+ */
+async function apiRelay(body) {
+  const action = String(body.action ?? '');
+  if (action === 'deploy') {
+    const r = await deployRemote({ chainId: body.chainId, name: body.name, symbol: body.symbol,
+      tagline: body.tagline ?? '', logoURI: body.logoURI, creator: getAddress(body.creator) });
+    return { action, ...r };
+  }
+  if (action === 'wall') {
+    const sqrt = body.sqrtPriceX96 ?? (await curveSqrtPrice(getAddress(body.token)));
+    const r = await wallChain({ chainId: body.chainId, token: getAddress(body.token), sqrtPriceX96: sqrt });
+    return jsonSafe({ action, ...r });
+  }
+  throw new Error(`relay action not proxied: ${action || '(none)'}`);
+}
+
+/** Which of a chain's two pools are actually open — the check the relay's answer needs. */
+async function apiPools(ca, chain) {
+  const token = getAddress(ca);
+  const c = chainById(chain);
+  if (!c) throw new Error(`unknown chain ${chain}`);
+  const [code, pools] = await Promise.all([
+    publicClient(c).getBytecode({ address: token }).catch(() => null),
+    fastPools(c, token).catch(() => []),
+  ]);
+  return jsonSafe({
+    chain: c.short, deployed: Boolean(code && code !== '0x'),
+    hooked: pools.some((p) => p.viaOmniRouter),
+    hookless: pools.some((p) => !p.viaOmniRouter),
+    pools: pools.map((p) => ({ kind: p.kind, tick: p.tick, liquidity: p.liquidity.toString() })),
+  });
+}
 
 /**
  * A launch mark, when nobody supplied one.
  *
  * Deterministic from the ticker: the same symbol always gets the same colours,
- * so a re-run of a failed launch does not quietly change the logo the metadata
- * upload already registered.
+ * so a retry after a failed upload does not quietly change the logo.
  */
 function generateMark(symbol) {
-  const h = createHash('sha256').update(symbol.toUpperCase()).digest();
-  const hue = (a) => `hsl(${(h[a] * 360) / 256} 72% ${42 + (h[a + 1] % 22)}%)`;
+  const hash = createHash('sha256').update(symbol.toUpperCase()).digest();
+  const hue = (a) => `hsl(${(hash[a] * 360) / 256} 72% ${42 + (hash[a + 1] % 22)}%)`;
   const letters = symbol.replace(/[^A-Za-z0-9]/g, '').slice(0, 4).toUpperCase() || '?';
   const size = letters.length > 3 ? 150 : letters.length > 2 ? 190 : 250;
   return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
@@ -556,7 +802,7 @@ function generateMark(symbol) {
 </svg>`;
 }
 
-/** Write the launch image to disk: uploadMetadata takes a path, not bytes. */
+/** uploadMetadata takes a path, not bytes, so the image lands on disk first. */
 async function stageImage({ symbol, image, imageName }) {
   const dir = await mkdtemp(join(tmpdir(), 'omniarb-launch-'));
   if (!image) {
@@ -574,90 +820,6 @@ async function stageImage({ symbol, image, imageName }) {
   return { path: p, generated: false };
 }
 
-function apiLaunch(body) {
-  const account = operator();
-  const symbol = String(body.symbol ?? '').trim();
-  const name = String(body.name ?? '').trim();
-  if (!symbol || !name) throw new Error('name and symbol are required');
-  const seed = body.seed !== false;
-
-  return startJob('launch', { name, symbol }, async (step) => {
-    const img = await stageImage({ symbol, image: body.image, imageName: body.imageName });
-    step(img.generated ? `generated a mark for ${symbol}` : `staged ${body.imageName ?? 'the supplied image'}`);
-
-    const meta = await uploadMetadata({ file: img.path, name, symbol,
-      description: body.description ?? body.tagline ?? '' });
-    step(`metadata uploaded — ${meta.logoURI}`);
-
-    const launched = await launchOnBase({ account, name, symbol,
-      tagline: body.tagline ?? '', logoURI: meta.logoURI,
-      targetRaiseEth: body.targetRaiseEth ?? '0.06',
-      creatorBuyEth: body.creatorBuyEth ?? '0',
-      dryRun: false });
-    step(`launched on Base — ${launched.token} (${launched.explorer})`);
-
-    if (!seed) return { token: launched.token, hash: launched.hash, seeded: false };
-
-    const seeded = await seedAll({ account, token: launched.token,
-      meta: { name, symbol, tagline: body.tagline ?? '', logoURI: meta.logoURI },
-      dryRun: false, onStep: step });
-    return { token: launched.token, hash: launched.hash, seeded: true, results: seeded.results };
-  });
-}
-
-function apiSeed(body) {
-  const account = operator();
-  const token = getAddress(body.ca);
-  return startJob('seed', { token }, async (step) => {
-    const r = await seedAll({ account, token, dryRun: false, onStep: step });
-    return { token, results: r.results };
-  });
-}
-
-function apiBridge(body) {
-  const account = operator();
-  const token = getAddress(body.ca);
-  const src = chainById(body.from);
-  const dst = chainById(body.to);
-  if (!src || !dst) throw new Error('from and to must both be known chain ids');
-  if (src.id === dst.id) throw new Error('source and destination are the same chain');
-  const amount = parseUnits(String(body.amount), 18);
-  if (amount <= 0n) throw new Error('amount must be positive');
-
-  return startJob('bridge', { token, from: src.short, to: dst.short, amount: String(body.amount) },
-    async (step) => {
-      step(`burning ${body.amount} on ${src.short}…`);
-      const r = await bridge({ src, dst, account, token, amount, wait: body.wait !== false });
-      step(`burned: ${src.explorer}/tx/${r.hash}`);
-      if (r.arrived === false) step('relayer has not minted yet — recorded as pending');
-      else if (r.arrived) step(`minted on ${dst.short}`);
-      return r;
-    });
-}
-
-function apiTrade(body) {
-  const account = operator();
-  const token = getAddress(body.ca);
-  const c = chainById(body.chain);
-  if (!c) throw new Error(`unknown chain ${body.chain}`);
-  const kind = String(body.venue ?? 'hooked');
-  if (kind === 'curve' && c.id !== HOME_CHAIN) throw new Error('the curve only exists on Base');
-  const v = venueFor(c, kind, token);
-  const side = body.side === 'sell' ? 'sell' : 'buy';
-  const amount = parseUnits(String(body.amount), 18);
-  if (amount <= 0n) throw new Error('amount must be positive');
-  const slippageBps = BigInt(body.slippageBps ?? (side === 'buy' ? 1000 : 1500));
-
-  return startJob(side, { token, chain: c.short, venue: v.kind, amount: String(body.amount) },
-    async (step) => {
-      step(`${side} ${body.amount} on ${c.short} ${v.kind} (slippage ${slippageBps}bps)`);
-      const r = side === 'buy'
-        ? await buyOnVenue(c, account, token, v, amount, { slippageBps })
-        : await sellOnVenue(c, account, token, v, amount, { slippageBps });
-      step(r.explorer);
-      return { ...r, receivedFmt: num(r.received) };
-    });
-}
 
 /** Native + token balance for one address on all nine chains. */
 async function apiBag(address, ca) {
@@ -678,6 +840,54 @@ async function apiBag(address, ca) {
   }));
   return { address: who, chains: rows,
     nativeUsdTotal: rows.reduce((a, r) => a + (r.nativeUsd ?? 0), 0) };
+}
+
+/**
+ * Burns that never minted, for one address.
+ *
+ * There is no database behind this and there does not need to be: the burn is a
+ * `BridgeOut` log on the source Portal and the mint is `processed(messageId)` on
+ * the destination Portal. The chain is the index. Filtering by the indexed
+ * `sender` topic keeps the scan cheap enough to answer inside a request.
+ */
+async function apiPending(address, lookback) {
+  const who = getAddress(address);
+  const span = BigInt(lookback ?? 50_000);
+  const evOut = PORTAL_ABI.find((x) => x.type === 'event' && x.name === 'BridgeOut');
+
+  // One scan per source chain, not one per source/destination pair: the logs
+  // are the same either way, and the destination is a field on the event.
+  const burns = await Promise.all(CHAINS.map(async (src) => {
+    const pc = publicClient(src);
+    try {
+      const latest = await pc.getBlockNumber();
+      const from = latest > span ? latest - span : 0n;
+      const logs = await getLogsChunked(pc, {
+        address: PORTAL, event: evOut, args: { sender: who }, fromBlock: from, toBlock: latest,
+      });
+      return logs.map((l) => ({ src, l }));
+    } catch { return []; }
+  }));
+
+  // One processed() call per burn, all in flight together.
+  const checked = await Promise.all(burns.flat().map(async ({ src, l }) => {
+    const dst = chainById(Number(l.args.destChainId));
+    if (!dst) return null;
+    const done = await publicClient(dst).readContract({
+      address: PORTAL, abi: PORTAL_ABI, functionName: 'processed', args: [l.args.messageId],
+    }).catch(() => null);
+    if (done !== false) return null;
+    return {
+      from: src.short, fromId: src.id, to: dst.short, toId: dst.id,
+      token: l.args.token, recipient: l.args.to, amount: num(l.args.amount),
+      messageId: l.args.messageId, nonce: l.args.nonce.toString(),
+      txHash: l.transactionHash, txUrl: `${src.explorer}/tx/${l.transactionHash}`,
+    };
+  }));
+
+  const stuck = checked.filter(Boolean).sort((a, b) => b.amount - a.amount);
+  return jsonSafe({ address: who, stuck, scannedBlocks: Number(span),
+    total: stuck.reduce((a, x) => a + (x.amount ?? 0), 0) });
 }
 
 // ------------------------------------------------------------- rpc proxy
@@ -733,11 +943,14 @@ const routes = {
     q.get('side') ?? 'buy', q.get('amount') ?? '0'),
   '/api/bag': (q) => apiBag(q.get('address'), q.get('ca')),
   '/api/me': () => ({
-    canWrite: CAN_WRITE,
-    address: CAN_WRITE ? operator().address : null,
+    // No signing here, by design: the desk is a dapp and the visitor's wallet
+    // signs. What the page needs from this process is the chain map — including
+    // an rpc per chain, so a wallet can be asked to add a chain it lacks.
+    signing: 'wallet',
     chains: CHAINS.map((c) => ({ id: c.id, short: c.short, name: c.name, explorer: c.explorer,
-      nativeSymbol: c.nativeSymbol, poolManager: c.poolManager, hook: c.hook, router: c.router,
-      launcher: c.launcher ?? null, birdeye: be.nameOf(c.id) })),
+      nativeSymbol: c.nativeSymbol, rpc: rpcsFor(c)[0], poolManager: c.poolManager, hook: c.hook,
+      router: c.router, launcher: c.launcher ?? null, helper: arbHelperFor(c),
+      birdeye: be.nameOf(c.id) })),
     portal: PORTAL, pad: PAD, homeChain: HOME_CHAIN,
   }),
   '/api/be': (q) => {
@@ -747,20 +960,27 @@ const routes = {
     for (const [k, v] of q) if (!['path', 'chain'].includes(k)) params[k] = v;
     return be.passthrough(path, params, chain);
   },
-  '/api/jobs': () => ({ jobs: [...jobs.values()].sort((a, b) => b.startedAt - a.startedAt).slice(0, 40).map(jobView) }),
-  '/api/job': (q) => {
-    const j = jobs.get(q.get('id'));
-    if (!j) throw new Error('no such job');
-    return jobView(j);
-  },
+  '/api/pending': (q) => apiPending(q.get('address'), q.get('lookback')),
+  '/api/pools': (q) => apiPools(q.get('ca'), q.get('chain')),
+  '/api/minted': (q) => apiMinted({ chain: q.get('chain'), messageId: q.get('messageId') }),
 };
 
-/** POST bodies all start work that signs. Each returns a job handle, not a result. */
+/**
+ * POST endpoints. None of them signs anything.
+ *
+ * The `/api/tx/*` ones quote against live state and hand back unsigned
+ * transactions for the visitor's wallet. The others forward the two calls a
+ * browser cannot make itself: the multipart metadata upload, and the relayer's
+ * permissioned deploy / wall / mint.
+ */
 const writeRoutes = {
-  '/api/launch': (b) => apiLaunch(b),
-  '/api/seed': (b) => apiSeed(b),
-  '/api/bridge': (b) => apiBridge(b),
-  '/api/trade': (b) => apiTrade(b),
+  '/api/tx/trade': (b) => txTrade(b),
+  '/api/tx/bridge': (b) => txBridge(b),
+  '/api/tx/launch': (b) => txLaunch(b),
+  '/api/metadata': (b) => apiMetadata(b),
+  '/api/relay': (b) => apiRelay(b),
+  '/api/mint': (b) => apiMint(b),
+  '/api/launched': (b) => apiLaunched(b),
 };
 
 const readBody = (req) => new Promise((resolve, reject) => {
@@ -800,11 +1020,9 @@ export async function handler(req, res) {
     const w = writeRoutes[url.pathname];
     if (!w) { send(404, { error: 'not found' }); return; }
     try {
-      send(202, w(await readBody(req)));
+      send(200, await w(await readBody(req)));
     } catch (e) {
-      // A refused write is a 403 when it is the gate, not the request.
-      const msg = String(e.message ?? e).split('\n')[0];
-      send(msg.startsWith('write endpoints are off') ? 403 : 400, { error: msg });
+      send(400, { error: String(e.message ?? e).split('\n')[0] });
     }
     return;
   }
@@ -837,8 +1055,6 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     console.log(`desk       http://${HOST}:${PORT}/desk.html`);
     console.log(`birdeye covers ${paintable().map((c) => c.short).join(', ')}` +
       ` · pool-derived prices on ${CHAINS.filter((c) => !be.covers(c.id)).map((c) => c.short).join(', ')}`);
-    console.log(CAN_WRITE
-      ? `signing as ${operator().address} — launch / bridge / trade are LIVE`
-      : 'read-only: set OMNIVIEW_WRITE=1 with STACCOVERFLOW_KP to enable launch / bridge / trade');
+    console.log('no key here: the visitor’s wallet signs every transaction');
   }).on('error', (e) => { console.error(e.message); process.exit(1); });
 }

@@ -61,6 +61,20 @@
   nav.tabs button[aria-selected="true"] { background: #101419; color: #e8e6e1; border-bottom-color: #c9f24d; }
   nav.tabs .sel { align-self: center; font-size: 11px; color: #5f6672; padding: 0 8px; white-space: nowrap; }
 
+  .hero:empty { display: none; }
+  .hero { display: flex; flex-wrap: wrap; gap: 18px; align-items: center; margin-top: 16px;
+    border: 1px solid #263019; background: linear-gradient(105deg, #131a09, #0b0d11 62%); border-radius: 14px; padding: 16px 18px; }
+  .heroMark { width: 54px; height: 54px; border-radius: 14px; display: grid; place-items: center;
+    background: #c9f24d; color: #08090b; font-family: 'Space Grotesk', sans-serif; font-weight: 700;
+    font-size: 15px; letter-spacing: -.02em; flex: none; }
+  .heroBody { flex: 1; min-width: 220px; }
+  .heroName { font-family: 'Space Grotesk', sans-serif; font-weight: 700; font-size: 21px; letter-spacing: -.01em; }
+  .heroName span { font-size: 13px; font-weight: 500; }
+  .heroStats { display: flex; gap: 26px; flex-wrap: wrap; }
+  .heroStats .k { font-size: 9.5px; color: #5f6672; letter-spacing: .08em; text-transform: uppercase; }
+  .heroStats .v { font-family: 'Space Grotesk', sans-serif; font-weight: 700; font-size: 18px; margin-top: 4px; }
+  .heroActs { display: flex; gap: 8px; }
+
   .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 10px; padding: 16px 0 12px; }
   .card { border: 1px solid #1a1f27; background: #0e1116; border-radius: 11px; padding: 13px 14px; }
   .card.accent { border-color: #263019; background: linear-gradient(#111608, #0b0d11); }
@@ -135,7 +149,7 @@
     <div class="row" style="gap:8px">
       <div class="pill"><span class="dot"></span><b id="rpcUp">0/9</b> rpc</div>
       <div class="pill">birdeye <span class="acc" id="beStatus">…</span></div>
-      <div class="pill" id="signer">read-only</div>
+      <button class="btn" id="wallet">connect wallet</button>
       <button class="btn" id="refresh">refresh · <span id="tickText">live</span></button>
     </div>
   </header>

@@ -32,7 +32,7 @@ import { quoteBuy, quoteSell, ARTIFACT } from '../src/quote.mjs';
 import { requestMint } from '../src/bridge.mjs';
 import { uploadMetadata, curveSqrtPrice, deployRemote, wallChain, tokenFromReceipt,
   saltFor, LAUNCH_ABI, LAUNCH_FEE_WEI, DEFAULT_HOOK_PARAMS, RELAYER,
-  relayerHoldsFloat, isDeployedOn } from '../src/launch.mjs';
+  relayerHoldsFloat, isDeployedOn, recoverMeta } from '../src/launch.mjs';
 import { fetchLiveConfig, readLiveConfig } from '../src/refresh.mjs';
 import * as be from './birdeye.mjs';
 
@@ -841,15 +841,20 @@ async function apiSeedState(ca, address) {
     const funded = deployed && share > 0n
       ? await relayerHoldsFloat(c, token, share).catch(() => false)
       : false;
+    // Without a wallet there is no balance to take a ninth of, so "move" is not
+    // a step anyone can be offered — say what is actually blocking instead.
+    const next = !deployed ? 'deploy'
+      : deployed && hooked && hookless ? null
+        : !address ? 'connect'
+          : !funded ? 'move' : 'wall';
     return { id: c.id, short: c.short, name: c.name, explorer: c.explorer,
       deployed, hooked, hookless, funded,
-      done: deployed && hooked && hookless,
-      next: !deployed ? 'deploy' : (!funded && !(hooked && hookless)) ? 'move'
-        : (!hooked || !hookless) ? 'wall' : null };
+      done: deployed && hooked && hookless, next };
   }));
 
   return jsonSafe({
-    token, relayer: RELAYER, held: num(held), share: num(share), shareWei: share.toString(),
+    token, relayer: RELAYER, needsWallet: !address,
+    held: num(held), share: num(share), shareWei: share.toString(),
     chains: rows, complete: rows.every((r) => r.done),
     remaining: rows.filter((r) => !r.done).map((r) => r.short),
   });
@@ -1126,6 +1131,14 @@ const routes = {
   '/api/pending': (q) => apiPending(q.get('address'), q.get('lookback'), q.get('chain')),
   '/api/pools': (q) => apiPools(q.get('ca'), q.get('chain')),
   '/api/seedstate': (q) => apiSeedState(q.get('ca'), q.get('address')),
+  // Name and symbol off the contract, logo off the site's index: a CA seeded in
+  // a later session has no launch form to read them from, and the remote deploy
+  // cannot be made without them.
+  '/api/meta': async (q) => {
+    const m = await recoverMeta(getAddress(q.get('ca')));
+    if (!m) throw new Error('that address does not answer name() and symbol() on Base');
+    return m;
+  },
   '/api/minted': (q) => apiMinted({ chain: q.get('chain'), messageId: q.get('messageId') }),
 };
 

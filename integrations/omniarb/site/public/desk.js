@@ -23,7 +23,7 @@ const S = {
   size: 50, bridged: true, hookless: true,
   curve: null, curveSize: '0.01', curveTok: '',
   bag: null, bagAddress: '',
-  me: null, log: [], pending: null, seed: {}, seedCa: null, seedBag: null,
+  me: null, log: [], pending: null, seed: null, seedCa: null, seedBag: null,
   bridgeBag: null, launchImage: null, launchMeta: null,
   tick: 0,
 };
@@ -1633,13 +1633,28 @@ async function seedChain(chainId, ca) {
   // opened and success for one that did not — so the only answer that counts is
   // the pool state itself.
   const p = await C.api('/api/pools', { ca, chain: chainId }).catch(() => null);
-  if (p) {
-    const row = S.seed.chains.find((x) => x.id === chainId);
+  const row = S.seed?.chains?.find((x) => x.id === chainId);
+  if (p && row) {
     Object.assign(row, { deployed: p.deployed, hooked: p.hooked, hookless: p.hookless,
       done: p.deployed && p.hooked && p.hookless });
     paintSeed();
   }
   return Boolean(p?.deployed && p?.hooked && p?.hookless);
+}
+
+/**
+ * What the remote deploy needs, for a CA this session did not launch.
+ *
+ * name() and symbol() come off the contract and the logo off the site's index,
+ * so seeding something launched last week works the same as seeding something
+ * launched a minute ago. Without it the deploy step has nothing to deploy with.
+ */
+async function recoverLaunchMeta(ca) {
+  const m = await C.api('/api/meta', { ca }).catch(() => null);
+  if (m?.symbol) { S.launchMeta = m; return m; }
+  const t = S.tokens.find((x) => x.address.toLowerCase() === ca.toLowerCase());
+  if (!t) throw new Error('cannot read name/symbol for that CA on Base — is it deployed there?');
+  return { name: t.name ?? t.symbol, symbol: t.symbol, tagline: t.tagline ?? '', logoURI: t.logoURI ?? '' };
 }
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -1673,7 +1688,7 @@ async function runSeed(ca) {
       let moved = 0;
       for (const id of order) {
         if (S.seedStop) break;
-        const row = S.seed.chains.find((x) => x.id === id);
+        const row = S.seed?.chains?.find((x) => x.id === id);
         if (!row || row.done) continue;
         try {
           const ok = await seedChain(id, ca);
@@ -1703,10 +1718,15 @@ function paintSeed() {
   const rows = $('lnSeedRows');
   if (!rows) return;
   if (!S.seedCa) { rows.innerHTML = ''; return; }
-  const d = S.seed;
+  // Loaded state, not merely a placeholder: paintSeed runs on every refresh
+  // tick, long before the first read comes back.
+  const d = S.seed?.chains ? S.seed : null;
   const head = `<div class="tr" style="grid-template-columns:minmax(0,1fr) auto;border-bottom:1px solid #1a1f27">
-    <div>${d ? `<b class="${d.complete ? 'up' : 'acc'}">${9 - d.chains.filter((x) => x.done).length === 0 ? 'complete' : `${d.chains.filter((x) => x.done).length}/9 chains done`}</b>
-      <span class="dim"> · ${C.fmtNum(d.share, 6)} per chain to ${h(C.short(d.relayer))}</span>` : 'reading chain state…'}</div>
+    <div>${!d ? 'reading chain state…'
+      : `<b class="${d.complete ? 'up' : 'acc'}">${d.complete ? 'complete' : `${d.chains.filter((x) => x.done).length}/9 chains done`}</b>` +
+        (d.needsWallet ? '<span class="warn"> · connect a wallet to compute each chain’s share</span>'
+          : d.share > 0 ? `<span class="dim"> · ${C.fmtNum(d.share, 6)} per chain to ${h(C.short(d.relayer))}</span>`
+            : '<span class="warn"> · this wallet holds no float on Base to split</span>')}</div>
     <div>${S.seedRunning
       ? '<button class="btn small" data-seed="stop:0">stop</button>'
       : '<button class="btn go" data-seed="run:0">seed all nine</button>'}</div>
@@ -1722,7 +1742,7 @@ function paintSeed() {
       <div style="font-weight:700">${h(c.short)}</div>
       <div class="${st?.done ? 'up' : st?.next ? 'warn' : 'dim'}">${st ? (st.done ? 'done' : st.next ?? '—') : '…'}</div>
       <div style="font-size:11px">${state}</div>
-      <div>${st && !st.done && !S.seedRunning
+      <div>${st && !st.done && !S.seedRunning && st.next !== 'connect'
         ? `<button class="btn small" data-seed="step:${c.id}">${h(st.next ?? 'retry')}</button>` : ''}</div>
     </div>`;
   }).join('');

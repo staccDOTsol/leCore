@@ -17,7 +17,8 @@ const S = {
   chains: {}, nativeUsd: {}, beOk: null,
   tokens: [], live: {}, be: {}, supplies: {}, pools: {}, poolScan: 0, scan: '', boot: 'booting',
   sort: { key: 'mcap', dir: 'desc' },
-  supplyMiss: new Set(), seedStop: false, seedRunning: false, seedShare: null,
+  supplyMiss: new Set(), seedStop: false, seedRunning: false,
+  seedShareWei: null, fundedThisRun: new Set(),
   sel: null, venues: [], beTok: null, dec: 18,
   charts: null, chartHours: 24, chartType: '15m', hiddenChains: new Set(), chartBusy: false,
   size: 50, bridged: true, hookless: true,
@@ -1615,9 +1616,13 @@ async function seedChain(chainId, ca) {
   } else if (!st.funded && !(st.hooked && st.hookless)) {
     // Only ever moved once: the relayer already holding this chain's share is
     // the check that stops a resumed run handing it another ninth for free.
-    log(`${c.short}: moving ${C.fmtNum(S.seed.share, 6)} to the relayer…`);
+    if (!S.seedShareWei) throw new Error('no share fixed for this run — press seed again');
     const tx = await C.apiPost('/api/tx/seed', { ca, chain: chainId, from: W.address,
-      amount: S.seedShare ?? undefined });
+      amountWei: S.seedShareWei });
+    // Log what the server actually built, not what this end believed it asked
+    // for: those two disagreeing is how three chains got three different splits
+    // while every line said the same number.
+    log(`${c.short}: moving ${C.fmtNum(tx.amount, 6)} to the relayer…`);
     const done = await runSteps(tx.steps);
     if (!done.length) throw new Error('cancelled');
     if (chainId !== C.HOME_CHAIN) await requestMintFor(C.HOME_CHAIN, done[0].hash);
@@ -1626,6 +1631,19 @@ async function seedChain(chainId, ca) {
     const r = await C.apiPost('/api/relay', { action: 'wall', chainId, token: ca });
     log(`${c.short}: hooked ${r.hooked?.ok ? 'ok' : r.hooked?.reason ?? '—'}, ` +
         `hookless ${r.hookless?.ok ? 'ok' : r.hookless?.reason ?? '—'}`);
+
+    // "relayer short on X" is not a failure to retry: nothing changes until
+    // somebody sends it gas, so the loop would spin here forever otherwise.
+    const short = shortfallOf(r.hooked?.reason) ?? shortfallOf(r.hookless?.reason);
+    if (short && !S.fundedThisRun.has(chainId)) {
+      S.fundedThisRun.add(chainId);
+      if (await fundRelayer(chainId, short)) {
+        await sleep(3000);
+        const again = await C.apiPost('/api/relay', { action: 'wall', chainId, token: ca });
+        log(`${c.short}: retry — hooked ${again.hooked?.ok ? 'ok' : again.hooked?.reason ?? '—'}, ` +
+            `hookless ${again.hookless?.ok ? 'ok' : again.hookless?.reason ?? '—'}`);
+      }
+    }
     await sleep(6000);
   }
 
@@ -1657,6 +1675,39 @@ async function recoverLaunchMeta(ca) {
   return { name: t.name ?? t.symbol, symbol: t.symbol, tagline: t.tagline ?? '', logoURI: t.logoURI ?? '' };
 }
 
+
+/**
+ * Top the relayer up so it can open the pools.
+ *
+ * `wall` is the relayer's transaction paid from the relayer's wallet, so a dry
+ * wallet stops the seed dead and says so in words: "relayer short on Arbitrum:
+ * has …, needs …, send … more". The number in that sentence is exactly what is
+ * missing, so this reads it, adds a fifth for the gas price moving, and offers
+ * to send it. Cents, on every chain — but it asks first, because it is money.
+ */
+const SHORTFALL = /relayer short on [^:]+: has (\d+) wei, needs ~?(\d+); send (\d+) more/i;
+
+function shortfallOf(text) {
+  const m = SHORTFALL.exec(String(text ?? ''));
+  if (!m) return null;
+  const need = BigInt(m[3]);
+  return (need * 12n) / 10n;      // a fifth of headroom for a moving gas price
+}
+
+async function fundRelayer(chainId, wei) {
+  const c = C.byId[chainId];
+  const amount = Number(wei) / 1e18;
+  if (!confirm(`the relayer cannot pay for gas on ${c.name}.\n\n` +
+      `send it ${amount.toPrecision(4)} ${c.gas} so it can open the pools?`)) {
+    log(`${c.short}: declined to fund the relayer — its pools stay closed`, 'warn');
+    return false;
+  }
+  const tx = await C.apiPost('/api/tx/fundrelayer', { chain: chainId, amountWei: wei.toString() });
+  const done = await runSteps(tx.steps);
+  if (done.length) { log(`${c.short}: relayer funded`, 'up'); return true; }
+  return false;
+}
+
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 /**
@@ -1672,6 +1723,7 @@ async function runSeed(ca) {
   if (!W.address) { await connect(); if (!W.address) return; }
   S.seedStop = false;
   S.seedRunning = true;
+  S.fundedThisRun = new Set();
   paintSeed();
 
   try {
@@ -1679,7 +1731,8 @@ async function runSeed(ca) {
     if (!first) return;
     // Fix the share once. Recomputing it after each move takes a ninth of a
     // shrinking balance and short-changes every later chain.
-    S.seedShare = first.share > 0 ? String(first.share) : null;
+    S.seedShareWei = first.shareWei && first.shareWei !== '0' ? first.shareWei : null;
+    if (!S.seedShareWei) { log('this wallet holds no float on Base to split', 'down'); return; }
     log(`seeding ${ca}: ${first.remaining.length} of 9 chains to go, ` +
       `${C.fmtNum(first.share, 6)} per chain`, 'acc');
 
@@ -1735,9 +1788,11 @@ function paintSeed() {
   rows.innerHTML = head + C.CHAINS.map((c) => {
     const st = d?.chains.find((x) => x.id === c.id);
     const mark = (on, label) => `<span class="${on ? 'up' : 'dim'}">${on ? '✓' : '·'} ${label}</span>`;
+    const dry = st && st.relayerGas != null && st.relayerGas < 0.0005 && !st.done;
     const state = !st ? '…'
       : `${mark(st.deployed, 'deployed')} ${mark(st.funded || (st.hooked && st.hookless), 'funded')} ` +
-        `${mark(st.hooked, 'hooked')} ${mark(st.hookless, 'hookless')}`;
+        `${mark(st.hooked, 'hooked')} ${mark(st.hookless, 'hookless')}` +
+        (dry ? ` <span class="warn" title="the relayer pays for the wall itself">· relayer ${C.fmtNum(st.relayerGas, 3)} ${h(st.nativeSymbol)}</span>` : '');
     return `<div class="tr" style="grid-template-columns:90px 110px minmax(0,1fr) minmax(0,1.6fr)">
       <div style="font-weight:700">${h(c.short)}</div>
       <div class="${st?.done ? 'up' : st?.next ? 'warn' : 'dim'}">${st ? (st.done ? 'done' : st.next ?? '—') : '…'}</div>

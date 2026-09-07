@@ -848,6 +848,8 @@ async function apiSeedState(ca, address) {
         : !address ? 'connect'
           : !funded ? 'move' : 'wall';
     return { id: c.id, short: c.short, name: c.name, explorer: c.explorer,
+      nativeSymbol: c.nativeSymbol,
+      relayerGas: num(await publicClient(c).getBalance({ address: getAddress(RELAYER) }).catch(() => null)),
       deployed, hooked, hookless, funded,
       done: deployed && hooked && hookless, next };
   }));
@@ -869,15 +871,20 @@ async function apiSeedState(ca, address) {
  * mints into the token contract, so bridging ahead of the deploy destroys
  * supply that can never be minted. That mistake cost 269 million tokens once.
  */
-async function txSeed({ ca, chain, from, amount }) {
+async function txSeed({ ca, chain, from, amountWei, amount }) {
   const token = getAddress(ca);
   const c = chainById(chain);
   if (!c) throw new Error(`unknown chain ${chain}`);
   const home = chainById(HOME_CHAIN);
   const who = getAddress(from);
 
+  // The caller fixes the share once and passes it as wei on every leg. Deriving
+  // it here per chain takes a ninth of a balance that the previous leg just
+  // reduced, so each chain gets less than the last: 182,012 then 161,789 then
+  // 143,812, while the caller believes it is sending an equal split.
   let wei;
-  if (amount != null && amount !== '') wei = parseUnits(String(amount), 18);
+  if (amountWei != null && amountWei !== '') wei = BigInt(amountWei);
+  else if (amount != null && amount !== '') wei = parseUnits(String(amount), 18);
   else {
     const held = await publicClient(home).readContract({ address: token, abi: ERC20_ABI,
       functionName: 'balanceOf', args: [who] });
@@ -888,7 +895,8 @@ async function txSeed({ ca, chain, from, amount }) {
   if (c.id === HOME_CHAIN) {
     return jsonSafe({ steps: [step(`fund the relayer on ${c.short}`, home, token,
       encodeFunctionData({ abi: ERC20_ABI, functionName: 'transfer', args: [getAddress(RELAYER), wei] }),
-      0n, 'the relayer opens the pools from what it holds')], amount: num(wei), to: RELAYER });
+      0n, 'the relayer opens the pools from what it holds')],
+      amount: num(wei), amountWei: wei.toString(), to: RELAYER });
   }
 
   if (!await isDeployedOn(c, token)) {
@@ -899,6 +907,32 @@ async function txSeed({ ca, chain, from, amount }) {
       encodeFunctionData({ abi: PORTAL_ABI, functionName: 'bridgeOut',
         args: [token, BigInt(c.id), getAddress(RELAYER), wei] }),
       0n, `burns on Base; the relayer mints to itself on ${c.name} and opens the pools`)],
+    amount: num(wei), amountWei: wei.toString(), to: RELAYER,
+  });
+}
+
+/**
+ * Top the relayer up with gas.
+ *
+ * `wall` is the relayer's own transaction, paid from the relayer's own wallet,
+ * so when that wallet is dry the pools simply never open and the relay says so
+ * in words: "relayer short on Arbitrum: has …, needs …, send … more". Nothing
+ * else in the flow can proceed, and it is a plain native transfer to fix.
+ */
+function txFundRelayer({ chain, amountWei }) {
+  const c = chainById(chain);
+  if (!c) throw new Error(`unknown chain ${chain}`);
+  const wei = BigInt(amountWei);
+  if (wei <= 0n) throw new Error('amount must be positive');
+  // A cap, because this is parsed out of someone else's error string and the
+  // shortfalls are cents: nothing here should ever be able to send real money.
+  const CAP = parseEther('0.05');
+  if (wei > CAP && c.nativeSymbol !== 'POL' && c.nativeSymbol !== 'MON') {
+    throw new Error(`refusing to send ${formatUnits(wei, 18)} ${c.nativeSymbol} — gas top-ups are cents, this is not one`);
+  }
+  return jsonSafe({
+    steps: [step(`send gas to the relayer on ${c.short}`, c, RELAYER, '0x', wei,
+      `${formatUnits(wei, 18)} ${c.nativeSymbol} so it can open the pools`)],
     amount: num(wei), to: RELAYER,
   });
 }
@@ -1154,6 +1188,7 @@ const writeRoutes = {
   '/api/tx/trade': (b) => txTrade(b),
   '/api/tx/bridge': (b) => txBridge(b),
   '/api/tx/seed': (b) => txSeed(b),
+  '/api/tx/fundrelayer': (b) => txFundRelayer(b),
   '/api/tx/launch': (b) => txLaunch(b),
   '/api/metadata': (b) => apiMetadata(b),
   '/api/relay': (b) => apiRelay(b),

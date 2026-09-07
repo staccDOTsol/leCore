@@ -899,7 +899,9 @@ async function txLaunch(body) {
     steps, launcher, oneSignature,
     destCurveChains: caps?.launcher?.destCurveChains ?? null,
     launcherNote: caps?.unavailable
-      ? `the site has not shipped the one-signature launcher yet (${caps.unavailable}) — launching the two-step way`
+      ? (oneSignature
+        ? `the site's relay does not announce its launcher (${caps.unavailable}) — read from the gate: v3, one signature, ${caps.launcher.destCurveChains} destination curves`
+        : `the site has not shipped the one-signature launcher yet (${caps.unavailable}) — launching the two-step way`)
       : null,
     predicted, salt: userSalt,
     // What the relayer is short of right now, whether or not the launch pays it.
@@ -915,7 +917,10 @@ function fundingFailureOf(d, oneSignature) {
   if (!Array.isArray(d.unreadable) || d.unreadable.length) {
     return 'cannot verify funding on every chain; retry before paying';
   }
-  if (d.quoteReady !== true) {
+  // The relay only says `quoteReady` when it has something to say about it;
+  // today it quotes a complete launch without the field at all, and refusing on
+  // its absence blocked every launch while the number to pay sat right there.
+  if (d.quoteReady === false) {
     const where = Array.isArray(d.quoteBlockedChains) ? d.quoteBlockedChains.join(', ') : '';
     return `OMNI quote funding or price unavailable${where ? ` on ${where}` : ''}; retry before paying`;
   }

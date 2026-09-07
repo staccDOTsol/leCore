@@ -17,7 +17,7 @@ const S = {
   chains: {}, nativeUsd: {}, beOk: null,
   tokens: [], live: {}, be: {}, supplies: {}, pools: {}, poolScan: 0, scan: '', boot: 'booting',
   sort: { key: 'mcap', dir: 'desc' },
-  supplyMiss: new Set(), liveChains: new Set(), polledChains: [], stream: null,
+  supplyMiss: new Set(), liveChains: new Set(), polledChains: [], stream: null, offered: new Set(),
   seedStop: false, seedRunning: false,
   seedShareWei: null, fundedThisRun: new Map(),
   sel: null, venues: [], beTok: null, dec: 18,
@@ -1401,17 +1401,45 @@ function paintWallet() {
  * Put the wallet on the right chain, adding it when the wallet has never heard
  * of it. Six of these nine are chains no wallet ships with.
  */
+/**
+ * Offer our endpoint for a chain the wallet already has.
+ *
+ * A wallet keeps the RPC it was given the first time it added a network, so a
+ * better list only ever helps someone who has not added it yet — everybody
+ * already holding BNB keeps hitting the public node that throttles them.
+ * Calling addEthereumChain for a network it already knows makes the wallet
+ * offer our endpoint as an additional one, which is the only way to fix this
+ * from a page. Once per chain per session, and a refusal is fine.
+ */
+async function offerOurRpc(id) {
+  if (S.offered.has(id)) return;
+  S.offered.add(id);
+  const c = (S.me?.chains ?? []).find((x) => x.id === Number(id));
+  const local = C.byId[Number(id)];
+  if (!c && !local) return;
+  try {
+    await W.provider.request({ method: 'wallet_addEthereumChain', params: [{
+      chainId: '0x' + Number(id).toString(16),
+      chainName: local?.name ?? c.name,
+      rpcUrls: [new URL(`/rpc/${Number(id)}`, location.origin).href, ...(c?.rpcs ?? [])],
+      nativeCurrency: { name: c?.nativeSymbol ?? local.gas, symbol: c?.nativeSymbol ?? local.gas, decimals: 18 },
+      blockExplorerUrls: [local?.explorer ?? c?.explorer].filter(Boolean),
+    }] });
+  } catch { /* already has it, or said no — either way, carry on */ }
+}
+
 async function ensureChain(id) {
   const want = '0x' + Number(id).toString(16);
-  if (Number(W.chainId) === Number(id)) return;
   const c = (S.me?.chains ?? []).find((x) => x.id === Number(id));
   const local = C.byId[Number(id)];
   const name = local?.name ?? c?.name ?? `chain ${id}`;
+  if (Number(W.chainId) === Number(id)) { await offerOurRpc(id); return; }
 
   const doSwitch = () => W.provider.request({ method: 'wallet_switchEthereumChain', params: [{ chainId: want }] });
 
   try {
     await doSwitch();
+    await offerOurRpc(id);
   } catch (e) {
     // Any switch failure is treated as "the wallet does not have this chain".
     // Wallets disagree on how to say that — 4902, "Unrecognized chain ID", and
@@ -1500,8 +1528,16 @@ async function runSteps(steps) {
   for (const s of steps) {
     await ensureChain(s.chainId);
     log(`${s.label} on ${s.chainName}${s.note ? ` — ${s.note}` : ''}…`);
-    const hash = await W.provider.request({ method: 'eth_sendTransaction', params: [{
-      from: W.address, to: s.to, data: s.data, value: s.value }] });
+
+    // Price and size the transaction here, over our own endpoint, and hand the
+    // wallet a complete one. It still does its own checks, but it has less to
+    // do on an RPC we do not control — and a wallet that cannot estimate gas
+    // refuses to send at all.
+    const tx = { from: W.address, to: s.to, data: s.data, value: s.value };
+    const gas = await estimateFor(s).catch(() => null);
+    if (gas) Object.assign(tx, gas);
+
+    const hash = await sendWithRetry(tx, s);
     const ex = C.byId[s.chainId]?.explorer;
     log(`sent ${ex ? `${ex}/tx/${hash}` : hash}`);
     const rec = await waitReceipt(s.chainId, hash);
@@ -1510,6 +1546,48 @@ async function runSteps(steps) {
     done.push({ ...s, hash, receipt: rec });
   }
   return done;
+}
+
+
+/** Gas limit and fees, priced through our proxy rather than the wallet's node. */
+async function estimateFor(s) {
+  const [est, block, tip] = await Promise.all([
+    C.rpc(s.chainId, 'eth_estimateGas', [{ from: W.address, to: s.to, data: s.data, value: s.value }]),
+    C.rpc(s.chainId, 'eth_getBlockByNumber', ['latest', false]),
+    C.rpc(s.chainId, 'eth_maxPriorityFeePerGas', []).catch(() => null),
+  ]);
+  if (!est) return null;
+  // A fifth of headroom on the limit: an estimate taken a block early can be
+  // short by the time it lands, and a reverted-for-gas transaction still costs.
+  const out = { gas: '0x' + ((BigInt(est) * 12n) / 10n).toString(16) };
+  const base = block?.baseFeePerGas ? BigInt(block.baseFeePerGas) : null;
+  if (base != null) {
+    const prio = tip ? BigInt(tip) : base / 10n;
+    out.maxPriorityFeePerGas = '0x' + prio.toString(16);
+    out.maxFeePerGas = '0x' + (base * 2n + prio).toString(16);
+  }
+  return out;
+}
+
+/**
+ * Send, and do not give up on a throttled node.
+ *
+ * A wallet reports its own RPC being rate limited as a failed send. That is not
+ * a rejected transaction and not a revert — it is a queue, and the answer is to
+ * wait a moment and ask again rather than to make somebody re-press the button.
+ */
+async function sendWithRetry(tx, s, tries = 3) {
+  for (let i = 0; ; i += 1) {
+    try {
+      return await W.provider.request({ method: 'eth_sendTransaction', params: [tx] });
+    } catch (e) {
+      const m = String(e?.message ?? e);
+      const throttled = /rate limit|too many requests|429|timeout|failed to fetch|network error/i.test(m);
+      if (!throttled || i >= tries - 1) throw e;
+      log(`${s.label}: ${m.split('\n')[0]} — retrying`, 'warn');
+      await sleep(2500 * (i + 1));
+    }
+  }
 }
 
 /** Wrap a flow so a rejected signature reads as a rejected signature. */

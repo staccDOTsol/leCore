@@ -12,9 +12,9 @@
 import { getAddress } from 'viem';
 import { API, CHAINS, chainById, NATIVE, POOL_FEE, POOL_TICK_SPACING, POOLS_SLOT,
   PAD, PAD_ABI, HOME_CHAIN, ERC20_ABI, POOL_MANAGER_ABI,
-  V4_INITIALIZE_EVENT, OMNI_LAUNCHED_EVENT } from './config.mjs';
+  V4_INITIALIZE_EVENT, OMNI_LAUNCHED_EVENT , FACTORY } from './config.mjs';
 import { publicClient } from './chain.mjs';
-import { keccak256, encodeAbiParameters, encodeEventTopics, parseEventLogs } from 'viem';
+import { keccak256, encodeAbiParameters, decodeAbiParameters, encodeEventTopics, parseEventLogs } from 'viem';
 import * as etherscan from './etherscan.mjs';
 
 /** Tokens the site has indexed. */
@@ -33,6 +33,10 @@ export async function fetchIndexedTokens() {
  * Tokens straight from the launcher's own events — this catches launches the
  * site's index has not picked up yet.
  */
+/** The factory's deploy event. Stable across launcher redeploys, which the launcher's own is not. */
+export const FACTORY_DEPLOY_TOPIC =
+  '0x03900b19b57eae1ba0347c51f7e5d3725c7eccc4ca914d44035b2023c0ed2d3b';
+
 export async function fetchLaunchedTokens({ lookbackBlocks = 200_000n } = {}) {
   const out = new Map();
   for (const c of CHAINS.filter((x) => x.launcher)) {
@@ -41,13 +45,21 @@ export async function fetchLaunchedTokens({ lookbackBlocks = 200_000n } = {}) {
       const latest = await pc.getBlockNumber();
       const from = latest - lookbackBlocks > c.factoryFromBlock ? latest - lookbackBlocks : c.factoryFromBlock;
       const logs = await getLogsChunked(pc, {
-        address: c.launcher, event: OMNI_LAUNCHED_EVENT, fromBlock: from, toBlock: latest,
+        address: FACTORY, topics: [FACTORY_DEPLOY_TOPIC], fromBlock: from, toBlock: latest,
       });
       for (const l of logs) {
-        const a = getAddress(l.args.token);
-        if (!out.has(a)) out.set(a, { address: a, launchChain: c.id, blockNumber: l.blockNumber, salt: l.args.salt });
+        const a = getAddress(`0x${l.topics[1].slice(26)}`);
+        if (out.has(a)) continue;
+        // name and symbol ride along in the log data, so this needs no follow-up
+        // call per token — and works for a token the site has never indexed.
+        let name = null; let symbol = null;
+        try {
+          [name, symbol] = decodeAbiParameters([{ type: 'string' }, { type: 'string' }], l.data);
+        } catch { /* older shape; the address is the part that matters */ }
+        out.set(a, { address: a, launchChain: c.id, blockNumber: l.blockNumber,
+          salt: l.topics[2] ?? null, name, symbol });
       }
-    } catch { /* a launcher-less or rate-limited chain is not fatal */ }
+    } catch { /* a rate-limited chain is not fatal */ }
   }
   return [...out.values()];
 }
@@ -62,12 +74,13 @@ export async function fetchLaunchedTokens({ lookbackBlocks = 200_000n } = {}) {
  */
 export async function getLogsChunked(pc, params, span = 5000n) {
   const chainId = pc.chain?.id;
-  if (params.event && etherscan.covers(chainId)) {
+  if ((params.event || params.topics) && etherscan.covers(chainId)) {
     try {
-      const topics = encodeEventTopics({ abi: [params.event], eventName: params.event.name, args: params.args });
+      const topics = params.topics
+        ?? encodeEventTopics({ abi: [params.event], eventName: params.event.name, args: params.args });
       const logs = await etherscan.getLogs({ chainId, address: params.address, topics,
         fromBlock: params.fromBlock, toBlock: params.toBlock });
-      return parseEventLogs({ abi: [params.event], logs });
+      return params.event ? parseEventLogs({ abi: [params.event], logs }) : logs;
     } catch { /* fall through to the chunked RPC walk */ }
   }
   try {

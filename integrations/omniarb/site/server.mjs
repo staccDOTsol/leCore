@@ -291,10 +291,17 @@ async function apiDiscover(lookback, deep) {
   const key = deep ? 'deep' : 'fast';
   const hit = _discovered.get(key);
   if (hit && Date.now() - hit.at < 60_000) return hit.value;
-  const [indexed, launched] = await Promise.all([
+  let [indexed, launched] = await Promise.all([
     fetchIndexedTokens().catch(() => []),
     deep ? fetchLaunchedTokens({ lookbackBlocks: BigInt(lookback ?? 200_000) }).catch(() => []) : [],
   ]);
+
+  // Their index goes down. When it does, the chain still knows every launch —
+  // so an empty index is a reason to scan the factory now rather than serve an
+  // empty board and wait for the deep pass. It is one Etherscan call.
+  if (!indexed.length && !launched.length) {
+    launched = await fetchLaunchedTokens({ lookbackBlocks: BigInt(lookback ?? 200_000) }).catch(() => []);
+  }
 
   const rows = new Map();
   for (const t of indexed) {
@@ -308,12 +315,18 @@ async function apiDiscover(lookback, deep) {
   // Anything the launcher emitted but the index does not carry: name and symbol
   // come off the contract, because there is no index entry to read them from.
   const home = chainById(HOME_CHAIN);
+  // The factory log carries name and symbol, so most of these need no call at
+  // all; only an older log shape falls back to reading the contract.
   const extra = launched.filter((l) => !rows.has(l.address.toLowerCase()));
   await Promise.all(extra.map(async (l) => {
-    const m = await tokenMeta(chainById(l.launchChain) ?? home, l.address).catch(() => null);
+    let { name, symbol } = l;
+    if (!symbol) {
+      const m = await tokenMeta(chainById(l.launchChain) ?? home, l.address).catch(() => null);
+      name = m?.symbol ?? null; symbol = m?.symbol ?? '?';
+    }
     rows.set(l.address.toLowerCase(), {
-      address: l.address, name: m?.symbol ?? null, symbol: m?.symbol ?? '?', tagline: null,
-      createdAt: null, chains: [], source: 'launcher-event',
+      address: l.address, name: name ?? symbol, symbol: symbol ?? '?', tagline: null,
+      createdAt: null, chains: [], source: 'factory-log',
       block: l.blockNumber ? Number(l.blockNumber) : null,
     });
   }));

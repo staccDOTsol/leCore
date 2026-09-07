@@ -1,0 +1,118 @@
+{
+  "fetchedAt": "2026-09-07T01:18:10.689Z",
+  "deployment": "dpl_4ZFUc6tByp9MUUbYAb3LgG6mA1Mu",
+  "chunk": "646-2d3a0422b7389947.js",
+  "factory": "0xCF8C621000514043bC7AdFd3afD2fCF391fC761e",
+  "portal": "0xa3324d514708049883167aD817Db97Aefe29c96c",
+  "launcher": "0xe3DCd4B6fE0B7B86234036E6d37bf5D2f2bdB857",
+  "chains": [
+    {
+      "id": 4663,
+      "name": "Robinhood",
+      "short": "RH",
+      "rpc": "https://rpc.mainnet.chain.robinhood.com",
+      "explorer": "https://rh-scan.com",
+      "poolManager": "0x8366a39CC670B4001A1121B8F6A443A643e40951",
+      "hook": "0x816b4043fE55B9a982C2BaeFB746c9F541C380Cc",
+      "router": "0xca60e703598aE645Fc2a99456004096c1577084C",
+      "launcher": "0x62B0Bc3aE794fC6A4D7a3809063Bf777a9947345",
+      "factoryFromBlock": "55377450"
+    },
+    {
+      "id": 8453,
+      "name": "Base",
+      "short": "Base",
+      "rpc": "https://mainnet.base.org",
+      "explorer": "https://basescan.org",
+      "poolManager": "0x498581fF718922c3f8e6A244956aF099B2652b2b",
+      "hook": "0xCe5d52C0C2345260502872b6108d0cE2559280cc",
+      "router": "0x3EC4d75F9fE806155f10B75AD8787d09fAb81229",
+      "launcher": "0xe3DCd4B6fE0B7B86234036E6d37bf5D2f2bdB857",
+      "factoryFromBlock": "50927698"
+    },
+    {
+      "id": 1,
+      "name": "Ethereum",
+      "short": "ETH",
+      "rpc": "https://ethereum-rpc.publicnode.com",
+      "explorer": "https://etherscan.io",
+      "poolManager": "0x000000000004444c5dc75cB358380D2e3dE08A90",
+      "hook": "0xF1233150D60D96f4f9086a535738B53625a980cC",
+      "router": "0x40622206731b1Ae558E2De70a0144ba77E23a082",
+      "launcher": null,
+      "factoryFromBlock": "25913286"
+    },
+    {
+      "id": 42161,
+      "name": "Arbitrum",
+      "short": "Arb",
+      "rpc": "https://arb1.arbitrum.io/rpc",
+      "explorer": "https://arbiscan.io",
+      "poolManager": "0x360E68faCcca8cA495c1B759Fd9EEe466db9FB32",
+      "hook": "0x552658E4Dcb00C069aB97244489C830a87b380cc",
+      "router": "0x184FF6D1601Dc1a8B2F42AcB37959519B3313C75",
+      "launcher": null,
+      "factoryFromBlock": "502103226"
+    },
+    {
+      "id": 56,
+      "name": "BNB",
+      "short": "BNB",
+      "rpc": "https://bsc-dataseed.binance.org",
+      "explorer": "https://bscscan.com",
+      "poolManager": "0x28e2Ea090877bF75740558f6BFB36A5ffeE9e9dF",
+      "hook": "0x2E119e43217CEe9ba42bB153C4F8A81226D400cC",
+      "router": "0x074c69eDa671f05fC89c130Be78B5e4b8e8a65C9",
+      "launcher": null,
+      "factoryFromBlock": "120168189"
+    },
+    {
+      "id": 137,
+      "name": "Polygon",
+      "short": "Pol",
+      "rpc": "https://polygon-bor-rpc.publicnode.com",
+      "explorer": "https://polygonscan.com",
+      "poolManager": "0x67366782805870060151383F4BbFF9daB53e5cD6",
+      "hook": "0xd14B20a40B605879D250902b024cC41B677500cc",
+      "router": "0x78Ff5aC7987096faa0e161C0445c0A9b5A86272f",
+      "launcher": null,
+      "factoryFromBlock": "93288779"
+    },
+    {
+      "id": 480,
+      "name": "World",
+      "short": "Wld",
+      "rpc": "https://worldchain-mainnet.g.alchemy.com/public",
+      "explorer": "https://worldscan.org",
+      "poolManager": "0xb1860D529182ac3BC1F51Fa2ABd56662b7D13f33",
+      "hook": "0x03f4051e621EE3F3652aDeF2c453458a777e40cc",
+      "router": "0x028F91F642cB4e1cbe0f5b6361356b55b843E918",
+      "launcher": null,
+      "factoryFromBlock": "34651246"
+    },
+    {
+      "id": 59144,
+      "name": "Linea",
+      "short": "Lin",
+      "rpc": "https://rpc.linea.build",
+      "explorer": "https://lineascan.build",
+      "poolManager": "0x248083Fb965359d82b06C1F5322480Dcfc1AD857",
+      "hook": "0xB8dD684F503C3386595D4A8886F29e0388B100cC",
+      "router": "0xCFF35Fad62B292108817d572f231a190B309dcA9",
+      "launcher": null,
+      "factoryFromBlock": "31944078"
+    },
+    {
+      "id": 143,
+      "name": "Monad",
+      "short": "Mon",
+      "rpc": "https://rpc.monad.xyz",
+      "explorer": "https://monadvision.com",
+      "poolManager": "0x188d586Ddcf52439676Ca21A244753fA19F9Ea8e",
+      "hook": "0xe89ab12A7DcA7B4cB269002826Dab40B04D440cC",
+      "router": "0x11494b3f427F9D36b220878f0d6a2cEF7C6Bdb9c",
+      "launcher": null,
+      "factoryFromBlock": "102273109"
+    }
+  ]
+}

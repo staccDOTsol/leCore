@@ -4,13 +4,16 @@
   "private": true,
   "type": "module",
   "description": "Arbitrage bot for tokens launched by omnichain.family across its 9 chains, two v4 pools per CA, the Base bonding curve, and the 1:1 burn/mint bridge.",
-  "bin": { "omniarb": "./src/cli.mjs" },
+  "bin": {
+    "omniarb": "./src/cli.mjs"
+  },
   "scripts": {
     "compile": "node scripts/compile.mjs",
     "scan": "node src/cli.mjs scan",
     "balances": "node src/cli.mjs balances"
   },
   "dependencies": {
+    "sharp": "^0.35.4",
     "viem": "^2.21.0"
   },
   "devDependencies": {

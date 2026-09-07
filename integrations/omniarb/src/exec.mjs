@@ -217,6 +217,18 @@ export async function sellOnVenue(c, account, token, venue, amount, { slippageBp
   if (allowance < amount) {
     const ah = await wc.writeContract({ address: token, abi: ERC20_ABI, functionName: 'approve', args: [spender, MAX_UINT256] });
     await pc.waitForTransactionReceipt({ hash: ah });
+
+    // A mined approve is not yet a visible approve. Behind a failover transport
+    // the preflight below can hit a node that has not seen it, read an allowance
+    // of zero, and reject a sell that is perfectly valid — so wait until the
+    // allowance is actually readable before trusting anything that depends on it.
+    for (let i = 0; i < 15; i += 1) {
+      const now = await pc.readContract({
+        address: token, abi: ERC20_ABI, functionName: 'allowance',
+        args: [account.address, spender] }).catch(() => 0n);
+      if (now >= amount) break;
+      await new Promise((r) => setTimeout(r, 1500));
+    }
   }
 
   // Preflight the real call, not just the view quote. The pad's quoteSell can

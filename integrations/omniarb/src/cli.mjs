@@ -21,6 +21,8 @@ import { nativePrices, toUsd, usdStr } from './prices.mjs';
 import { helperFor, resetQuoteCache } from './quote.mjs';
 import { deployHelper, executeAtomic, executeRoute, sellOnVenue, passesGuards } from './exec.mjs';
 import { bridge, pendingMints, clearPendingMint, findUnmintedBurns, retryMint, mintProcessed } from './bridge.mjs';
+import { fetchLiveConfig, writeLiveConfig, diffAgainst } from './refresh.mjs';
+import { uploadMetadata, launchOnBase, seedAll, saltFor, LAUNCH_FEE_WEI } from './launch.mjs';
 import { ERC20_ABI } from './config.mjs';
 
 const argv = process.argv.slice(2);
@@ -507,6 +509,92 @@ async function cmdMints() {
   if (!has('retry')) console.log('\nre-run with --retry to ask the relayer again');
 }
 
+// ----------------------------------------------------------------- refresh
+
+/** Re-scrape the deployed app's contract map. Their addresses move. */
+async function cmdRefresh() {
+  const cfg = await fetchLiveConfig();
+  const diff = diffAgainst(CHAINS, cfg);
+  console.log(`\nlive build ${cfg.deployment ?? '?'} (${cfg.chunk})`);
+  console.log(`factory ${cfg.factory}\nportal  ${cfg.portal}\nlauncher ${cfg.launcher}`);
+  if (!diff.length) console.log('\nnothing changed — built-ins already match the live app');
+  else {
+    console.log(`\n${diff.length} address(es) moved since the built-in map:`);
+    for (const r of diff) console.log(`  ${r.chain.padEnd(5)} ${r.field.padEnd(12)} ${r.from} -> ${r.to}`);
+  }
+  writeLiveConfig(cfg);
+  console.log('\nsaved to live-config.json — every command now uses these');
+}
+
+// ------------------------------------------------------------------ launch
+
+/**
+ * Launch a token: upload art + metadata, create it on Base, then seed all nine
+ * chains. `--seed-only` resumes the seeding for a token that already exists.
+ */
+async function cmdLaunch() {
+  const account = loadAccount();
+  const name = flag('name');
+  const symbol = flag('symbol');
+  const image = flag('image');
+  const tagline = flag('tagline', '') === true ? '' : String(flag('tagline', ''));
+  const live = has('live');
+
+  if (has('seed-only')) {
+    const token = getAddress(String(flag('token') ?? die('pass --token with --seed-only')));
+    console.log(`\nseeding ${token} across ${CHAINS.length} chains\n`);
+    const r = await seedAll({ account, token, dryRun: !live, onStep: (m) => console.log(`  ${m}`) });
+    console.log(`\nfloat: ${formatUnits(r.held, 18)} held, ${formatUnits(r.perChain, 18)} per chain`);
+    if (r.dryRun) console.log('dry run — re-run with --live');
+    return;
+  }
+
+  if (!name || name === true || !symbol || symbol === true) die('pass --name and --symbol');
+  if (!image || image === true) die('pass --image <path to png/jpg/svg>');
+
+  console.log(`\nlaunching ${name} (${symbol})`);
+  console.log(`creator ${account.address}\n`);
+
+  console.log('uploading art + metadata…');
+  const meta = await uploadMetadata({
+    file: String(image), name: String(name), symbol: String(symbol),
+    description: tagline, salt: saltFor(String(symbol)),
+  });
+  console.log(`  logo ${meta.logoURI}`);
+
+  const opts = {
+    account, name: String(name), symbol: String(symbol), tagline,
+    logoURI: meta.logoURI,
+    targetRaiseEth: String(flag('target', '0.06')),
+    creatorBuyEth: String(flag('buy', '0.018')),
+    dryRun: !live,
+  };
+  const p = await launchOnBase({ ...opts, dryRun: true });
+  console.log(`\nlaunch on ${p.chain} via ${p.launcher}`);
+  console.log(`  value ${eth(p.value)} ETH = ${eth(LAUNCH_FEE_WEI)} fee + ${eth(p.params.creatorBuyWei)} creator buy`);
+  console.log(`  target raise ${eth(p.params.targetRaiseWei)} ETH · salt ${p.params.salt.slice(0, 18)}…`);
+  console.log(`  the creator buy is what funds the pool seeding — a zero buy leaves no float and opens no pools`);
+
+  if (!live) { console.log('\ndry run — re-run with --live to launch'); return; }
+
+  const r = await launchOnBase(opts);
+  console.log(`\nlaunched: ${r.token}`);
+  console.log(`  ${r.explorer}`);
+
+  // Re-key the metadata to the real CA now that it is known.
+  await uploadMetadata({
+    file: String(image), name: String(name), symbol: String(symbol),
+    description: tagline, address: r.token, salt: p.params.salt,
+  }).catch((e) => console.log(`  (metadata re-key failed: ${e.message.slice(0, 90)})`));
+
+  console.log('\nseeding all chains…');
+  const s = await seedAll({ account, token: r.token, dryRun: false, onStep: (m) => console.log(`  ${m}`) });
+  console.log(`\nfloat ${formatUnits(s.perChain, 18)} per chain`);
+  const ok = s.results.filter((x) => x.hooked?.ok && x.hookless?.ok).map((x) => x.chain);
+  console.log(`both pools open on: ${ok.length ? ok.join(', ') : 'none yet'}`);
+  console.log(`resume any stragglers with: omniarb launch --seed-only --token ${r.token} --live`);
+}
+
 // -------------------------------------------------------------------- move
 
 async function cmdMove() {
@@ -727,7 +815,8 @@ async function cmdBag() {
 // -------------------------------------------------------------------- main
 
 const commands = { tokens: cmdTokens, venues: cmdVenues, balances: cmdBalances, bag: cmdBag,
-  route: cmdRoute, watch: cmdWatch, move: cmdMove, fire: cmdFire, sell: cmdSell, mints: cmdMints, scan, deploy: cmdDeploy, run: cmdRun, bridge: cmdBridge };
+  route: cmdRoute, watch: cmdWatch, move: cmdMove, fire: cmdFire, sell: cmdSell, mints: cmdMints,
+  refresh: cmdRefresh, launch: cmdLaunch, scan, deploy: cmdDeploy, run: cmdRun, bridge: cmdBridge };
 
 if (!cmd || !commands[cmd] || has('help')) {
   console.log(`omniarb — arbitrage across omnichain.family
@@ -749,6 +838,10 @@ if (!cmd || !commands[cmd] || has('help')) {
   run       --token 0x.. [--live] [--max 1]
   bridge    --token 0x.. --from Base --to Pol --amount 1000 [--live]
   mints     --token 0x.. [--recover] [--retry]                 burns whose mint never landed
+  refresh                                                      re-scrape the live contract map (their routers move)
+  launch    --name "x" --symbol X --image a.png [--buy 0.018] [--target 0.06] [--live]
+            upload art, create on Base, seed hooked+hookless pools on all 9 chains
+  launch    --seed-only --token 0x.. [--live]                   resume seeding an existing token
 
 Nothing sends a transaction unless you pass --live.
 The wallet key is read from STACCOVERFLOW_KP and is never logged.`);

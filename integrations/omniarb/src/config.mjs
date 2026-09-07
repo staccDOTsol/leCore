@@ -13,9 +13,16 @@ export const ETH_SENTINEL = '0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee';
 /** Home chain: the bonding curve ("the pad") only exists here. */
 export const HOME_CHAIN = 8453;
 
-/** Same address on every chain. */
-export const PORTAL = '0xa3324d514708049883167ad817db97aefe29c96c';
-export const FACTORY = '0xcf8c621000514043bc7adfd3afd2fcf391fc761e';
+/** Overridden by live-config.json when `omniarb refresh` has been run. */
+const LIVE = {
+  portal: '0xa3324d514708049883167ad817db97aefe29c96c',
+  factory: '0xcf8c621000514043bc7adfd3afd2fcf391fc761e',
+  fetchedAt: null,
+  deployment: null,
+};
+
+// PORTAL and FACTORY are exported below, after the live overlay has been
+// applied — reading them here would capture the built-in defaults.
 /** Bonding curve / launchpad, Base only. */
 export const PAD = '0xd21cff13e2d2d9a39e450e97e29dd930108a327c';
 
@@ -125,6 +132,37 @@ export const CHAINS = [
     factoryFromBlock: 102273109n,
   },
 ];
+
+// If live-config.json is present, the addresses scraped from the deployed app
+// win over the built-ins. The site redeploys its routers without warning, and a
+// bot trading against the previous set is quoting contracts nobody is using.
+// Written by `omniarb refresh`; read here directly to avoid an import cycle.
+(() => {
+  let live;
+  try {
+    live = JSON.parse(readFileSync(new URL('../live-config.json', import.meta.url), 'utf8'));
+  } catch { return; }
+  if (!Array.isArray(live?.chains)) return;
+  for (const lc of live.chains) {
+    const c = CHAINS.find((x) => x.id === Number(lc.id));
+    if (!c) continue;
+    for (const f of ['poolManager', 'hook', 'router']) {
+      if (typeof lc[f] === 'string' && /^0x[0-9a-fA-F]{40}$/.test(lc[f])) c[f] = lc[f].toLowerCase();
+    }
+    if (typeof lc.launcher === 'string' && /^0x[0-9a-fA-F]{40}$/.test(lc.launcher)) {
+      c.launcher = lc.launcher.toLowerCase();
+    }
+  }
+  if (/^0x[0-9a-fA-F]{40}$/.test(live.factory ?? '')) LIVE.factory = live.factory.toLowerCase();
+  if (/^0x[0-9a-fA-F]{40}$/.test(live.portal ?? '')) LIVE.portal = live.portal.toLowerCase();
+  LIVE.fetchedAt = live.fetchedAt ?? null;
+  LIVE.deployment = live.deployment ?? null;
+})();
+
+/** Same address on every chain (live value if `omniarb refresh` has been run). */
+export const PORTAL = LIVE.portal;
+export const FACTORY = LIVE.factory;
+export const liveInfo = () => ({ ...LIVE });
 
 export const chainById = (id) => CHAINS.find((c) => c.id === Number(id));
 

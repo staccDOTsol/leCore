@@ -1,0 +1,27 @@
+{
+  "name": "omniarb",
+  "version": "1.0.0",
+  "description": "Read-only nine-chain venue monitoring and gated atomic/non-atomic arbitrage research",
+  "scripts": {
+    "test": "node --test test/*.test.mjs",
+    "compile": "node scripts/compile.mjs",
+    "scan": "node src/cli.mjs",
+    "watch": "node src/cli.mjs --watch",
+    "test:fork": "node --test test/fork.test.mjs"
+  },
+  "license": "MIT",
+  "type": "module",
+  "private": true,
+  "dependencies": {
+    "viem": "2.56.3"
+  },
+  "devDependencies": {
+    "solc": "0.8.26"
+  },
+  "overrides": {
+    "tmp": "0.2.7"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

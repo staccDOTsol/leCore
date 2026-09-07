@@ -920,7 +920,7 @@ async function txSeed({ ca, chain, from, amountWei, amount }) {
  * in words: "relayer short on Arbitrum: has …, needs …, send … more". Nothing
  * else in the flow can proceed, and it is a plain native transfer to fix.
  */
-async function txFundRelayer({ chain, amountWei, from }) {
+async function txFundRelayer({ chain, amountWei, from, prefer, origin }) {
   const c = chainById(chain);
   if (!c) throw new Error(`unknown chain ${chain}`);
   const wei = BigInt(amountWei);
@@ -944,10 +944,20 @@ async function txFundRelayer({ chain, amountWei, from }) {
   const pc = publicClient(c);
 
   // Enough on the destination already? Then it is one transfer, and the reserve
-  // is for the transfer's own gas.
-  const here = await pc.getBalance({ address: who }).catch(() => 0n);
-  const gasHere = await pc.getGasPrice().catch(() => 0n);
-  if (here > wei + gasHere * 120_000n) return direct();
+  // is for the transfer's own gas. Unless the caller has asked for a relay hop:
+  // a direct send means the wallet has to be ON that chain, and six of these
+  // nine are chains no wallet ships with. A relay hop runs entirely on the chain
+  // the wallet is already sitting on.
+  // Relay unless a direct send costs nothing extra. A direct send means the
+  // wallet must be ON the destination chain, and six of these nine are chains no
+  // wallet ships with — asking it to add Polygon so it can forward 8 POL it does
+  // not have is worse than paying two cents to Relay. So: direct only when the
+  // wallet is already sitting there and already holds enough.
+  if (prefer !== 'relay' && Number(origin) === c.id) {
+    const here = await pc.getBalance({ address: who }).catch(() => 0n);
+    const gasHere = await pc.getGasPrice().catch(() => 0n);
+    if (here > wei + gasHere * 120_000n) return direct();
+  }
 
   // Otherwise it has to come from a chain where there IS money. Assuming a
   // balance sits on the chain that needs it is how a top-up becomes an
@@ -962,7 +972,11 @@ async function txFundRelayer({ chain, amountWei, from }) {
     const usd = prices?.byChain.get(src.id)?.usd ?? null;
     return { src, bal, usd: usd ? num(bal) * usd : 0 };
   }));
-  const ranked = balances.filter(Boolean).filter((b) => b.bal > 0n).sort((a, b) => b.usd - a.usd);
+  // Richest first, but the chain the wallet is already on wins a tie by a mile:
+  // every other choice costs a network switch the wallet may refuse.
+  const ranked = balances.filter(Boolean).filter((b) => b.bal > 0n)
+    .sort((a, b) => b.usd - a.usd)
+    .sort((a, b) => Number(b.src.id === Number(origin)) - Number(a.src.id === Number(origin)));
   if (!ranked.length) {
     throw new Error(`no native balance anywhere Relay can route from — ${who} holds nothing to bridge`);
   }

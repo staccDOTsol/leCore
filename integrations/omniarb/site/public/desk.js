@@ -1274,22 +1274,41 @@ function paintWallet() {
 async function ensureChain(id) {
   const want = '0x' + Number(id).toString(16);
   if (Number(W.chainId) === Number(id)) return;
+  const c = (S.me?.chains ?? []).find((x) => x.id === Number(id));
+  const local = C.byId[Number(id)];
+  const name = local?.name ?? c?.name ?? `chain ${id}`;
+
+  const doSwitch = () => W.provider.request({ method: 'wallet_switchEthereumChain', params: [{ chainId: want }] });
+
   try {
-    await W.provider.request({ method: 'wallet_switchEthereumChain', params: [{ chainId: want }] });
+    await doSwitch();
   } catch (e) {
-    if (e?.code !== 4902 && !/unrecognized|not added|Unrecognized/i.test(String(e?.message))) throw e;
-    const c = (S.me?.chains ?? []).find((x) => x.id === Number(id));
-    const local = C.byId[Number(id)];
-    if (!c) throw new Error(`no rpc known for chain ${id}`);
-    await W.provider.request({ method: 'wallet_addEthereumChain', params: [{
-      chainId: want, chainName: c.name, rpcUrls: [c.rpc],
-      nativeCurrency: { name: c.nativeSymbol, symbol: c.nativeSymbol, decimals: 18 },
-      blockExplorerUrls: [local?.explorer ?? c.explorer],
-    }] });
-    await W.provider.request({ method: 'wallet_switchEthereumChain', params: [{ chainId: want }] });
+    // Any switch failure is treated as "the wallet does not have this chain".
+    // Wallets disagree on how to say that — 4902, "Unrecognized chain ID", and
+    // "The Provider is not connected to the requested chain" are all the same
+    // situation, and matching only the first meant six of these nine chains
+    // failed instead of being added.
+    if (!c?.rpc) throw new Error(`${name} is not in your wallet and no rpc is known for it`);
+    try {
+      await W.provider.request({ method: 'wallet_addEthereumChain', params: [{
+        chainId: want, chainName: name, rpcUrls: [c.rpc],
+        nativeCurrency: { name: c.nativeSymbol, symbol: c.nativeSymbol, decimals: 18 },
+        blockExplorerUrls: [local?.explorer ?? c.explorer].filter(Boolean),
+      }] });
+    } catch (addErr) {
+      throw new Error(`your wallet would not add ${name}: ${String(addErr?.message ?? addErr).split('\n')[0]}`);
+    }
+    await doSwitch().catch(() => {});
   }
-  W.chainId = Number(id);
-  paintWallet();
+
+  // Some wallets resolve the switch before it has happened, and sending into
+  // that gap broadcasts on the previous chain.
+  for (let i = 0; i < 20; i += 1) {
+    const now = await W.provider.request({ method: 'eth_chainId' }).catch(() => null);
+    if (Number(now) === Number(id)) { W.chainId = Number(id); paintWallet(); return; }
+    await new Promise((r) => setTimeout(r, 400));
+  }
+  throw new Error(`wallet did not switch to ${name}`);
 }
 
 /** Poll for a receipt through this server's proxy: the wallet's own node lags. */
@@ -1705,15 +1724,24 @@ async function fundRelayer(chainId, wei) {
   const c = C.byId[chainId];
   const amount = Number(wei) / 1e18;
   log(`${c.short}: relayer cannot pay for the wall — it needs ${amount.toPrecision(4)} ${c.gas}`, 'warn');
-  const tx = await C.apiPost('/api/tx/fundrelayer', {
-    chain: chainId, amountWei: wei.toString(), from: W.address });
+  let tx = await C.apiPost('/api/tx/fundrelayer', {
+    chain: chainId, amountWei: wei.toString(), from: W.address, origin: W.chainId });
   // Gas for a chain you have never used has to come from one you have. The
   // server picks the source by what you actually hold, so say which.
   log(tx.route === 'relay'
     ? `${c.short}: bridging from ${tx.via} via Relay — ${C.fmtNum(tx.spend, 5)} in, ` +
       `${C.fmtUsd(tx.costUsd)} cost, ~${Math.round(tx.seconds || 0)}s`
     : `${c.short}: sending directly`);
-  const done = await runSteps(tx.steps);
+  let done = await runSteps(tx.steps).catch(async (e) => {
+    // A wallet that will not go to the destination chain can still pay from the
+    // one it is on: the relay hop's transaction is an origin-chain transaction.
+    if (tx.route !== 'direct') throw e;
+    log(`${c.short}: ${String(e.message)} — routing over Relay from ${C.byId[W.chainId]?.short ?? 'the current chain'} instead`, 'warn');
+    tx = await C.apiPost('/api/tx/fundrelayer', {
+      chain: chainId, amountWei: wei.toString(), from: W.address, origin: W.chainId, prefer: 'relay' });
+    log(`${c.short}: bridging from ${tx.via} via Relay — ${C.fmtNum(tx.spend, 5)} in, ${C.fmtUsd(tx.costUsd)} cost`);
+    return runSteps(tx.steps);
+  });
   if (!done.length) return false;
   if (tx.route === 'relay') {
     // Relay settles on the far side after the origin transaction confirms, so

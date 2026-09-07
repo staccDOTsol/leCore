@@ -1,18 +1,19 @@
-# The desk as a long-lived process: the shape to run when you want the launch,
-# bridge and trade endpoints, because those are jobs that outlive a request.
+# The desk as a long-lived process. It holds no key: the visitor's wallet signs
+# every transaction, so this image is safe to run anywhere it can reach the RPCs.
 FROM node:22-slim
 
 WORKDIR /app
-COPY package.json package-lock.json ./
-# viem is the only runtime dependency the server actually loads; playwright and
-# sharp are for the launcher's own tooling and would pull a browser into the image.
-RUN npm ci --omit=dev --ignore-scripts && npm prune --omit=dev
+
+# viem is the only thing the site server imports. package.json also lists
+# playwright and sharp for the launcher's own tooling — installing those here
+# would drag a browser into the image for code this process never loads.
+RUN npm install --omit=dev --ignore-scripts --no-package-lock --no-fund --no-audit viem@2.56.3
 
 COPY src ./src
 COPY site ./site
 COPY build ./build
-COPY live-config.json deployments.json ./
+COPY live-config.json deployments.json package.json ./
 
-ENV PORT=8080 HOST=0.0.0.0
+ENV PORT=8080 HOST=0.0.0.0 NODE_ENV=production
 EXPOSE 8080
 CMD ["node", "site/server.mjs"]

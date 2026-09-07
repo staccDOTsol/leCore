@@ -1,8 +1,7 @@
-# fly deploy from integrations/omniarb.
+# fly deploy, from integrations/omniarb.
 #
-# Deliberately no [env] entry for STACCOVERFLOW_KP or OMNIVIEW_WRITE: a Fly app
-# is a public URL, and the write endpoints sign real transactions. Keep them on
-# the machine that holds the key.
+# No secrets belong here beyond BIRDEYE_KEY (set it with `fly secrets set`, not
+# in this file). Nothing in the image signs: the visitor's wallet does.
 app = "omniarb-desk"
 primary_region = "iad"
 
@@ -18,7 +17,9 @@ primary_region = "iad"
   force_https = true
   auto_stop_machines = "suspend"
   auto_start_machines = true
-  min_machines_running = 0
+  # One machine always warm: the first request after a cold start pays for every
+  # RPC handshake at once, and the board is the first thing anyone sees.
+  min_machines_running = 1
 
   [[http_service.checks]]
     interval = "30s"

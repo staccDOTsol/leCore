@@ -160,6 +160,50 @@ function bigintSqrt(v) {
 
 // ------------------------------------------------------------------- launch
 
+/**
+ * Read the new token's address out of a launch receipt.
+ *
+ * Deliberately not tied to one event signature. The launcher gets redeployed
+ * and its event shape changes with it — that is exactly what turned a perfectly
+ * successful launch into "emitted no OmniLaunched event", aborting before any
+ * chain was seeded. So: try the known ABI, then fall back to the structure that
+ * holds regardless of naming — a log from the launcher carrying both the
+ * creator and one other address — and confirm the candidate really is an ERC20
+ * before returning it.
+ */
+export async function tokenFromReceipt(rec, launcher, creator) {
+  const pc = publicClient(chainById(HOME_CHAIN));
+  const isERC20 = async (addr) => {
+    try {
+      const [code, supply] = await Promise.all([
+        pc.getBytecode({ address: addr }),
+        pc.readContract({ address: addr, abi: ERC20_ABI, functionName: 'totalSupply' }),
+      ]);
+      return Boolean(code && code !== '0x') && supply > 0n;
+    } catch { return false; }
+  };
+
+  for (const log of rec.logs) {
+    try {
+      const d = decodeEventLog({ abi: [OMNI_LAUNCHED_EVENT], data: log.data, topics: log.topics });
+      if (d.eventName === 'OmniLaunched' && await isERC20(d.args.token)) return d.args.token;
+    } catch { /* signature changed, fall through */ }
+  }
+
+  const asAddr = (t) => `0x${t.slice(26)}`.toLowerCase();
+  const me = creator.toLowerCase();
+  for (const log of rec.logs) {
+    if (log.address.toLowerCase() !== launcher.toLowerCase()) continue;
+    const addrs = log.topics.slice(1).map(asAddr);
+    if (!addrs.includes(me)) continue;
+    for (const cand of addrs) {
+      if (cand === me) continue;
+      if (await isERC20(cand)) return cand;
+    }
+  }
+  return null;
+}
+
 /** Create the token and its curve on Base. Returns the token address. */
 export async function launchOnBase({ account, name, symbol, tagline, logoURI,
   targetRaiseEth = '0.06', creatorBuyEth = '0', dryRun = true }) {
@@ -194,14 +238,12 @@ export async function launchOnBase({ account, name, symbol, tagline, logoURI,
   const rec = await pc.waitForTransactionReceipt({ hash });
   if (rec.status !== 'success') throw new Error(`launch reverted on Base (${hash})`);
 
-  let token = null;
-  for (const log of rec.logs) {
-    try {
-      const d = decodeEventLog({ abi: [OMNI_LAUNCHED_EVENT], data: log.data, topics: log.topics });
-      if (d.eventName === 'OmniLaunched') { token = d.args.token; break; }
-    } catch { /* not ours */ }
+  const token = await tokenFromReceipt(rec, c.launcher, account.address);
+  if (!token) {
+    throw new Error(
+      `launch tx ${hash} succeeded but the token address could not be read from its logs — ` +
+      'find the CA on the explorer and resume with "omniarb launch --seed-only --token 0x..."');
   }
-  if (!token) throw new Error('launch succeeded but emitted no OmniLaunched event');
   return { ...plan, dryRun: false, hash, token, explorer: `${c.explorer}/tx/${hash}` };
 }
 

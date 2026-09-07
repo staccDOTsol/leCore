@@ -1418,8 +1418,15 @@ async function ensureChain(id) {
     // "The Provider is not connected to the requested chain" are all the same
     // situation, and matching only the first meant six of these nine chains
     // failed instead of being added.
-    const rpcs = c?.rpcs?.length ? c.rpcs : (c?.rpc ? [c.rpc] : []);
-    if (!rpcs.length) throw new Error(`${name} is not in your wallet and no rpc is known for it`);
+    // Our own proxy first: the wallet's traffic then lands on Alchemy like
+    // everything else, instead of on a public node that throttles it mid-bridge.
+    // The public endpoints stay behind it so the chain still works if this
+    // server does not.
+    const rpcs = [new URL(`/rpc/${Number(id)}`, location.origin).href,
+      ...(c?.rpcs ?? (c?.rpc ? [c.rpc] : []))];
+    if (rpcs.length <= 1 && !c?.rpcs?.length) {
+      throw new Error(`${name} is not in your wallet and no rpc is known for it`);
+    }
     try {
       // Every public endpoint we know, not just the first. The wallet makes
       // these calls itself and a single rate-limited node is how a bridge dies

@@ -1320,12 +1320,31 @@ const RPC_OK = new Set(['eth_blockNumber', 'eth_gasPrice', 'eth_call', 'eth_getC
   'eth_getBalance', 'eth_chainId', 'eth_getLogs', 'eth_getTransactionReceipt',
   'eth_getBlockByNumber', 'eth_estimateGas', 'eth_maxPriorityFeePerGas']);
 
-async function rpcProxy(chainId, payload) {
+/**
+ * What a wallet needs, which is more than the page does.
+ *
+ * This is the endpoint handed to wallet_addEthereumChain, so the wallet's own
+ * traffic lands on Alchemy instead of on whatever public node it was given —
+ * "eth_getBlockByNumber: Request is being rate limited" on BNB was the wallet
+ * being throttled, not us.
+ *
+ * eth_sendRawTransaction is on the list deliberately: it carries a transaction
+ * the wallet has already signed, so broadcasting it is not a privilege anyone
+ * gains by pointing at this. Nothing that could sign, or read an account, is.
+ */
+const WALLET_RPC_OK = new Set([...RPC_OK,
+  'eth_sendRawTransaction', 'eth_getTransactionCount', 'eth_getTransactionByHash',
+  'eth_getBlockByHash', 'eth_feeHistory', 'eth_getStorageAt', 'eth_getProof',
+  'net_version', 'web3_clientVersion', 'eth_syncing', 'eth_getBlockReceipts',
+  'eth_createAccessList', 'eth_getFilterChanges', 'eth_newBlockFilter',
+  'eth_uninstallFilter', 'eth_subscribe', 'eth_unsubscribe', 'eth_blobBaseFee']);
+
+async function rpcProxy(chainId, payload, allow = RPC_OK) {
   const c = chainById(chainId);
   if (!c) throw new Error(`unknown chain ${chainId}`);
   const calls = Array.isArray(payload) ? payload : [payload];
   for (const call of calls) {
-    if (!RPC_OK.has(call?.method)) throw new Error(`method not proxied: ${call?.method}`);
+    if (!allow.has(call?.method)) throw new Error(`method not proxied: ${call?.method}`);
   }
   let last = null;
   for (const url of rpcsFor(c)) {
@@ -1471,6 +1490,23 @@ export async function handler(req, res) {
     if (typeof out === 'string') out = redactSecrets(out, url.pathname);
     res.end(out);
   };
+
+  // /rpc/<chainId> is the wallet-facing endpoint. A wallet is not a browser
+  // page: it calls this from the extension, so it gets CORS and the wider
+  // method list.
+  const walletRpc = /^\/rpc\/(\d+)$/.exec(url.pathname);
+  if (walletRpc) {
+    res.setHeader('access-control-allow-origin', '*');
+    res.setHeader('access-control-allow-headers', 'content-type');
+    if (req.method === 'OPTIONS') { res.writeHead(204); res.end(); return; }
+    if (req.method !== 'POST') { send(405, { error: 'post json-rpc here' }); return; }
+    try { send(200, await rpcProxy(walletRpc[1], await readBody(req), WALLET_RPC_OK)); }
+    catch (e) {
+      send(200, { jsonrpc: '2.0', id: null,
+        error: { code: -32601, message: String(e.message).split('\n')[0] } });
+    }
+    return;
+  }
 
   if (req.method === 'POST') {
     if (url.pathname === '/api/rpc') {

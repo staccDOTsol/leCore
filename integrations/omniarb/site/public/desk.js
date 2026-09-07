@@ -1560,13 +1560,26 @@ async function estimateFor(s) {
   // A fifth of headroom on the limit: an estimate taken a block early can be
   // short by the time it lands, and a reverted-for-gas transaction still costs.
   const out = { gas: '0x' + ((BigInt(est) * 12n) / 10n).toString(16) };
-  const base = block?.baseFeePerGas ? BigInt(block.baseFeePerGas) : null;
-  if (base != null) {
+
+  // A base fee of zero is not a cheap block, it is a chain that does not price
+  // this way. BNB reports baseFeePerGas as 0x0 and its wallets reject 1559
+  // fields outright — "the current network does not support EIP-1559".
+  const base = block?.baseFeePerGas ? BigInt(block.baseFeePerGas) : 0n;
+  if (base > 0n) {
     const prio = tip ? BigInt(tip) : base / 10n;
     out.maxPriorityFeePerGas = '0x' + prio.toString(16);
     out.maxFeePerGas = '0x' + (base * 2n + prio).toString(16);
+  } else {
+    const gp = await C.rpc(s.chainId, 'eth_gasPrice', []).catch(() => null);
+    if (gp) out.gasPrice = '0x' + BigInt(gp).toString(16);
   }
   return out;
+}
+
+/** Same transaction, priced the old way. */
+function toLegacy(tx) {
+  const { maxFeePerGas, maxPriorityFeePerGas, ...rest } = tx;
+  return { ...rest, gasPrice: maxFeePerGas ?? rest.gasPrice };
 }
 
 /**
@@ -1577,11 +1590,22 @@ async function estimateFor(s) {
  * wait a moment and ask again rather than to make somebody re-press the button.
  */
 async function sendWithRetry(tx, s, tries = 3) {
+  let params = tx;
   for (let i = 0; ; i += 1) {
     try {
-      return await W.provider.request({ method: 'eth_sendTransaction', params: [tx] });
+      return await W.provider.request({ method: 'eth_sendTransaction', params: [params] });
     } catch (e) {
       const m = String(e?.message ?? e);
+
+      // Belt as well as braces on the fee model: whatever the block said, if
+      // the wallet says this chain has no 1559, price it the old way and send
+      // the same transaction rather than failing in front of the user.
+      if (/1559/i.test(m) && params.maxFeePerGas) {
+        params = toLegacy(params);
+        log(`${s.label}: ${C.byId[s.chainId]?.short ?? 'this chain'} does not price with EIP-1559 — resending legacy`, 'warn');
+        continue;
+      }
+
       const throttled = /rate limit|too many requests|429|timeout|failed to fetch|network error/i.test(m);
       if (!throttled || i >= tries - 1) throw e;
       log(`${s.label}: ${m.split('\n')[0]} — retrying`, 'warn');

@@ -248,13 +248,61 @@ export async function launchOnBase({ account, name, symbol, tagline, logoURI,
 }
 
 /**
+ * Have the relayer deploy the token at the same CA on a remote chain.
+ *
+ * This must happen BEFORE any bridgeOut to that chain. bridgeOut burns
+ * unconditionally on the source, while bridgeIn mints into the token contract on
+ * the destination — so bridging to a chain where the token does not exist yet
+ * burns supply that cannot be minted until the deploy catches up.
+ *
+ * The deploy salt is the creator-scoped one, not the bare ticker salt the
+ * launch call takes: keccak(abi.encode(creator, keccak(abi.encode(SYMBOL)))).
+ */
+export async function deployRemote({ chainId, name, symbol, tagline, logoURI, creator }) {
+  const salt = keccak256(encodeAbiParameters(
+    [{ type: 'address' }, { type: 'bytes32' }], [creator, saltFor(symbol)]));
+  const res = await relay({
+    action: 'deploy', chainId: Number(chainId),
+    name, symbol, tagline: tagline ?? '', logoURI, salt,
+  });
+  if (!res.ok && res.data?.skipped !== true) {
+    throw new Error(`deploy on chain ${chainId} refused: ${res.data?.error ?? `http ${res.status}`}`);
+  }
+  return { hash: res.data?.hash ?? null, address: res.data?.address ?? null, skipped: res.data?.skipped === true };
+}
+
+/** Does the token exist on this chain yet? */
+export async function isDeployedOn(chain, token) {
+  try {
+    const code = await publicClient(chain).getBytecode({ address: token });
+    return Boolean(code && code !== '0x');
+  } catch { return false; }
+}
+
+/**
  * Seed one chain: get the float there, then have the relayer open both pools.
  * Base is the home chain and needs no bridge, just a transfer.
  */
-export async function seedChain({ account, token, chain, amount, sqrtPriceX96, onStep = () => {} }) {
+export async function seedChain({ account, token, chain, amount, sqrtPriceX96,
+  meta = null, onStep = () => {} }) {
   const home = chainById(HOME_CHAIN);
   const pc = publicClient(home);
   const wc = walletClient(home, account);
+
+  if (chain.id !== HOME_CHAIN) {
+    // Deploy first, and refuse to bridge until the token is actually there.
+    if (!await isDeployedOn(chain, token)) {
+      if (!meta) throw new Error(`${chain.name} has no token yet and no metadata to deploy it with`);
+      onStep(`deploying the token on ${chain.short}`);
+      await deployRemote({ chainId: chain.id, creator: account.address, ...meta });
+      for (let i = 0; i < 20 && !await isDeployedOn(chain, token); i += 1) {
+        await new Promise((r) => setTimeout(r, 3000));
+      }
+    }
+    if (!await isDeployedOn(chain, token)) {
+      throw new Error(`token still absent on ${chain.name} — not bridging, that would burn supply with nothing to mint into`);
+    }
+  }
 
   if (chain.id === HOME_CHAIN) {
     onStep(`transferring float to the relayer on ${chain.short}`);
@@ -296,7 +344,7 @@ export async function seedChain({ account, token, chain, amount, sqrtPriceX96, o
 }
 
 /** Everything after the Base launch: split the float and seed all nine chains. */
-export async function seedAll({ account, token, dryRun = true, onStep = () => {} }) {
+export async function seedAll({ account, token, meta = null, dryRun = true, onStep = () => {} }) {
   const home = chainById(HOME_CHAIN);
   const pc = publicClient(home);
 
@@ -313,7 +361,7 @@ export async function seedAll({ account, token, dryRun = true, onStep = () => {}
   const results = [];
   for (const chain of order) {
     try {
-      const r = await seedChain({ account, token, chain, amount: perChain, sqrtPriceX96: sqrt, onStep });
+      const r = await seedChain({ account, token, chain, amount: perChain, sqrtPriceX96: sqrt, meta, onStep });
       results.push({ chain: chain.short, ...r });
       onStep(`  ${chain.short}: hooked ${r.hooked.ok ? 'ok' : r.hooked.reason}, hookless ${r.hookless.ok ? 'ok' : r.hookless.reason}`);
     } catch (e) {

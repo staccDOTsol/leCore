@@ -961,7 +961,30 @@ function launchGate(d, oneSignature) {
  * from the page looked exactly like a slow bridge. Mined against pending says
  * so in one call.
  */
-const queueOf = (c, address = RELAYER) => readQueue(c, getAddress(address));
+/**
+ * Is this chain's queue jammed, or merely busy?
+ *
+ * A transaction that has not mined yet is the normal case: it was sent seconds
+ * ago and the next block takes it. Treating one pending transaction as a jam
+ * stopped a healthy chain dead and told the person their relayer was broken.
+ * A jam is the head nonce standing still — same blocked nonce, still there,
+ * long after any block would have taken it — so it needs two readings, and
+ * this remembers the first.
+ */
+const JAM_MS = Number(process.env.JAM_AFTER ?? 90) * 1000;
+const _jam = new Map();
+
+async function queueOf(c, address = RELAYER) {
+  const q = await readQueue(c, getAddress(address));
+  if (!q.stuck) { _jam.delete(c.id); return { ...q, jammed: false, stuckForMs: 0 }; }
+  const seen = _jam.get(c.id);
+  if (!seen || seen.nonce !== q.blockedAt) {
+    _jam.set(c.id, { nonce: q.blockedAt, at: Date.now() });
+    return { ...q, jammed: false, stuckForMs: 0 };
+  }
+  const stuckForMs = Date.now() - seen.at;
+  return { ...q, jammed: stuckForMs >= JAM_MS, stuckForMs };
+}
 
 /**
  * Replace whatever is blocking the relayer's queue, from here.
@@ -1001,9 +1024,10 @@ async function apiQueue(chain, address) {
  */
 async function refuseIfJammed(dst, what) {
   const q = await queueOf(dst);
-  if (!q.stuck) return q;
-  throw new Error(`${what} needs the relayer to mint on ${dst.name}, and it has ${q.stuck} transactions ` +
-    `stuck behind nonce ${q.blockedAt} there — nothing of its own can land until that clears`);
+  if (!q.jammed) return q;
+  throw new Error(`${what} needs the relayer to mint on ${dst.name}, and it has ${q.stuck} transaction` +
+    `${q.stuck === 1 ? '' : 's'} stuck behind nonce ${q.blockedAt} there for ${Math.round(q.stuckForMs / 1000)}s ` +
+    '— nothing of its own can land until that clears');
 }
 
 /** Read the new CA out of a launch receipt, the same way the bot does. */
@@ -1248,7 +1272,7 @@ async function apiSeedState(ca, address, hash) {
     // Every remaining step on a chain is a transaction the relayer signs there.
     // A jammed queue means none of them can land, however healthy the rest of
     // the state looks, so the honest next step is to wait rather than to ask.
-    const next = queue.stuck && !done ? 'jammed'
+    const next = queue.jammed && !done ? 'jammed'
       : !deployed ? 'deploy'
       : done ? null
         : v3 ? 'initialize'
@@ -1267,7 +1291,8 @@ async function apiSeedState(ca, address, hash) {
       shortfallSource: quoted.has(c.id) ? 'site' : 'estimated',
       relayerShortWei: short > 0n ? short.toString() : null,
       relayerHeld: num(relayerHeld), wallBudgetWei: wallBudget > 0n ? wallBudget.toString() : null, wallSafe,
-      queueStuck: queue.stuck, queueBlockedAt: queue.blockedAt,
+      queueStuck: queue.jammed ? queue.stuck : 0, queueBlockedAt: queue.blockedAt,
+      queuePending: queue.stuck, queueStuckForMs: queue.stuckForMs ?? 0,
       deployed, hooked, hookless, curve, pad, funded, done, next };
   }));
 
@@ -1322,7 +1347,7 @@ async function apiLaunchReady(token) {
       queueOf(c).catch(() => ({ stuck: 0, blockedAt: null })),
     ]);
     return { id: c.id, short: c.short, name: c.name, nativeSymbol: c.nativeSymbol,
-      queueStuck: queue.stuck, queueBlockedAt: queue.blockedAt,
+      queueStuck: queue.jammed ? queue.stuck : 0, queueBlockedAt: queue.blockedAt,
       omniOk: o?.available === true, omniError: o?.error ?? null,
       omniHave: num(have), omniNeed: num(need), stockWei: stock > 0n ? stock.toString() : null,
       gapBps: p?.gapBps ?? null, drift: p?.gapBps != null && BigInt(p.gapBps) > DRIFT_BPS,

@@ -2041,8 +2041,8 @@ async function seedChain(chainId, ca, { donate = false } = {}) {
   // the deploy and the initialize come back with hashes that never mine, and a
   // bridge burns supply the mint cannot credit until it clears.
   if (st.queueStuck) {
-    log(`${c.short}: the relayer has ${st.queueStuck} transactions stuck behind nonce ${st.queueBlockedAt} — ` +
-      'nothing can land there until that clears. skipping it', 'warn');
+    log(`${c.short}: ${st.queueStuck} of the relayer's transactions have been stuck behind nonce ` +
+      `${st.queueBlockedAt} for ${Math.round((st.queueStuckForMs ?? 0) / 1000)}s — coming back to it`, 'warn');
     return null;
   }
 
@@ -2150,8 +2150,10 @@ async function seedChain(chainId, ca, { donate = false } = {}) {
   const p = await C.api('/api/pools', { ca, chain: chainId }).catch(() => null);
   const row = S.seed?.chains?.find((x) => x.id === chainId);
   if (p && row) {
-    Object.assign(row, { deployed: p.deployed, hooked: p.hooked, hookless: p.hookless,
-      done: p.deployed && p.hooked && p.hookless });
+    const done = p.deployed && p.hooked && p.hookless && !(d.v3 && row.curve === false);
+    Object.assign(row, { deployed: p.deployed, hooked: p.hooked, hookless: p.hookless, done,
+      // Whatever this row says it needs next has to match what it just did.
+      next: done ? null : !p.deployed ? 'deploy' : d.v3 ? 'initialize' : row.next });
     paintSeed();
   }
   return Boolean(p?.deployed && p?.hooked && p?.hookless);
@@ -2330,6 +2332,15 @@ async function runSeed(ca) {
         return;
       }
       if (!moved) {
+        // A jam is the one thing worth waiting on: it clears by itself when the
+        // blocking transaction finally mines, and everything else here needs
+        // somebody to do something first.
+        const jammed = (state?.chains ?? []).filter((x) => !x.done && x.queueStuck);
+        if (jammed.length) {
+          log(`waiting on ${jammed.map((x) => x.short).join(' ')} — the relayer's queue there has to clear first`, 'warn');
+          await sleep(60000);
+          continue;
+        }
         log(state?.remaining?.length
           ? `nothing more to do from here — ${state.remaining.join(' ')} wait on the relayer’s allocation`
           : 'nothing advanced this pass — stopping', 'warn');

@@ -15,7 +15,7 @@ import { CHAINS, chainById, HOME_CHAIN, arbHelperFor, recordDeployment } from '.
 import { publicClient, loadAccount, allChains, supportsOverrides, verifyTokenLayout } from './chain.mjs';
 import { fetchIndexedTokens, fetchLaunchedTokens, discoverPools, discoverCurve, liveChains, tokenMeta } from './discovery.mjs';
 import { quoteSell } from './quote.mjs';
-import { findSameChain, findCrossChain, findLiquidation, findRoutes, fundableCapital, priceRelayFunding, selectDisjointRoutes, mapPool } from './arb.mjs';
+import { findSameChain, findCrossChain, findLiquidation, findRoutes, fundableCapital, priceRelayFunding, selectDisjointRoutes, mapPool, numToWei } from './arb.mjs';
 import { quoteNative, executeNative, supportedChains, resetRelayCache } from './relay.mjs';
 import { nativePrices, toUsd, usdStr } from './prices.mjs';
 import { helperFor, resetQuoteCache } from './quote.mjs';
@@ -588,8 +588,18 @@ async function cmdFundRelayer() {
 
   for (const p of plan) {
     try {
-      // Relay delivers native straight to the relayer's address on that chain.
-      const q = await quoteNative({ from, to: p.chain, amount: p.send, address: account.address, recipient: RELAYER });
+      // The shortfall is denominated in the DESTINATION chain's asset, but Relay
+      // is given an amount in the ORIGIN's. On a cross-asset hop those are not
+      // the same number — sending a BNB-denominated figure as ETH overfunds by
+      // the price ratio — so convert before quoting.
+      const pxFrom = prices.byChain.get(from.id)?.usd;
+      const pxTo = prices.byChain.get(p.chain.id)?.usd;
+      if (!pxFrom || !pxTo) throw new Error('no price to convert the hop amount with');
+      const amountIn = pxFrom === pxTo
+        ? p.send
+        : numToWei((Number(formatEther(p.send)) * pxTo) / pxFrom);
+
+      const q = await quoteNative({ from, to: p.chain, amount: amountIn, address: account.address, recipient: RELAYER });
       console.log(`\n${p.chain.short}: ${eth(q.amountIn)} ${from.nativeSymbol} -> ${eth(q.amountOut)} ${p.chain.nativeSymbol} (fee ${usdStr(q.costUsd)}, ~${q.timeEstimate}s)`);
       const r = await executeNative({ from, to: p.chain, quote: q, account, wait: false });
       for (const s of r.sent) console.log(`  ${s.step}: ${from.explorer}/tx/${s.hash}`);

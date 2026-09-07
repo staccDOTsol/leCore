@@ -20,9 +20,9 @@ import { quoteNative, executeNative, supportedChains, resetRelayCache } from './
 import { nativePrices, toUsd, usdStr } from './prices.mjs';
 import { helperFor, resetQuoteCache } from './quote.mjs';
 import { deployHelper, executeAtomic, executeRoute, sellOnVenue, passesGuards } from './exec.mjs';
-import { bridge, pendingMints, clearPendingMint, findUnmintedBurns, retryMint, mintProcessed } from './bridge.mjs';
+import { bridge, pendingMints, clearPendingMint, findUnmintedBurns, retryMint, mintProcessed, relayerCanMint } from './bridge.mjs';
 import { fetchLiveConfig, writeLiveConfig, diffAgainst } from './refresh.mjs';
-import { uploadMetadata, launchOnBase, seedAll, saltFor, recoverMeta, LAUNCH_FEE_WEI } from './launch.mjs';
+import { uploadMetadata, launchOnBase, seedAll, saltFor, recoverMeta, wallChain, RELAYER, LAUNCH_FEE_WEI } from './launch.mjs';
 import { ERC20_ABI } from './config.mjs';
 
 const argv = process.argv.slice(2);
@@ -526,6 +526,81 @@ async function cmdRefresh() {
   console.log('\nsaved to live-config.json — every command now uses these');
 }
 
+// ----------------------------------------------------------- fund-relayer
+
+/**
+ * Top up omnichain's relayer on chains where it cannot afford to open pools.
+ *
+ * The relayer pays for the mint and for both pool-opening transactions out of
+ * its own wallet. When it is short, a launch's float arrives on the chain and
+ * simply sits there — the supply is already the relayer's, so the only way to
+ * get pools out of it is for that wallet to be able to transact.
+ *
+ * This sends to a third party's address. It is opt-in, per chain, capped, and
+ * always shows the plan before moving anything.
+ */
+async function cmdFundRelayer() {
+  const account = loadAccount();
+  const from = allChains(flag('from', 'Base'))[0];
+  if (!from) die('pass a valid --from chain');
+  const buffer = Number(flag('buffer', '1.4'));
+  const capUsd = Number(flag('max-usd', '15'));
+  const live = has('live');
+  const prices = await nativePrices();
+
+  const targets = allChains(flag('chains', 'Arb,BNB,Wld,Lin'));
+  console.log(`\nfunding relayer ${RELAYER}`);
+  console.log(`from ${from.name} · ${buffer}x the shortfall · cap ${usdStr(capUsd)} total\n`);
+
+  // Ask the relayer what it is actually short of, rather than guessing from
+  // gas price. Its own refusal carries the number — "has N wei, needs ~M wei;
+  // send K more" — and that figure is far larger than gas x price, so an
+  // estimate here funds it to a level that still cannot open a pool.
+  const token = (flag('token') && flag('token') !== true) ? getAddress(String(flag('token'))) : null;
+  const askRelayer = async (c) => {
+    if (!token) return null;
+    const r = await wallChain({ chainId: c.id, token }).catch(() => null);
+    const text = `${r?.hooked?.reason ?? ''} ${r?.hookless?.reason ?? ''}`;
+    const m = text.match(/send\s+(\d+)\s+more/);
+    return m ? BigInt(m[1]) : null;
+  };
+
+  const plan = [];
+  let totalUsd = 0;
+  for (const c of targets) {
+    const st = await relayerCanMint(c, { gasUnits: 2_000_000n });
+    if (st.balance === null) { console.log(`  ${c.short.padEnd(5)} unreadable, skipping`); continue; }
+
+    const reported = await askRelayer(c);
+    const short = reported ?? (st.needed > st.balance ? st.needed - st.balance : 0n);
+    if (short === 0n) { console.log(`  ${c.short.padEnd(5)} already funded (${formatEther(st.balance)} ${c.nativeSymbol})`); continue; }
+    const send = (short * BigInt(Math.round(buffer * 100))) / 100n;
+    const usd = toUsd(prices, c.id, send) ?? 0;
+    totalUsd += usd;
+    plan.push({ chain: c, send, usd, have: st.balance, need: st.needed });
+    console.log(`  ${c.short.padEnd(5)} has ${formatEther(st.balance).padEnd(22)} short ${formatEther(short).padEnd(22)} send ${formatEther(send)} ${c.nativeSymbol} (${usdStr(usd)})${reported ? '  [relayer-reported]' : '  [estimated]'}`);
+  }
+
+  if (!plan.length) { console.log('\nnothing to fund.'); return; }
+  console.log(`\ntotal ${usdStr(totalUsd)}`);
+  if (totalUsd > capUsd) die(`plan costs ${usdStr(totalUsd)}, above the ${usdStr(capUsd)} cap — raise --max-usd to proceed`);
+  if (!live) { console.log('\ndry run — re-run with --live to send'); return; }
+
+  for (const p of plan) {
+    try {
+      // Relay delivers native straight to the relayer's address on that chain.
+      const q = await quoteNative({ from, to: p.chain, amount: p.send, address: account.address, recipient: RELAYER });
+      console.log(`\n${p.chain.short}: ${eth(q.amountIn)} ${from.nativeSymbol} -> ${eth(q.amountOut)} ${p.chain.nativeSymbol} (fee ${usdStr(q.costUsd)}, ~${q.timeEstimate}s)`);
+      const r = await executeNative({ from, to: p.chain, quote: q, account, wait: false });
+      for (const s of r.sent) console.log(`  ${s.step}: ${from.explorer}/tx/${s.hash}`);
+    } catch (e) {
+      console.log(`\n${p.chain.short}: ${e.message.split('\n')[0].slice(0, 160)}`);
+    }
+  }
+  console.log('\nsent. give the relayer a minute, then re-run the seed:');
+  console.log(`  omniarb launch --seed-only --token <CA> --live`);
+}
+
 // ------------------------------------------------------------------ launch
 
 /**
@@ -822,7 +897,7 @@ async function cmdBag() {
 
 const commands = { tokens: cmdTokens, venues: cmdVenues, balances: cmdBalances, bag: cmdBag,
   route: cmdRoute, watch: cmdWatch, move: cmdMove, fire: cmdFire, sell: cmdSell, mints: cmdMints,
-  refresh: cmdRefresh, launch: cmdLaunch, scan, deploy: cmdDeploy, run: cmdRun, bridge: cmdBridge };
+  refresh: cmdRefresh, launch: cmdLaunch, 'fund-relayer': cmdFundRelayer, scan, deploy: cmdDeploy, run: cmdRun, bridge: cmdBridge };
 
 if (!cmd || !commands[cmd] || has('help')) {
   console.log(`omniarb — arbitrage across omnichain.family
@@ -848,6 +923,8 @@ if (!cmd || !commands[cmd] || has('help')) {
   launch    --name "x" --symbol X --image a.png [--buy 0.018] [--target 0.06] [--live]
             upload art, create on Base, seed hooked+hookless pools on all 9 chains
   launch    --seed-only --token 0x.. [--logo URL] [--live]      resume seeding an existing token
+  fund-relayer [--chains Arb,BNB,Wld,Lin] [--buffer 1.4] [--max-usd 15] [--live]
+            top up omnichain's relayer where it cannot afford to open pools
 
 Nothing sends a transaction unless you pass --live.
 The wallet key is read from STACCOVERFLOW_KP and is never logged.`);

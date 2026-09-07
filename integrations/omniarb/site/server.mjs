@@ -1234,6 +1234,16 @@ async function apiSeedState(ca, address, hash) {
     const wallBudget = c.id !== HOME_CHAIN ? relayerHeld
       : operator && share > 0n ? share
         : split ? relayerHeld : BASE_SHARE;
+    // What the relayer must be able to pay for on this chain, not just what it
+    // holds. Every remaining step here — the deploy of the CA, and the wall that
+    // opens both pools — is the relayer's own transaction paid from the
+    // relayer's own wallet, so a dry relayer blocks the whole chain and does it
+    // silently until something tries and fails.
+    const [gas, price, queue] = await Promise.all([
+      publicClient(c).getBalance({ address: getAddress(RELAYER) }).catch(() => null),
+      publicClient(c).getGasPrice().catch(() => null),
+      queueOf(c).catch(() => ({ stuck: 0, blockedAt: null })),
+    ]);
     const done = deployed && hooked && hookless && !(v3 && curve === false);
     // Every remaining step on a chain is a transaction the relayer signs there.
     // A jammed queue means none of them can land, however healthy the rest of
@@ -1245,16 +1255,6 @@ async function apiSeedState(ca, address, hash) {
           : funded && wallSafe ? 'wall'
             : operator ? 'move'
               : 'allocation';
-    // What the relayer must be able to pay for on this chain, not just what it
-    // holds. Every remaining step here — the deploy of the CA, and the wall that
-    // opens both pools — is the relayer's own transaction paid from the
-    // relayer's own wallet, so a dry relayer blocks the whole chain and does it
-    // silently until something tries and fails.
-    const [gas, price, queue] = await Promise.all([
-      publicClient(c).getBalance({ address: getAddress(RELAYER) }).catch(() => null),
-      publicClient(c).getGasPrice().catch(() => null),
-      queueOf(c).catch(() => ({ stuck: 0, blockedAt: null })),
-    ]);
     const need = price != null ? price * 2_500_000n : null;   // a deploy plus a wall
     const mine = gas != null && need != null && gas < need ? need - gas : 0n;
     // Theirs wins when they answered: it counts the pool bids and the curve fee,

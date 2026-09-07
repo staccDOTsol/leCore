@@ -15,7 +15,7 @@ import { CHAINS, chainById, HOME_CHAIN, arbHelperFor, recordDeployment } from '.
 import { publicClient, loadAccount, allChains, supportsOverrides, verifyTokenLayout } from './chain.mjs';
 import { fetchIndexedTokens, fetchLaunchedTokens, discoverPools, discoverCurve, liveChains, tokenMeta } from './discovery.mjs';
 import { quoteSell } from './quote.mjs';
-import { findSameChain, findCrossChain, findLiquidation, findRoutes, fundableCapital, priceRelayFunding, selectDisjointRoutes } from './arb.mjs';
+import { findSameChain, findCrossChain, findLiquidation, findRoutes, fundableCapital, priceRelayFunding, selectDisjointRoutes, mapPool } from './arb.mjs';
 import { quoteNative, executeNative, supportedChains, resetRelayCache } from './relay.mjs';
 import { nativePrices, toUsd, usdStr } from './prices.mjs';
 import { helperFor, resetQuoteCache } from './quote.mjs';
@@ -60,6 +60,34 @@ async function resolveToken() {
   if (!list.length) die('no --token given and the index is empty');
   console.log(`(no --token given; using ${list[0].symbol} ${list[0].address})`);
   return list[0].address;
+}
+
+/**
+ * Which tokens to work on: --token narrows to one (or a comma-separated set),
+ * otherwise everything omnichain.family has indexed plus anything the launchers
+ * have emitted that the site's index has not caught up to yet.
+ */
+async function resolveTokens() {
+  const t = flag('token');
+  if (t && t !== true) return String(t).split(',').map((x) => getAddress(x.trim()));
+  const [indexed, launched] = await Promise.all([
+    fetchIndexedTokens().catch(() => []),
+    has('deep') ? fetchLaunchedTokens().catch(() => []) : Promise.resolve([]),
+  ]);
+  await learnSymbols(indexed);
+  const seen = new Map();
+  for (const x of [...indexed, ...launched]) seen.set(x.address.toLowerCase(), x.address);
+  if (!seen.size) die('no tokens found — pass --token');
+  return [...seen.values()];
+}
+
+/** Symbols for the tokens in play, so multi-token output stays readable. */
+const _symbols = new Map();
+export const symbolOf = (addr) => _symbols.get(addr.toLowerCase()) ?? '?';
+async function learnSymbols(list) {
+  for (const t of list) {
+    if (t.symbol) _symbols.set(t.address.toLowerCase(), t.symbol);
+  }
 }
 
 async function gatherVenues(token, chains) {
@@ -253,13 +281,22 @@ async function cmdBridge() {
 // ------------------------------------------------------------------- route
 
 /** One funded pass: discover venues, price every route the wallet can pay for. */
-async function routePass({ token, chains, minUsd, capUsd, relay = false, quiet = false }) {
+async function routePass({ tokens, chains, minUsd, capUsd, relay = false, quiet = false,
+  concurrency = Number(flag('concurrency', String(Math.max(4, cpus().length * 4)))) }) {
   resetQuoteCache();
   resetRelayCache();
   const account = loadAccount();
-  const byChain = await gatherVenues(token, chains);
-  if (!byChain.size) { if (!quiet) console.log('no venues found'); return { routes: [], account }; }
-  const funds = await fundableCapital([...byChain.values()].map((v) => v.chain), account.address);
+
+  // Discover venues for every token at once. Each token is an independent set of
+  // pools, so this fans out cleanly.
+  const discovered = (await mapPool(tokens,
+    async (t) => ({ token: t, byChain: await gatherVenues(t, chains) }),
+    Math.max(2, Math.floor(concurrency / 4)))).filter((d) => d && d.byChain.size);
+
+  if (!discovered.length) { if (!quiet) console.log('no venues found for any token'); return { routes: [], account }; }
+
+  // One wallet funds all of them, so capital is measured once per chain.
+  const funds = await fundableCapital(chains, account.address);
 
   if (!quiet) {
     const prices = await nativePrices();
@@ -284,10 +321,15 @@ async function routePass({ token, chains, minUsd, capUsd, relay = false, quiet =
     if (!quiet) console.log(`mobile capital over Relay: ${usdStr(mobileUsd)}\n`);
   }
 
-  const concurrency = Number(flag('concurrency', String(Math.max(4, cpus().length * 4))));
-  let routes = await findRoutes(token, byChain, funds, { minUsd, capUsd, mobileUsd, concurrency });
+  let routes = [];
+  for (const d of discovered) {
+    const found = await findRoutes(d.token, d.byChain, funds, { minUsd, capUsd, mobileUsd, concurrency });
+    routes.push(...found);
+  }
+  // Rank across every token together — the best trade is the best trade.
+  routes.sort((a, b) => b.netUsd - a.netUsd);
   if (relay) routes = await priceRelayFunding(routes, funds, account.address);
-  return { routes, account, byChain };
+  return { routes, account, discovered };
 }
 
 function printRoutes(routes, limit = 10) {
@@ -295,7 +337,7 @@ function printRoutes(routes, limit = 10) {
   console.log(`${routes.length} funded route${routes.length === 1 ? '' : 's'}:\n`);
   for (const r of routes.slice(0, limit)) {
     const hop = r.src.id === r.dst.id ? r.src.short : `${r.src.short} -> bridge -> ${r.dst.short}`;
-    console.log(`  [${r.type}] ${hop}   NET ${usdStr(r.netUsd)}`);
+    console.log(`  [${r.type}] ${hop}   NET ${usdStr(r.netUsd)}   ${symbolOf(r.token)} ${r.token.slice(0, 10)}…`);
     console.log(`     ${r.buy.kind} -> ${r.sell.kind}`);
     if (r.tokens) {
       console.log(`     ${eth(r.sizeIn)} ${r.src.nativeSymbol} (${usdStr(r.spentUsd)})` +
@@ -327,13 +369,13 @@ function printRoutes(routes, limit = 10) {
 }
 
 async function cmdRoute() {
-  const token = await resolveToken();
+  const tokens = await resolveTokens();
   const chains = allChains(flag('chain'));
   const minUsd = Number(flag('min-usd', '0'));
   const capUsd = flag('max-usd') ? Number(flag('max-usd')) : null;
-  console.log(`\nrouting ${token}`);
-  console.log(`chains: ${chains.map((c) => c.short).join(', ')}${capUsd ? ` · cap ${usdStr(capUsd)}/trade` : ''} · floor ${usdStr(minUsd)}\n`);
-  const { routes } = await routePass({ token, chains, minUsd, capUsd, relay: has('relay') });
+  console.log(`\nrouting ${tokens.length} token${tokens.length === 1 ? '' : 's'} over ${chains.length} chains`);
+  console.log(`${chains.map((c) => c.short).join(', ')}${capUsd ? ` · cap ${usdStr(capUsd)}/trade` : ''} · floor ${usdStr(minUsd)}\n`);
+  const { routes } = await routePass({ tokens, chains, minUsd, capUsd, relay: has('relay') });
   printRoutes(routes, Number(flag('top', '10')));
 }
 
@@ -377,9 +419,9 @@ async function cmdSell() {
 
 // -------------------------------------------------------------------- fire
 
-/** Execute the best route the router finds — atomic or not. */
+/** Execute the best route the router finds — atomic or not, any indexed token. */
 async function cmdFire() {
-  const token = await resolveToken();
+  const tokens = await resolveTokens();
   const chains = allChains(flag('chain'));
   const minUsd = Number(flag('min-usd', '0.25'));
   const capUsd = flag('max-usd') ? Number(flag('max-usd')) : null;
@@ -387,8 +429,8 @@ async function cmdFire() {
   const wantAtomic = has('atomic');
   const wantBridged = has('bridged');
 
-  console.log(`\nfiring on ${token}`);
-  const { routes, account } = await routePass({ token, chains, minUsd, capUsd, relay: has('relay') });
+  console.log(`\nfiring across ${tokens.length} token(s)`);
+  const { routes, account } = await routePass({ tokens, chains, minUsd, capUsd, relay: has('relay') });
   if (!routes.length) { console.log('nothing clears the floor right now.'); return; }
 
   const wanted = routes.filter((r) => {
@@ -408,11 +450,11 @@ async function cmdFire() {
   if (!live) { console.log('dry run — re-run with --live to send'); return; }
 
   if (pick.atomic) {
-    const r = await executeAtomic({ ...pick, token, gas: 0n, net: 0n }, account, { dryRun: false });
+    const r = await executeAtomic({ ...pick, gas: 0n, net: 0n }, account, { dryRun: false });
     console.log(`sent ${r.fn} on ${r.chain}: ${r.status} — ${r.explorer}`);
     return;
   }
-  const r = await executeRoute({ ...pick, token }, account, { dryRun: false, onStep: (m) => console.log(`  ${m}`) });
+  const r = await executeRoute(pick, account, { dryRun: false, onStep: (m) => console.log(`  ${m}`) });
   console.log(`\ndone — ${r.legs.length} leg(s)`);
   for (const l of r.legs) console.log(`  ${l.leg}: ${l.explorer ?? l.hash ?? ''}`);
 }
@@ -491,7 +533,7 @@ async function cmdMove() {
 // ------------------------------------------------------------------- watch
 
 async function cmdWatch() {
-  const token = await resolveToken();
+  const tokens = await resolveTokens();
   const chains = allChains(flag('chain'));
   const interval = Number(flag('interval', '60')) * 1000;
   const minUsd = Number(flag('min-usd', '0.25'));
@@ -502,7 +544,7 @@ async function cmdWatch() {
   const maxFails = Number(flag('max-fails', '3'));
   const parallelTrades = Number(flag('parallel', '4'));
 
-  console.log(`\nwatching ${token}`);
+  console.log(`\nwatching ${tokens.length} token(s) — rescanned every pass, so a fresh launch is picked up on its own`);
   console.log(`chains: ${chains.map((c) => c.short).join(', ')} · every ${interval / 1000}s · floor ${usdStr(minUsd)}` +
     `${capUsd ? ` · cap ${usdStr(capUsd)}/trade` : ''} · ${live ? '*** LIVE ***' : 'dry run'}`);
   console.log(`${atomicOnly ? 'atomic routes only' : 'atomic and bridged routes'}` +
@@ -518,7 +560,7 @@ async function cmdWatch() {
     pass += 1;
     const stamp = new Date().toISOString().replace('T', ' ').slice(0, 19);
     try {
-      const { routes, account } = await routePass({ token, chains, minUsd, capUsd, relay: useRelay, quiet: true });
+      const { routes, account } = await routePass({ tokens, chains, minUsd, capUsd, relay: useRelay, quiet: true });
       // Relay-funded routes need a deliberate `move` first, so they are not
       // something the loop should take on its own.
       const usable = routes.filter((r) =>
@@ -547,10 +589,10 @@ async function cmdWatch() {
           const results = await Promise.allSettled(batch.map(async (r) => {
             const tag = `${r.src.short}->${r.dst.short}`;
             if (r.atomic) {
-              const x = await executeAtomic({ ...r, token, gas: 0n, net: 0n }, account, { dryRun: false });
+              const x = await executeAtomic({ ...r, gas: 0n, net: 0n }, account, { dryRun: false });
               console.log(`${stamp}    [${tag}] sent ${x.fn}: ${x.status} — ${x.explorer}`);
             } else {
-              const x = await executeRoute({ ...r, token }, account,
+              const x = await executeRoute(r, account,
                 { dryRun: false, onStep: (m) => console.log(`${stamp}    [${tag}] ${m}`) });
               for (const l of x.legs) if (l.explorer) console.log(`${stamp}    [${tag}] ${l.leg}: ${l.explorer}`);
             }
@@ -593,30 +635,45 @@ async function cmdWatch() {
 
 async function cmdBag() {
   const account = loadAccount();
-  const token = await resolveToken();
+  const tokens = await resolveTokens();
   const chains = allChains(flag('chain'));
-  console.log(`\nwallet ${account.address}\ntoken  ${token}\n`);
+  console.log(`\nwallet ${account.address}\nchecking ${tokens.length} token(s) across ${chains.length} chains\n`);
 
-  const byChain = await gatherVenues(token, chains);
-  const holdings = new Map();
-  for (const c of chains) {
-    const bal = await publicClient(c).readContract({
-      address: token, abi: ERC20_ABI, functionName: 'balanceOf', args: [account.address] }).catch(() => null);
-    if (bal && bal > 0n) holdings.set(c.id, bal);
-  }
-  if (!holdings.size) { console.log('holding none of this token anywhere.'); return; }
+  // Find every token this wallet actually holds, anywhere, before pricing exits.
+  const held = await mapPool(tokens, async (token) => {
+    const holdings = new Map();
+    await Promise.all(chains.map(async (c) => {
+      const bal = await publicClient(c).readContract({
+        address: token, abi: ERC20_ABI, functionName: 'balanceOf', args: [account.address] }).catch(() => null);
+      if (bal && bal > 0n) holdings.set(c.id, bal);
+    }));
+    return holdings.size ? { token, holdings } : null;
+  }, 6);
 
-  for (const [id, amt] of holdings) {
-    console.log(`  holding ${Number(formatUnits(amt, 18)).toLocaleString()} on ${chainById(id).name}`);
+  const positions = held.filter(Boolean);
+  if (!positions.length) { console.log('holding none of these tokens anywhere.'); return; }
+
+  for (const p of positions) {
+    const where = [...p.holdings.entries()]
+      .map(([id, amt]) => `${Number(formatUnits(amt, 18)).toLocaleString()} on ${chainById(id).short}`).join(', ');
+    console.log(`  ${symbolOf(p.token).padEnd(10)} ${p.token.slice(0, 10)}…  ${where}`);
   }
   console.log('');
 
-  const routes = await findLiquidation(token, byChain, holdings, { minUsd: 0 });
-  if (!routes.length) { console.log('no venue will take this bag for more than gas.'); return; }
+  const all = [];
+  for (const p of positions) {
+    const byChain = await gatherVenues(p.token, chains);
+    if (!byChain.size) continue;
+    const routes = await findLiquidation(p.token, byChain, p.holdings, { minUsd: 0 });
+    all.push(...routes);
+  }
+  if (!all.length) { console.log('no venue will take any of these bags for more than gas.'); return; }
 
-  console.log(`best exits (${routes.length} priced):\n`);
-  for (const r of routes.slice(0, 8)) {
-    console.log(`  [${r.type}] ${chainById(r.from).short} -> ${r.dst.short} · ${r.sell.kind}`);
+  all.sort((a, b) => b.netUsd - a.netUsd);
+  const total = all.length;
+  console.log(`best exits (${total} priced, ranked across every token):\n`);
+  for (const r of all.slice(0, Number(flag('top', '10')))) {
+    console.log(`  [${r.type}] ${symbolOf(r.token)} ${chainById(r.from).short} -> ${r.dst.short} · ${r.sell.kind}`);
     console.log(`     ${Number(formatUnits(r.amount, 18)).toLocaleString()} tok -> ${eth(r.back)} ${r.dst.nativeSymbol}` +
       `  gross ${usdStr(r.grossUsd)}  gas ${usdStr(r.gasUsd)}  NET ${usdStr(r.netUsd)}`);
     console.log(`     ${r.note}\n`);

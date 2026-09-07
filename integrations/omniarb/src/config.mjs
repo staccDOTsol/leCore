@@ -1,4 +1,5 @@
 import { readFileSync, writeFileSync } from 'node:fs';
+import { httpUrl as alchemyHttp } from './alchemy.mjs';
 
 // Chain + contract map for omnichain.family, lifted from the live app bundle
 // (_next/static/chunks) and verified against each chain's RPC.
@@ -180,7 +181,12 @@ export const chainById = (id) => CHAINS.find((c) => c.id === Number(id));
  */
 export const rpcsFor = (c) => {
   const override = process.env[`RPC_${c.id}`];
-  return override ? [override, ...c.rpcs] : [...c.rpcs];
+  // Alchemy first where it exists, the public endpoints behind it. The failover
+  // list is the point: a keyed endpoint that is rate limited or down is not a
+  // reason for the whole thing to stop reading a chain.
+  const alchemy = alchemyHttp(c.id);
+  const list = alchemy ? [alchemy, ...c.rpcs] : [...c.rpcs];
+  return override ? [override, ...list] : list;
 };
 
 /** Primary endpoint, for display and for anything that needs a single URL. */

@@ -17,7 +17,8 @@ const S = {
   chains: {}, nativeUsd: {}, beOk: null,
   tokens: [], live: {}, be: {}, supplies: {}, pools: {}, poolScan: 0, scan: '', boot: 'booting',
   sort: { key: 'mcap', dir: 'desc' },
-  supplyMiss: new Set(), seedStop: false, seedRunning: false,
+  supplyMiss: new Set(), liveChains: new Set(), polledChains: [], stream: null,
+  seedStop: false, seedRunning: false,
   seedShareWei: null, fundedThisRun: new Map(),
   sel: null, venues: [], beTok: null, dec: 18,
   charts: null, chartHours: 24, chartType: '15m', hiddenChains: new Set(), chartBusy: false,
@@ -113,6 +114,7 @@ async function boot() {
   $('wallet').onclick = () => { if (!W.address) connect(); };
   paintWallet();
   paintLog();
+  openStream();
   pollChains();
   prices();
   discover();
@@ -131,10 +133,54 @@ function refresh() {
   if (S.tab === 'chart' && S.sel) loadCharts();
 }
 
+
+/* ------------------------------------------------------------- live feed */
+//
+// Heads and launches arrive over one SSE connection fed by the server's
+// websockets, instead of nine HTTP requests every thirty seconds that mostly
+// report nothing changed. Robinhood has no socket, so the poll stays — slower,
+// and as the floor under everything rather than the only source.
+
+function openStream() {
+  let es;
+  try { es = new EventSource('/api/stream'); } catch { return; }
+
+  es.addEventListener('hello', (e) => {
+    const d = JSON.parse(e.data);
+    for (const h of d.chains ?? []) applyHead(h);
+    S.liveChains = new Set(d.live ?? []);
+    S.polledChains = d.polled ?? [];
+    paintRail();
+  });
+
+  es.addEventListener('head', (e) => applyHead(JSON.parse(e.data)));
+
+  es.addEventListener('launch', (e) => {
+    const d = JSON.parse(e.data);
+    // Somebody launched while you were looking at the board. Say so, and go get
+    // it — the server has already dropped its discovery cache.
+    log(`new launch on ${d.chain}: ${d.token}`, 'acc');
+    discover();
+  });
+
+  // EventSource reconnects on its own; this only reports the gap.
+  es.onerror = () => { if (es.readyState === 2) setTimeout(openStream, 5000); };
+  S.stream = es;
+}
+
+function applyHead(h) {
+  const prev = S.chains[h.id] || {};
+  S.chains[h.id] = { ...prev, block: h.block, gas: h.gas || prev.gas, up: true, live: true };
+  paintRail();
+}
+
 /* --------------------------------------------------- chain heads + gas */
 
 async function pollChains() {
   await Promise.all(C.CHAINS.map(async (ch) => {
+    // A chain with a live socket is already current; re-reading it over HTTP
+    // just spends a request to learn what arrived a second ago.
+    if (S.liveChains?.has(ch.id) && S.chains[ch.id]?.block) return;
     const t0 = performance.now();
     try {
       const [bn, gp] = await C.rpcBatch(ch, [{ method: 'eth_blockNumber' }, { method: 'eth_gasPrice' }]);
@@ -380,8 +426,12 @@ function paintRail() {
     const s = S.chains[c.id] || {};
     const usd = S.nativeUsd[c.id];
     const dot = s.up ? '#4de2a0' : s.up === false ? '#ff5f56' : '#3a4149';
+    // A filled dot that also pulses means the block came over a socket rather
+    // than from the last poll — the difference between "now" and "within 30s".
+    const live = s.live ? ';animation:pulse 2s ease-in-out infinite' : '';
     return `<div class="c">
-      <div class="h"><b>${h(c.short)}</b><span class="s" style="background:${dot}"></span></div>
+      <div class="h"><b>${h(c.short)}</b><span class="s" style="background:${dot}${live}"
+        title="${s.live ? 'live over websocket' : 'polled'}"></span></div>
       <div class="kv"><span>blk</span><span>${s.block ? s.block.toLocaleString() : '…'}</span></div>
       <div class="kv"><span>gas</span><span>${s.gas != null ? (s.gas < 1 ? s.gas.toFixed(3) : s.gas.toFixed(1)) + ' gwei' : '…'}</span></div>
       <div class="kv"><span>${h(c.gas)}</span><span class="acc">${usd ? C.fmtUsd(usd) : 'no feed'}</span></div>

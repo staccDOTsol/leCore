@@ -14,6 +14,10 @@ COPY site ./site
 COPY build ./build
 COPY live-config.json deployments.json package.json ./
 
+# Keys come from `fly secrets set`, never from the image:
+#   ALCHEMY_KEY   the server-side (unrestricted) Alchemy key
+#   BIRDEYE_KEY   prices
+#   ETHERSCAN_KEY log scans
 ENV PORT=8080 HOST=0.0.0.0 NODE_ENV=production
 EXPOSE 8080
 CMD ["node", "site/boot.mjs"]

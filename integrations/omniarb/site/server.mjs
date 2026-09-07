@@ -23,7 +23,7 @@ import { dirname, join, extname } from 'node:path';
 import { formatUnits, parseUnits, parseEther, getAddress, encodeFunctionData, decodeEventLog } from 'viem';
 
 import { CHAINS, chainById, HOME_CHAIN, PORTAL, PORTAL_ABI, ERC20_ABI, PAD, PAD_ABI, ROUTER_ABI,
-  NATIVE, POOL_FEE, POOL_TICK_SPACING, rpcsFor, arbHelperFor } from '../src/config.mjs';
+  NATIVE, POOL_FEE, POOL_TICK_SPACING, rpcsFor, arbHelperFor, FACTORY } from '../src/config.mjs';
 import { publicClient } from '../src/chain.mjs';
 import { fetchIndexedTokens, fetchLaunchedTokens, discoverCurve, getLogsChunked, poolId,
   readPoolState, tokenMeta } from '../src/discovery.mjs';
@@ -31,6 +31,8 @@ import { nativePrices, toUsd } from '../src/prices.mjs';
 import { quoteBuy, quoteSell, ARTIFACT } from '../src/quote.mjs';
 import { requestMint } from '../src/bridge.mjs';
 import { quoteNative, supportedChains } from '../src/relay.mjs';
+import * as alchemy from '../src/alchemy.mjs';
+import { FACTORY_DEPLOY_TOPIC } from '../src/discovery.mjs';
 import { uploadMetadata, curveSqrtPrice, deployRemote, wallChain, tokenFromReceipt,
   saltFor, LAUNCH_ABI, LAUNCH_FEE_WEI, DEFAULT_HOOK_PARAMS, RELAYER,
   relayerHoldsFloat, isDeployedOn, recoverMeta } from '../src/launch.mjs';
@@ -1180,6 +1182,114 @@ async function apiPending(address, lookback, chain) {
     stuck, scannedBlocks: Number(span), total: stuck.reduce((a, x) => a + (x.amount ?? 0), 0) });
 }
 
+// ---------------------------------------------------------------- stream
+//
+// Websockets, so the desk is live rather than polled.
+//
+// A 30-second poll of nine chains is 30 seconds of being wrong about a chain
+// that moves every two — and it is the same nine requests whether anything
+// happened or not. Alchemy speaks websockets on eight of the nine, so heads and
+// factory deploys arrive when they happen and the page gets them over one SSE
+// connection it did not have to ask for.
+//
+// The poll stays as the floor. Robinhood has no Alchemy network at all, and a
+// socket that drops takes a moment to come back.
+
+const clients = new Set();
+const sockets = new Map();
+const heads = new Map();
+
+function broadcast(event, data) {
+  const line = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
+  for (const res of clients) { try { res.write(line); } catch { clients.delete(res); } }
+}
+
+/** One socket per chain: new heads, and every deploy the factory emits. */
+function openSocket(c) {
+  const url = alchemy.wsUrl(c.id);
+  if (!url || sockets.has(c.id)) return;
+
+  let ws;
+  try { ws = new WebSocket(url); } catch { return; }
+  sockets.set(c.id, ws);
+  let alive = true;
+
+  // Wrapped, all of it: an exception inside a websocket event handler is
+  // unhandled by construction — it killed the whole server the first time.
+  ws.onopen = () => { try {
+    ws.send(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'eth_subscribe', params: ['newHeads'] }));
+    // Only the factory: a launch is the one event on these chains worth waking
+    // the page for, and subscribing to everything else would be a firehose.
+    ws.send(JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'eth_subscribe',
+      params: ['logs', { address: FACTORY, topics: [FACTORY_DEPLOY_TOPIC] }] }));
+  } catch (e) { console.warn(`ws ${c.short}: ${e.message}`); } };
+
+  ws.onmessage = (m) => { try {
+    let j;
+    try { j = JSON.parse(String(m.data)); } catch { return; }
+    const r = j?.params?.result;
+    if (!r) return;
+    if (r.number) {
+      const head = { id: c.id, short: c.short, block: Number(r.number),
+        gas: Number(BigInt(r.baseFeePerGas ?? '0x0')) / 1e9 };
+      heads.set(c.id, head);
+      broadcast('head', head);
+      return;
+    }
+    if (r.topics?.[0]?.toLowerCase() === FACTORY_DEPLOY_TOPIC) {
+      // A launch: tell the page immediately and drop the discovery cache, so a
+      // refresh does not serve a board that predates it.
+      _discovered.clear();
+      broadcast('launch', { chain: c.short, chainId: c.id,
+        token: getAddress(`0x${r.topics[1].slice(26)}`), tx: r.transactionHash });
+    }
+  } catch (e) { console.warn(`ws ${c.short}: ${e.message}`); } };
+
+  const reopen = () => {
+    if (!alive) return;
+    alive = false;
+    sockets.delete(c.id);
+    // Only while somebody is watching; an idle server should not hold nine
+    // sockets open forever.
+    if (clients.size) setTimeout(() => openSocket(c), 4000);
+  };
+  ws.onclose = reopen;
+  ws.onerror = reopen;
+}
+
+function openSockets() { for (const c of CHAINS) openSocket(c); }
+function closeSockets() {
+  for (const [, ws] of sockets) { try { ws.close(); } catch { /* already gone */ } }
+  sockets.clear();
+}
+
+function streamTo(req, res) {
+  res.writeHead(200, {
+    'content-type': 'text/event-stream',
+    'cache-control': 'no-store',
+    connection: 'keep-alive',
+    'x-accel-buffering': 'no',
+  });
+  clients.add(res);
+  if (sockets.size === 0) openSockets();
+
+  // Whatever is already known, so a page that just loaded is not blank until
+  // the next block.
+  res.write(`event: hello\ndata: ${JSON.stringify({
+    chains: [...heads.values()], live: [...sockets.keys()],
+    polled: CHAINS.filter((c) => !alchemy.covers(c.id)).map((c) => c.short),
+  })}\n\n`);
+
+  const beat = setInterval(() => { try { res.write(': beat\n\n'); } catch { /* gone */ } }, 25_000);
+  const bye = () => {
+    clearInterval(beat);
+    clients.delete(res);
+    if (!clients.size) closeSockets();
+  };
+  req.on('close', bye);
+  req.on('error', bye);
+}
+
 // ------------------------------------------------------------- rpc proxy
 //
 // The page reads chain state itself (pool slots, code, balances) rather than
@@ -1350,6 +1460,8 @@ export async function handler(req, res) {
     }
     return;
   }
+
+  if (url.pathname === '/api/stream') { streamTo(req, res); return; }
 
   const route = routes[url.pathname];
   if (route) {

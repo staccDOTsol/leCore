@@ -1876,7 +1876,8 @@ const OMNI_CA = '0x9a5baA12664c89cFbF5cFcD9d0D4805bDcAB29E8';
 async function loadReady(token = null) {
   try { S.ready = await C.api('/api/launchready', token ? { token } : {}); }
   catch (e) { S.ready = null; log('relayer readiness failed: ' + e.message, 'down'); }
-  paintReady();
+  // Painting is a courtesy; it does not get to cancel a launch.
+  try { paintReady(); } catch (e) { log('bug painting readiness: ' + e.message, 'warn'); }
   return S.ready;
 }
 
@@ -1888,7 +1889,7 @@ function paintReady() {
   const bad = r.chains.filter((c) => c.stockWei || c.drift || (!c.omniOk && c.omniError));
   const lines = bad.map((c) => {
     const bits = [];
-    if (c.stockWei) bits.push(`relayer holds ${C.fmtNum(c.omniHave, 0)} OMNI, needs ${C.fmtNum(c.omniNeed, 0)}`);
+    if (c.stockWei) bits.push(`relayer holds ${C.fmtNum(c.omniHave)} OMNI, needs ${C.fmtNum(c.omniNeed)}`);
     if (c.drift) bits.push(`OMNI pools ${c.gapBps} bps apart (${c.hookedTpn > c.hooklessTpn ? 'hooked' : 'hookless'} cheaper)`);
     if (!bits.length && c.omniError) bits.push(c.omniError);
     return `<div><b>${h(c.short)}</b> · ${h(bits.join(' · '))}</div>`;
@@ -1903,7 +1904,7 @@ function paintReady() {
 async function stockOmni(ch) {
   const tx = await C.apiPost('/api/tx/stockomni', { chain: ch.id, from: W.address, amountWei: ch.stockWei });
   if (tx.error) throw new Error(tx.error);
-  log(`${ch.short}: relayer needs ${C.fmtNum(tx.amount, 0)} OMNI — ${tx.route === 'direct' ? 'sending it' : `bridging it from ${tx.via}`}`);
+  log(`${ch.short}: relayer needs ${C.fmtNum(tx.amount)} OMNI — ${tx.route === 'direct' ? 'sending it' : `bridging it from ${tx.via}`}`);
   const done = await runSteps(tx.steps);
   if (!done.length) throw new Error('cancelled');
   if (tx.mintFrom) await requestMintFor(tx.mintFrom, done[0].hash);
@@ -1932,8 +1933,8 @@ async function alignPools(ch, depth = 0) {
     const need = short.what === 'native' ? BigInt(short.needWei) * 2n : (BigInt(short.needWei) * 11n) / 10n;
     if (short.what === 'omni') {
       const from = tx.source ?? null;
-      if (!from) { log(`${ch.short}: the align needs ${C.fmtNum(Number(need) / 1e18, 0)} OMNI here and no chain of yours holds that much`, 'down'); return false; }
-      log(`${ch.short}: bringing ${C.fmtNum(Number(need) / 1e18, 0)} OMNI over from ${from.short} for the align`);
+      if (!from) { log(`${ch.short}: the align needs ${C.fmtNum(Number(need) / 1e18)} OMNI here and no chain of yours holds that much`, 'down'); return false; }
+      log(`${ch.short}: bringing ${C.fmtNum(Number(need) / 1e18)} OMNI over from ${from.short} for the align`);
       const b = await C.apiPost('/api/tx/bridge', { ca: OMNI_CA,
         from: from.id, to: ch.id, amount: String(Number(need) / 1e18), recipient: W.address });
       if (b.error) throw new Error(b.error);

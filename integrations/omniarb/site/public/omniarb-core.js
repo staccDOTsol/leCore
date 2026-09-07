@@ -273,8 +273,11 @@ export const fmtUsd = (v) => v == null || !isFinite(v) ? "—" :
   Math.abs(v) >= 1 ? "$" + v.toFixed(2) :
   Math.abs(v) >= 0.01 ? "$" + v.toFixed(4) :
   v === 0 ? "$0" : "$" + v.toPrecision(3);
+// toPrecision throws outside 1..100, and a caller asking for whole numbers
+// naturally writes 0 — which took down the launch flow from inside a paint.
 export const fmtNum = (v, p = 4) => v == null || !isFinite(v) ? "—" :
-  v === 0 ? "0" : Math.abs(v) >= 1000 ? v.toLocaleString("en-US", { maximumFractionDigits: 0 }) : v.toPrecision(p);
+  v === 0 ? "0" : Math.abs(v) >= 1000 ? v.toLocaleString("en-US", { maximumFractionDigits: 0 })
+    : v.toPrecision(Math.min(100, Math.max(1, Math.round(p) || 1)));
 export const fmtPct = (v) => v == null || !isFinite(v) ? "—" : (v >= 0 ? "+" : "") + v.toFixed(2) + "%";
 export const short = (a) => !a ? "" : a.slice(0, 6) + "…" + a.slice(-4);
 export const fromWei = (v, d = 18) => Number(v) / 10 ** d;

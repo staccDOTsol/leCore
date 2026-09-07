@@ -13,6 +13,7 @@
     "balances": "node src/cli.mjs balances"
   },
   "dependencies": {
+    "playwright": "^1.63.0",
     "sharp": "^0.35.4",
     "viem": "^2.21.0"
   },

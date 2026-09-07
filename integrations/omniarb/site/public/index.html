@@ -1,0 +1,419 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>omniview</title>
+<style>
+  :root {
+    color-scheme: dark;
+    --surface-0: #111110;
+    --surface-1: #1a1a19;
+    --surface-2: #232322;
+    --line:      #333331;
+    --text-primary:   #ffffff;
+    --text-secondary: #c3c2b7;
+    --text-muted:     #8a897f;
+    --series-1: #3987e5;
+    --good:     #1baf7a;
+    --warning:  #c98500;
+    --critical: #e66767;
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    --sans: system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  @media (prefers-color-scheme: light) {
+    :root:not([data-theme="dark"]) {
+      color-scheme: light;
+      --surface-0: #f5f5f3; --surface-1: #fcfcfb; --surface-2: #efefec;
+      --line: #dededa;
+      --text-primary: #0b0b0b; --text-secondary: #52514e; --text-muted: #7d7c76;
+      --series-1: #2a78d6; --good: #1baf7a; --warning: #eda100; --critical: #e34948;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--surface-0); color: var(--text-primary);
+         font: 14px/1.5 var(--sans); }
+  a { color: var(--series-1); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  .wrap { max-width: 1180px; margin: 0 auto; padding: 20px 18px 64px; }
+
+  header { display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap;
+           padding-bottom: 14px; border-bottom: 1px solid var(--line); margin-bottom: 20px; }
+  h1 { font-size: 19px; margin: 0; letter-spacing: -0.01em; }
+  .sub { color: var(--text-muted); font-size: 12.5px; }
+  .spacer { margin-left: auto; }
+  button.ghost { background: none; border: 1px solid var(--line); color: var(--text-secondary);
+                 border-radius: 7px; padding: 5px 11px; font: inherit; font-size: 12.5px; cursor: pointer; }
+  button.ghost:hover { border-color: var(--text-muted); color: var(--text-primary); }
+  button.ghost[aria-pressed="true"] { border-color: var(--series-1); color: var(--series-1); }
+
+  .cards { display: grid; gap: 10px; grid-template-columns: repeat(auto-fill, minmax(268px, 1fr)); }
+  .card { background: var(--surface-1); border: 1px solid var(--line); border-radius: 10px;
+          padding: 13px 14px; cursor: pointer; text-align: left; font: inherit; color: inherit;
+          display: block; width: 100%; }
+  .card:hover { border-color: var(--text-muted); }
+  .card[aria-current="true"] { border-color: var(--series-1); }
+  .card .top { display: flex; align-items: baseline; gap: 8px; }
+  .sym { font-weight: 650; letter-spacing: -0.01em; }
+  .nm { color: var(--text-muted); font-size: 12.5px; overflow: hidden;
+        text-overflow: ellipsis; white-space: nowrap; }
+  .px { font-family: var(--mono); font-size: 15px; margin-top: 7px; }
+  .chg { font-family: var(--mono); font-size: 12px; }
+  .up { color: var(--good); } .down { color: var(--critical); }
+  .meta { color: var(--text-muted); font-size: 11.5px; margin-top: 5px; font-family: var(--mono); }
+
+  section { margin-top: 26px; }
+  h2 { font-size: 14px; margin: 0 0 4px; letter-spacing: -0.005em; }
+  .note { color: var(--text-muted); font-size: 12.5px; margin: 0 0 12px; max-width: 74ch; }
+
+  .panel { background: var(--surface-1); border: 1px solid var(--line);
+           border-radius: 10px; padding: 15px 16px; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 12px; }
+
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th { text-align: left; font-weight: 550; color: var(--text-muted); font-size: 11.5px;
+       text-transform: uppercase; letter-spacing: 0.04em; padding: 0 10px 7px 0; }
+  td { padding: 7px 10px 7px 0; border-top: 1px solid var(--line); font-variant-numeric: tabular-nums; }
+  td.n, th.n { text-align: right; font-family: var(--mono); }
+  .dim { color: var(--text-muted); }
+  .tag { font-size: 10.5px; padding: 1px 6px; border-radius: 999px; border: 1px solid var(--line);
+         color: var(--text-secondary); font-family: var(--mono); }
+  .tag.hooked   { border-color: color-mix(in oklab, var(--series-1) 55%, var(--line)); color: var(--series-1); }
+  .tag.hookless { border-color: color-mix(in oklab, var(--warning) 55%, var(--line)); color: var(--warning); }
+
+  .stats { display: grid; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); }
+  .stat { background: var(--surface-2); border-radius: 8px; padding: 11px 12px; }
+  .stat .k { color: var(--text-muted); font-size: 11.5px; }
+  .stat .v { font-family: var(--mono); font-size: 17px; margin-top: 3px; letter-spacing: -0.01em; }
+  .stat .v.sm { font-size: 14px; }
+
+  .chartwrap { position: relative; }
+  svg { display: block; width: 100%; overflow: visible; }
+  .tip { position: absolute; pointer-events: none; background: var(--surface-2);
+         border: 1px solid var(--line); border-radius: 7px; padding: 6px 9px; font-size: 12px;
+         font-family: var(--mono); white-space: nowrap; opacity: 0; transition: opacity .1s;
+         box-shadow: 0 4px 14px rgb(0 0 0 / .3); z-index: 5; }
+  .empty { color: var(--text-muted); padding: 22px 0; text-align: center; font-size: 13px; }
+  .err { color: var(--critical); font-size: 12.5px; }
+  .flag { display: inline-flex; align-items: center; gap: 5px; }
+  .dot { width: 7px; height: 7px; border-radius: 50%; flex: none; }
+  code { font-family: var(--mono); font-size: 12px; color: var(--text-secondary); }
+  .scroll { overflow-x: auto; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>omniview</h1>
+    <span class="sub">omnichain.family, with the parts the official explorer omits</span>
+    <span class="spacer"></span>
+    <button class="ghost" id="refresh">refresh</button>
+  </header>
+
+  <section id="listSection">
+    <h2>tokens</h2>
+    <p class="note">Live prices via Birdeye where it covers the chain; derived from pool state elsewhere.</p>
+    <div class="cards" id="cards"><div class="empty">loading…</div></div>
+  </section>
+
+  <div id="detail" hidden>
+    <section>
+      <h2 id="dTitle">—</h2>
+      <p class="note" id="dSub"></p>
+      <div class="stats" id="dStats"></div>
+    </section>
+
+    <section>
+      <h2>price</h2>
+      <p class="note">Candles from Birdeye. Pick a chain — the same contract address trades independently on each one, so they do not have to agree.</p>
+      <div class="panel">
+        <div class="row" id="chartChains"></div>
+        <div class="row" id="chartRanges"></div>
+        <div class="chartwrap">
+          <svg id="chart" viewBox="0 0 900 260" preserveAspectRatio="none" height="260" role="img"
+               aria-label="price over time"></svg>
+          <div class="tip" id="chartTip"></div>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <h2>markets, per chain</h2>
+      <p class="note">Every contract address has two Uniswap-v4 pools per chain: one carrying omnichain's hook, and one with no hook at all. Their own router only reaches the hooked pool, so the hookless side is invisible in their UI — and it is frequently where the price differs.</p>
+      <div class="panel scroll"><table id="tMarkets"></table></div>
+    </section>
+
+    <section>
+      <h2>supply reconciliation</h2>
+      <p class="note">The bridge burns on one chain and mints on another, so a single chain's supply says nothing on its own — watch one explorer and the token looks like it is inflating. The invariant that does hold is below.</p>
+      <div class="panel">
+        <div class="stats" id="supplyStats"></div>
+        <div style="margin-top:14px" class="chartwrap">
+          <svg id="supplyChart" viewBox="0 0 900 200" height="200" role="img"
+               aria-label="supply by chain"></svg>
+          <div class="tip" id="supplyTip"></div>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <h2>bridges that never landed</h2>
+      <p class="note">Burned on the source chain, never minted on the destination. These balances exist on neither side, so no explorer shows them — but they are somebody's tokens.</p>
+      <div class="panel scroll"><div id="stuck"><div class="empty">loading…</div></div></div>
+    </section>
+  </div>
+</div>
+
+<script type="module">
+const $ = (s) => document.querySelector(s);
+const api = async (p) => { const r = await fetch(p); if (!r.ok) throw new Error((await r.json()).error ?? r.status); return r.json(); };
+
+const fmtUsd = (v) => v == null ? '—'
+  : v >= 1 ? `$${v.toLocaleString(undefined,{maximumFractionDigits:2})}`
+  : v >= 1e-6 ? `$${v.toPrecision(4)}`
+  : `$${v.toExponential(2)}`;
+const fmtNum = (v) => v == null ? '—' : Math.abs(v) >= 1000
+  ? v.toLocaleString(undefined,{maximumFractionDigits:0})
+  : v.toLocaleString(undefined,{maximumFractionDigits:4});
+const pct = (v) => v == null ? '' : `${v >= 0 ? '+' : ''}${v.toFixed(v > 999 ? 0 : 2)}%`;
+
+let state = { token: null, chains: [], chartChain: null, chartType: '15m', chartHours: 24 };
+
+// ------------------------------------------------------------------- list
+async function loadList() {
+  const el = $('#cards');
+  try {
+    const { tokens } = await api('/api/tokens');
+    if (!tokens.length) { el.innerHTML = '<div class="empty">no tokens indexed</div>'; return; }
+    el.innerHTML = '';
+    for (const t of tokens) {
+      const b = document.createElement('button');
+      b.className = 'card'; b.type = 'button';
+      b.setAttribute('aria-current', String(state.token === t.address));
+      const cls = t.change24h == null ? '' : t.change24h >= 0 ? 'up' : 'down';
+      b.innerHTML = `
+        <div class="top"><span class="sym">${esc(t.symbol ?? '?')}</span>
+          <span class="nm">${esc(t.name ?? '')}</span></div>
+        <div class="px">${fmtUsd(t.priceUsd)} <span class="chg ${cls}">${pct(t.change24h)}</span></div>
+        <div class="meta">liq ${fmtUsd(t.liquidityUsd)} · vol24h ${fmtUsd(t.volume24hUsd)}${t.holders != null ? ` · ${t.holders} holders` : ''}</div>`;
+      b.onclick = () => select(t.address);
+      el.appendChild(b);
+    }
+  } catch (e) { el.innerHTML = `<div class="err">${esc(e.message)}</div>`; }
+}
+const esc = (s) => String(s).replace(/[<>&"]/g, (c) => ({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;'}[c]));
+
+// ----------------------------------------------------------------- detail
+async function select(ca) {
+  state.token = ca;
+  $('#detail').hidden = false;
+  document.querySelectorAll('.card').forEach((c) => c.setAttribute('aria-current', 'false'));
+  $('#dTitle').textContent = ca;
+  $('#dSub').textContent = 'loading…';
+  await Promise.all([loadToken(ca), loadSupply(ca), loadStuck(ca)]);
+  loadList();
+}
+
+async function loadToken(ca) {
+  const d = await api(`/api/token?ca=${ca}`);
+  state.chains = d.chains.filter((c) => c.deployed);
+  const live = state.chains.filter((c) => c.pools.length);
+
+  $('#dSub').innerHTML = `deployed on ${d.chains.filter(c=>c.deployed).length} chains · ` +
+    `${live.length} with pools` +
+    (d.curve ? ` · bonding curve live on Base` : '') +
+    (d.spread ? ` · <strong>${d.spread.ratio.toFixed(2)}×</strong> spread ${esc(d.spread.low)}→${esc(d.spread.high)}` : '');
+
+  const s = d.spread;
+  $('#dStats').innerHTML = [
+    stat('cheapest', s ? `${fmtUsd(s.lowUsd)}` : '—', s ? s.low : ''),
+    stat('richest', s ? `${fmtUsd(s.highUsd)}` : '—', s ? s.high : ''),
+    stat('spread', s ? `${s.ratio.toFixed(2)}×` : '—', s ? 'cross-chain' : ''),
+    stat('pools', String(d.chains.reduce((a, c) => a + c.pools.length, 0)), 'hooked + hookless'),
+  ].join('');
+
+  // markets table
+  const rows = state.chains.map((c) => {
+    const tags = c.pools.map((p) =>
+      `<span class="tag ${p.reachableByOfficialRouter ? 'hooked' : 'hookless'}">${p.reachableByOfficialRouter ? 'hooked' : 'hookless'}</span>`).join(' ');
+    const src = c.priceSource === 'birdeye' ? '' : c.priceSource === 'pool' ? ' <span class="dim">(pool)</span>' : '';
+    const cls = c.change24h == null ? '' : c.change24h >= 0 ? 'up' : 'down';
+    return `<tr>
+      <td><a href="${esc(c.explorer)}/token/${esc(state.token)}" target="_blank" rel="noreferrer">${esc(c.short)}</a></td>
+      <td class="n">${fmtUsd(c.priceUsd)}${src}</td>
+      <td class="n ${cls}">${pct(c.change24h)}</td>
+      <td class="n">${fmtNum(c.supply)}</td>
+      <td>${tags || '<span class="dim">no pool</span>'}</td>
+    </tr>`;
+  }).join('');
+  $('#tMarkets').innerHTML =
+    `<thead><tr><th>chain</th><th class="n">price</th><th class="n">24h</th><th class="n">supply</th><th>pools</th></tr></thead><tbody>${rows}</tbody>`;
+
+  // chart chain picker — only chains Birdeye covers can produce candles
+  const covered = state.chains.filter((c) => c.birdeyeCovered);
+  state.chartChain = covered.find((c) => c.id === 8453)?.id ?? covered[0]?.id ?? null;
+  $('#chartChains').innerHTML = covered.map((c) =>
+    `<button class="ghost" data-chain="${c.id}" aria-pressed="${c.id === state.chartChain}">${esc(c.short)}</button>`).join('')
+    + (covered.length < state.chains.length
+      ? `<span class="sub" style="margin-left:6px">no candles for ${state.chains.filter(c=>!c.birdeyeCovered).map(c=>esc(c.short)).join(', ')}</span>` : '');
+  $('#chartChains').onclick = (e) => {
+    const b = e.target.closest('[data-chain]'); if (!b) return;
+    state.chartChain = Number(b.dataset.chain);
+    $('#chartChains').querySelectorAll('button').forEach((x) => x.setAttribute('aria-pressed', String(Number(x.dataset.chain) === state.chartChain)));
+    loadChart();
+  };
+  const ranges = [['15m', 24, '24h'], ['1H', 168, '7d'], ['4H', 720, '30d']];
+  $('#chartRanges').innerHTML = ranges.map(([t, h, l]) =>
+    `<button class="ghost" data-type="${t}" data-hours="${h}" aria-pressed="${t === state.chartType}">${l}</button>`).join('');
+  $('#chartRanges').onclick = (e) => {
+    const b = e.target.closest('[data-type]'); if (!b) return;
+    state.chartType = b.dataset.type; state.chartHours = Number(b.dataset.hours);
+    $('#chartRanges').querySelectorAll('button').forEach((x) => x.setAttribute('aria-pressed', String(x.dataset.type === state.chartType)));
+    loadChart();
+  };
+  loadChart();
+}
+const stat = (k, v, sub) => `<div class="stat"><div class="k">${esc(k)}</div><div class="v">${esc(v)}</div>${sub ? `<div class="k">${esc(sub)}</div>` : ''}</div>`;
+
+// ------------------------------------------------------------------ chart
+async function loadChart() {
+  const svg = $('#chart'); const tip = $('#chartTip');
+  if (!state.chartChain) { svg.innerHTML = label('no chain with candle data'); return; }
+  svg.innerHTML = label('loading…');
+  let items = [];
+  try {
+    ({ items } = await api(`/api/chart?ca=${state.token}&chain=${state.chartChain}&type=${state.chartType}&hours=${state.chartHours}`));
+  } catch (e) { svg.innerHTML = label(e.message); return; }
+  if (items.length < 2) { svg.innerHTML = label('no candles in this window'); return; }
+
+  const W = 900, H = 260, P = { l: 62, r: 10, t: 12, b: 22 };
+  const xs = items.map((d) => d.t);
+  const lo = Math.min(...items.map((d) => d.l)), hi = Math.max(...items.map((d) => d.h));
+  const pad = (hi - lo) * 0.08 || hi * 0.08 || 1;
+  const y0 = Math.max(0, lo - pad), y1 = hi + pad;
+  const X = (t) => P.l + ((t - xs[0]) / (xs.at(-1) - xs[0] || 1)) * (W - P.l - P.r);
+  const Y = (v) => P.t + (1 - (v - y0) / (y1 - y0 || 1)) * (H - P.t - P.b);
+
+  // 2px line, recessive grid, no marker clutter — one series, so no legend.
+  const line = items.map((d, i) => `${i ? 'L' : 'M'}${X(d.t).toFixed(1)} ${Y(d.c).toFixed(1)}`).join('');
+  const area = `${line}L${X(xs.at(-1)).toFixed(1)} ${Y(y0).toFixed(1)}L${X(xs[0]).toFixed(1)} ${Y(y0).toFixed(1)}Z`;
+  const ticks = 4;
+  const grid = Array.from({ length: ticks + 1 }, (_, i) => {
+    const v = y0 + (i / ticks) * (y1 - y0), y = Y(v);
+    return `<line x1="${P.l}" y1="${y.toFixed(1)}" x2="${W - P.r}" y2="${y.toFixed(1)}" stroke="var(--line)" stroke-width="1"/>
+            <text x="${P.l - 8}" y="${(y + 3.5).toFixed(1)}" text-anchor="end" font-size="10.5" fill="var(--text-muted)" font-family="var(--mono)">${fmtUsd(v)}</text>`;
+  }).join('');
+  const t0 = new Date(xs[0] * 1000), t1 = new Date(xs.at(-1) * 1000);
+  const fmtT = (d) => state.chartHours <= 24 ? d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    : d.toLocaleDateString([], { month: 'short', day: 'numeric' });
+
+  svg.innerHTML = `
+    <defs><linearGradient id="fill" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="var(--series-1)" stop-opacity=".22"/>
+      <stop offset="1" stop-color="var(--series-1)" stop-opacity="0"/></linearGradient></defs>
+    ${grid}
+    <path d="${area}" fill="url(#fill)"/>
+    <path d="${line}" fill="none" stroke="var(--series-1)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+    <text x="${P.l}" y="${H - 6}" font-size="10.5" fill="var(--text-muted)" font-family="var(--mono)">${fmtT(t0)}</text>
+    <text x="${W - P.r}" y="${H - 6}" text-anchor="end" font-size="10.5" fill="var(--text-muted)" font-family="var(--mono)">${fmtT(t1)}</text>
+    <line id="cross" x1="0" y1="${P.t}" x2="0" y2="${H - P.b}" stroke="var(--text-muted)" stroke-width="1" opacity="0"/>
+    <circle id="dot" r="4" fill="var(--series-1)" stroke="var(--surface-1)" stroke-width="2" opacity="0"/>`;
+
+  // crosshair + tooltip: an SVG chart is interactive by default
+  const cross = svg.querySelector('#cross'), dot = svg.querySelector('#dot');
+  svg.onpointerleave = () => { cross.setAttribute('opacity', '0'); dot.setAttribute('opacity', '0'); tip.style.opacity = 0; };
+  svg.onpointermove = (e) => {
+    const r = svg.getBoundingClientRect();
+    const sx = ((e.clientX - r.left) / r.width) * W;
+    let best = items[0], bd = Infinity;
+    for (const d of items) { const dd = Math.abs(X(d.t) - sx); if (dd < bd) { bd = dd; best = d; } }
+    const px = X(best.t), py = Y(best.c);
+    cross.setAttribute('x1', px); cross.setAttribute('x2', px); cross.setAttribute('opacity', '.5');
+    dot.setAttribute('cx', px); dot.setAttribute('cy', py); dot.setAttribute('opacity', '1');
+    tip.style.opacity = 1;
+    tip.innerHTML = `${fmtUsd(best.c)}<br><span class="dim">${new Date(best.t * 1000).toLocaleString()}</span>`;
+    const left = (px / W) * r.width;
+    tip.style.left = `${Math.min(Math.max(left + 12, 0), r.width - tip.offsetWidth - 4)}px`;
+    tip.style.top = `${(py / H) * r.height - 10}px`;
+  };
+}
+const label = (t) => `<text x="450" y="130" text-anchor="middle" font-size="12.5" fill="var(--text-muted)">${esc(t)}</text>`;
+
+// ----------------------------------------------------------------- supply
+async function loadSupply(ca) {
+  const d = await api(`/api/supply?ca=${ca}`);
+  // net = minted − burned. Negative means supply is burned somewhere and not yet
+  // minted anywhere (in flight, or stuck). Positive means the chains collectively
+  // hold more than the original — which is what bridging *into* them looks like.
+  // Reporting only one direction would misdescribe half the states this reaches.
+  const net = (d.minted ?? 0) - (d.burned ?? 0);
+  const flight = net < 0 ? -net : 0;
+  const health = flight === 0 ? ['good', 'nothing burned-and-unminted']
+    : flight / d.originalSupply > 0.02 ? ['critical', 'supply stuck in bridges']
+    : ['warning', 'burned, mint pending'];
+  $('#supplyStats').innerHTML = [
+    stat('original supply', fmtNum(d.originalSupply), 'sum − (minted − burned)'),
+    stat('live across 9 chains', fmtNum(d.totalSupply), net > 0 ? `net +${fmtNum(net)} from bridging in` : ''),
+    `<div class="stat"><div class="k">burned, not yet minted</div>
+      <div class="v sm flag"><span class="dot" style="background:var(--${health[0]})"></span>${fmtNum(flight)}</div>
+      <div class="k">${health[1]}</div></div>`,
+    stat('lifetime bridged', fmtNum(d.burned), 'burned, all chains'),
+  ].join('');
+
+  // magnitude by category -> single-hue bars, not categorical colour
+  const rows = d.chains.filter((c) => c.supply != null && c.supply > 0)
+    .sort((a, b) => b.supply - a.supply);
+  const svg = $('#supplyChart'), tip = $('#supplyTip');
+  if (!rows.length) { svg.innerHTML = label('no supply data'); return; }
+  const W = 900, H = 200, P = { l: 62, r: 10, t: 10, b: 26 };
+  const max = Math.max(...rows.map((r) => r.supply));
+  const bw = (W - P.l - P.r) / rows.length;
+  const bars = rows.map((r, i) => {
+    const h = (r.supply / max) * (H - P.t - P.b);
+    const x = P.l + i * bw + 2, y = H - P.b - h;             // 2px gap between bars
+    return `<rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${(bw - 4).toFixed(1)}" height="${h.toFixed(1)}"
+              rx="4" fill="var(--series-1)" data-i="${i}"/>
+            <text x="${(x + (bw - 4) / 2).toFixed(1)}" y="${H - 9}" text-anchor="middle"
+              font-size="10.5" fill="var(--text-muted)" font-family="var(--mono)">${esc(r.short)}</text>`;
+  }).join('');
+  svg.innerHTML = `<line x1="${P.l}" y1="${H - P.b}" x2="${W - P.r}" y2="${H - P.b}" stroke="var(--line)"/>
+    <text x="${P.l - 8}" y="${P.t + 10}" text-anchor="end" font-size="10.5" fill="var(--text-muted)" font-family="var(--mono)">${fmtNum(max)}</text>${bars}`;
+  svg.onpointerleave = () => { tip.style.opacity = 0; };
+  svg.onpointermove = (e) => {
+    const t = e.target.closest('rect'); if (!t) { tip.style.opacity = 0; return; }
+    const r = rows[Number(t.dataset.i)]; const bb = svg.getBoundingClientRect();
+    tip.style.opacity = 1;
+    tip.innerHTML = `<strong>${esc(r.short)}</strong> ${fmtNum(r.supply)}<br><span class="dim">minted ${fmtNum(r.minted)} · burned ${fmtNum(r.burned)}</span>`;
+    tip.style.left = `${Math.min(e.clientX - bb.left + 12, bb.width - tip.offsetWidth - 4)}px`;
+    tip.style.top = `${e.clientY - bb.top - 40}px`;
+  };
+}
+
+// ------------------------------------------------------------------ stuck
+async function loadStuck(ca) {
+  const el = $('#stuck');
+  try {
+    const d = await api(`/api/stuck?ca=${ca}`);
+    if (!d.stuck.length) {
+      el.innerHTML = `<div class="empty flag" style="justify-content:center">
+        <span class="dot" style="background:var(--good)"></span> every bridge in the scanned window landed</div>`;
+      return;
+    }
+    el.innerHTML = `<table><thead><tr><th>route</th><th class="n">amount</th><th>recipient</th><th>messageId</th><th></th></tr></thead>
+      <tbody>${d.stuck.map((s) => `<tr>
+        <td><span class="flag"><span class="dot" style="background:var(--critical)"></span>${esc(s.from)} → ${esc(s.to)}</span></td>
+        <td class="n">${fmtNum(s.amount)}</td>
+        <td><code>${esc(s.recipient.slice(0, 10))}…</code></td>
+        <td><code>${esc(s.messageId.slice(0, 14))}…</code></td>
+        <td><a href="${esc(s.txUrl)}" target="_blank" rel="noreferrer">burn tx</a></td>
+      </tr>`).join('')}</tbody></table>
+      <p class="note" style="margin-top:10px">${fmtNum(d.total)} tokens burned and unminted. Recoverable — the Portal guards each message by id and never expires it, so the mint can still be requested.</p>`;
+  } catch (e) { el.innerHTML = `<div class="err">${esc(e.message)}</div>`; }
+}
+
+$('#refresh').onclick = () => { loadList(); if (state.token) select(state.token); };
+loadList();
+setInterval(loadList, 45_000);
+</script>
+</body>
+</html>

@@ -35,6 +35,7 @@ import { quoteBuy, quoteSell, ARTIFACT } from '../src/quote.mjs';
 import { requestMint } from '../src/bridge.mjs';
 import { quoteNative, supportedChains } from '../src/relay.mjs';
 import * as alchemy from '../src/alchemy.mjs';
+import * as etherscan from '../src/etherscan.mjs';
 import { API } from '../src/config.mjs';
 import { FACTORY_DEPLOY_TOPIC } from '../src/discovery.mjs';
 import { uploadMetadata, curveSqrtPrice, deployRemote, wallChain, tokenFromReceipt,
@@ -1754,6 +1755,11 @@ async function poolsOfToken(c, token) {
   // eth_getLogs on an indexed topic in under a second, which beats both the
   // chunked walk and Etherscan; the chunking is there for the one that will
   // not (Linea refuses the range) and for a node that is having a bad day.
+  // Two calls at most, ever. The chunked walk that used to back this up ran to
+  // block 99,999,999 in half-million-block steps whether or not the chain was
+  // that long: on Linea, which refuses a wide range, that was a hundred and
+  // thirty-six requests per query per token, and thirty-one tokens of it
+  // starved the server's own fetches until every page load timed out.
   const scan = async (topics) => {
     const params = [{ address: getAddress(c.poolManager), topics,
       fromBlock: `0x${from.toString(16)}`, toBlock: 'latest' }];
@@ -1761,13 +1767,17 @@ async function poolsOfToken(c, token) {
       const logs = await pc.request({ method: 'eth_getLogs', params });
       if (Array.isArray(logs)) return logs;
     } catch { /* range refused, or a node that does not index this */ }
-    return getLogsChunked(pc, { address: getAddress(c.poolManager), topics,
-      fromBlock: from, toBlock: 99_999_999n }, 500_000n).catch(() => []);
+    if (!etherscan.covers(c.id)) return null;
+    return etherscan.getLogs({ chainId: c.id, address: getAddress(c.poolManager), topics,
+      fromBlock: from, toBlock: 99_999_999n }).catch(() => null);
   };
   const [asOne, asZero] = await Promise.all([
     scan([V4_INITIALIZE_TOPIC, null, null, asTopic]),
     scan([V4_INITIALIZE_TOPIC, null, asTopic, null]),
   ]);
+  // A chain that would not answer is unread, not empty. Caching a zero here is
+  // how a live chain reads as having no pools for the next quarter of an hour.
+  if (asOne == null || asZero == null) return null;
 
   const word = (data, i) => `0x${String(data).slice(2 + 64 * i, 2 + 64 * (i + 1))}`;
   const pools = [];
@@ -1816,9 +1826,96 @@ async function apiCurves(ca) {
 
 /**
  * The same census across all nine chains, which is what the board counts with.
+ *
+ * Served stale on purpose. A cold census is eighteen log queries and about a
+ * second; fifty-three of those, five at a time, is a board that fills in over
+ * a quarter of a minute while somebody watches an empty table. So a cached
+ * answer goes out immediately and is refreshed behind the response, the whole
+ * board is warmed on a timer, and the first visitor after a deploy pays for
+ * one pass rather than every visitor paying for their own.
  */
+const CENSUS_FRESH = 60_000;
+const _censusBoard = new Map();
+
+// Scanning is bounded work done in the background, not work a request waits on.
+// Thirty-one tokens started at once is five hundred and fifty concurrent log
+// queries against nine chains, which is how "make it faster" turned into a
+// board that filled slower than before. Six at a time, one queue, no token
+// scanned twice.
+const _censusQueue = [];
+const _censusQueued = new Set();
+let _censusWorkers = 0;
+
+function scanSoon(token) {
+  const key = token.toLowerCase();
+  if (_censusQueued.has(key)) return;
+  _censusQueued.add(key);
+  _censusQueue.push(token);
+  // Two, with a breath between tokens. Six workers is a hundred and eight
+  // concurrent log queries, and Node queues requests per origin: the flood
+  // starved the server's own fetches until every page load timed out.
+  // Background work that blocks the foreground is not faster, only louder.
+  // The queue length is part of the condition, not just the worker count. A
+  // worker spawned with nothing to take exits synchronously, which puts the
+  // count straight back where it was — and this loop then span forever, on the
+  // request thread, taking the whole server down with it.
+  while (_censusWorkers < 2 && _censusQueue.length > 0) {
+    _censusWorkers += 1;
+    (async () => {
+      for (let t = _censusQueue.shift(); t; t = _censusQueue.shift()) {
+        await buildCensus(getAddress(t))
+          .then((value) => _censusBoard.set(t.toLowerCase(), { at: Date.now(), value }))
+          .catch(() => {});
+        _censusQueued.delete(t.toLowerCase());
+        await new Promise((r) => setTimeout(r, 250));
+      }
+      _censusWorkers -= 1;
+    })();
+  }
+}
+
+/** One token, for the seed board and the hero, where a wait is acceptable. */
+async function censusOf(token) {
+  const key = token.toLowerCase();
+  const hit = _censusBoard.get(key);
+  if (hit && Date.now() - hit.at < CENSUS_FRESH) return hit.value;
+  const value = await buildCensus(token);
+  _censusBoard.set(key, { at: Date.now(), value });
+  return value;
+}
+
+/** Warm every token on the board, so nobody's first look pays for the scan. */
+async function warmCensus() {
+  const tokens = await apiDiscover().then((d) => d.tokens ?? []).catch(() => []);
+  for (const t of tokens) scanSoon(t.address);
+}
+
 async function apiPoolCensus(ca) {
-  const token = getAddress(ca);
+  if (!ca) {
+    // The whole board in one request rather than fifty-three, and never a wait:
+    // whatever has been scanned goes out now and the rest is queued behind the
+    // response. A board that fills over two refreshes beats a board that shows
+    // nothing at all while a cold cache is built.
+    // Never a cold discover here: this endpoint exists to answer instantly, and
+    // waiting on the index defeats that. An empty answer with pending set is a
+    // board that fills on the next tick, which is what the page expects.
+    const tokens = await Promise.race([
+      apiDiscover().then((d) => d.tokens ?? []).catch(() => []),
+      new Promise((r) => setTimeout(() => r([]), 2500)),
+    ]);
+    const out = {};
+    let pending = 0;
+    for (const t of tokens) {
+      const hit = _censusBoard.get(t.address.toLowerCase());
+      if (hit) out[t.address.toLowerCase()] = hit.value; else pending += 1;
+      if (!hit || Date.now() - hit.at >= CENSUS_FRESH) scanSoon(t.address);
+    }
+    return jsonSafe({ tokens: out, pending, of: tokens.length });
+  }
+  return censusOf(getAddress(ca));
+}
+
+async function buildCensus(token) {
   const rows = await Promise.all(CHAINS.map(async (c) => {
     // A chain that will not answer in time reports as unread, not as empty: a
     // board that quietly turns a slow node into "no pools" is worse than one
@@ -2372,6 +2469,12 @@ export function start() {
     console.log(watcher
       ? `unstick    watching every chain's queue for ${watcher.address}`
       : 'unstick    no relayer key here — a jammed queue is reported, not cleared');
+    // The board's pool counts are eighteen log queries a token. Warmed here,
+    // the first visitor reads a map that is already built.
+    if (process.env.CENSUS_WARM !== '0') {
+      warmCensus().catch(() => {});
+      setInterval(() => { warmCensus().catch(() => {}); }, 90_000).unref();
+    }
   }).on('error', (e) => { console.error(e.message); process.exit(1); });
 }
 

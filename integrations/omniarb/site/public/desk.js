@@ -584,21 +584,26 @@ async function poolCensus(tokens) {
   // native pair reported fourteen where the real number was twenty-four. No
   // table of quote addresses kept here would stay right for a day; the server
   // reads the PoolManager's own Initialize logs, which name every pair.
-  const queue = [...tokens];
-  S.poolScan += queue.length;
+  // One request for the whole board. Asking per token was fifty-three round
+  // trips against a server that had to scan for each of them, and the table
+  // filled in over a quarter of a minute.
+  S.poolScan += 1;
   paintBoard();
-  const worker = async () => {
-    for (let t = queue.shift(); t; t = queue.shift()) {
-      const r = await C.api('/api/poolcensus', { ca: t.address }).catch(() => null);
-      if (r?.chains) {
-        S.pools[t.address] = Object.fromEntries(Object.entries(r.chains)
-          .map(([id, v]) => [Number(id), v]));
-      }
-      S.poolScan -= 1;
-      paintBoard();
+  const r = await C.api('/api/poolcensus').catch(() => null);
+  S.poolScan -= 1;
+  // A cold server answers with what it has and scans the rest behind the
+  // reply, so come back for the remainder rather than leaving rows blank.
+  if (r?.pending) {
+    S.poolScan += 1;
+    setTimeout(() => { S.poolScan -= 1; poolCensus(S.tokens); }, 6000);
+  }
+  for (const t of tokens) {
+    const v = r?.tokens?.[t.address.toLowerCase()];
+    if (v?.chains) {
+      S.pools[t.address] = Object.fromEntries(Object.entries(v.chains).map(([id, x]) => [Number(id), x]));
     }
-  };
-  await Promise.all(Array.from({ length: 5 }, worker));
+  }
+  paintBoard();
 }
 
 /** Every open pool for one CA, over the chains that answered. */

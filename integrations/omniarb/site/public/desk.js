@@ -17,7 +17,7 @@ const S = {
   chains: {}, nativeUsd: {}, beOk: null,
   tokens: [], live: {}, be: {}, supplies: {}, pools: {}, poolScan: 0, scan: '', boot: 'booting',
   sort: { key: 'mcap', dir: 'desc' },
-  supplyMiss: new Set(),
+  supplyMiss: new Set(), seedStop: false, seedRunning: false, seedShare: null,
   sel: null, venues: [], beTok: null, dec: 18,
   charts: null, chartHours: 24, chartType: '15m', hiddenChains: new Set(), chartBusy: false,
   size: 50, bridged: true, hookless: true,
@@ -1504,7 +1504,8 @@ function mountLaunch() {
       <div class="row" style="justify-content:space-between;align-items:flex-end">
         <div class="grow"><label class="f">seed a launched CA across nine chains</label>
           <input type="text" id="lnSeedCa" placeholder="0x…" style="width:100%" /></div>
-        <button class="btn go" id="lnSeedLoad">read state</button>
+        <button class="btn" id="lnSeedLoad">read state</button>
+        <button class="btn go" id="lnSeedGo">seed all nine</button>
       </div>
       <div class="table t-seed" style="margin-top:14px">
         <div class="th" style="grid-template-columns:90px 110px minmax(0,1fr) minmax(0,1.6fr)">
@@ -1548,7 +1549,8 @@ function mountLaunch() {
     $('lnSeedCa').value = r.token;
     S.launchMeta = { name, symbol, tagline: $('lnTagline').value.trim(), logoURI: meta.logoURI };
     discover();
-    loadSeedState(r.token);
+    // Straight into seeding. A token on one chain is not a launch on this thing.
+    await runSeed(r.token);
   });
 
   $('lnSeedLoad').onclick = () => {
@@ -1556,26 +1558,143 @@ function mountLaunch() {
     if (!/^0x[0-9a-fA-F]{40}$/.test(ca)) { alert('need a 0x address'); return; }
     loadSeedState(ca);
   };
+  $('lnSeedGo').onclick = () => guard(() => runSeed($('lnSeedCa').value.trim()));
 
   $('lnSeedRows').addEventListener('click', (e) => {
     const b = e.target.closest('[data-seed]');
     if (!b) return;
     const [act, id] = b.dataset.seed.split(':');
-    const ca = $('lnSeedCa').value.trim();
-    guard(() => seedStep(act, Number(id), ca));
+    if (act === 'run') { guard(() => runSeed($('lnSeedCa').value.trim())); return; }
+    if (act === 'stop') { S.seedStop = true; log('stopping after this step', 'warn'); return; }
+    guard(() => seedChain(Number(id), $('lnSeedCa').value.trim()));
   });
 }
 
+/* ------------------------------------------------------------ seeding */
+//
+// A launch is not finished when Base confirms. It is finished when the same CA
+// exists on nine chains with both pools open on each: nine deploys, eight
+// bridges, eight relayer mints, eighteen pools. Every one of those fails on its
+// own — a relayer out of gas, a mint that has not landed, a wall that reports
+// success and opens nothing — so this drives the whole thing in a loop and
+// re-reads chain state after every move rather than believing what it was told.
+
 async function loadSeedState(ca) {
   S.seedCa = ca;
-  S.seed = {};
   paintSeed();
-  await Promise.all(C.CHAINS.map(async (c) => {
-    S.seed[c.id] = await C.api('/api/pools', { ca, chain: c.id }).catch(() => null);
+  try {
+    S.seed = await C.api('/api/seedstate', { ca, address: W.address || null });
+  } catch (e) {
+    S.seed = null;
+    log('seed state failed: ' + e.message, 'down');
+  }
+  paintSeed();
+  return S.seed;
+}
+
+/** One chain, one step forward. Returns true when that chain is finished. */
+async function seedChain(chainId, ca) {
+  const c = C.byId[chainId];
+  const st = (S.seed?.chains ?? []).find((x) => x.id === chainId);
+  if (!st) return false;
+  if (st.done) return true;
+
+  if (!st.deployed) {
+    const meta = S.launchMeta ?? await recoverLaunchMeta(ca);
+    log(`${c.short}: asking the relayer to deploy the CA…`);
+    const r = await C.apiPost('/api/relay', { action: 'deploy', chainId, token: ca,
+      name: meta.name, symbol: meta.symbol, tagline: meta.tagline ?? '', logoURI: meta.logoURI,
+      creator: W.address });
+    log(`${c.short}: deploy ${r.skipped ? 'already done' : (r.hash ?? 'requested')}`);
+    // The deploy is the relayer's transaction, so it lands when it lands.
+    for (let i = 0; i < 12; i += 1) {
+      await sleep(2500);
+      const p = await C.api('/api/pools', { ca, chain: chainId }).catch(() => null);
+      if (p?.deployed) { log(`${c.short}: CA is live`, 'up'); break; }
+    }
+  } else if (!st.funded && !(st.hooked && st.hookless)) {
+    // Only ever moved once: the relayer already holding this chain's share is
+    // the check that stops a resumed run handing it another ninth for free.
+    log(`${c.short}: moving ${C.fmtNum(S.seed.share, 6)} to the relayer…`);
+    const tx = await C.apiPost('/api/tx/seed', { ca, chain: chainId, from: W.address,
+      amount: S.seedShare ?? undefined });
+    const done = await runSteps(tx.steps);
+    if (!done.length) throw new Error('cancelled');
+    if (chainId !== C.HOME_CHAIN) await requestMintFor(C.HOME_CHAIN, done[0].hash);
+  } else {
+    log(`${c.short}: opening pools…`);
+    const r = await C.apiPost('/api/relay', { action: 'wall', chainId, token: ca });
+    log(`${c.short}: hooked ${r.hooked?.ok ? 'ok' : r.hooked?.reason ?? '—'}, ` +
+        `hookless ${r.hookless?.ok ? 'ok' : r.hookless?.reason ?? '—'}`);
+    await sleep(6000);
+  }
+
+  // The relay lies in both directions — it has reported failure for a pool that
+  // opened and success for one that did not — so the only answer that counts is
+  // the pool state itself.
+  const p = await C.api('/api/pools', { ca, chain: chainId }).catch(() => null);
+  if (p) {
+    const row = S.seed.chains.find((x) => x.id === chainId);
+    Object.assign(row, { deployed: p.deployed, hooked: p.hooked, hookless: p.hookless,
+      done: p.deployed && p.hooked && p.hookless });
     paintSeed();
-  }));
-  if (W.address) {
-    S.seedBag = await C.api('/api/bag', { address: W.address, ca }).catch(() => null);
+  }
+  return Boolean(p?.deployed && p?.hooked && p?.hookless);
+}
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * Keep going until all nine chains are done.
+ *
+ * Home first, because its pools set the price every other chain is opened at.
+ * Each pass moves every unfinished chain one step; a chain that cannot advance
+ * this pass is retried on the next rather than abandoning the run, and the loop
+ * only stops when the state says complete, the rounds run out, or you stop it.
+ */
+async function runSeed(ca) {
+  if (!/^0x[0-9a-fA-F]{40}$/.test(ca)) { alert('need a 0x address'); return; }
+  if (!W.address) { await connect(); if (!W.address) return; }
+  S.seedStop = false;
+  S.seedRunning = true;
+  paintSeed();
+
+  try {
+    const first = await loadSeedState(ca);
+    if (!first) return;
+    // Fix the share once. Recomputing it after each move takes a ninth of a
+    // shrinking balance and short-changes every later chain.
+    S.seedShare = first.share > 0 ? String(first.share) : null;
+    log(`seeding ${ca}: ${first.remaining.length} of 9 chains to go, ` +
+      `${C.fmtNum(first.share, 6)} per chain`, 'acc');
+
+    for (let round = 1; round <= 12 && !S.seedStop; round += 1) {
+      const order = [C.HOME_CHAIN, ...C.CHAINS.map((c) => c.id).filter((id) => id !== C.HOME_CHAIN)];
+      let moved = 0;
+      for (const id of order) {
+        if (S.seedStop) break;
+        const row = S.seed.chains.find((x) => x.id === id);
+        if (!row || row.done) continue;
+        try {
+          const ok = await seedChain(id, ca);
+          moved += 1;
+          if (ok) log(`${C.byId[id].short}: done — both pools open`, 'up');
+        } catch (e) {
+          const m = String(e?.message ?? e);
+          if (/user rejected|denied|4001|cancelled/i.test(m)) { S.seedStop = true; log('you cancelled — stopping', 'warn'); break; }
+          log(`${C.byId[id].short}: ${m}`, 'down');
+        }
+      }
+
+      const state = await loadSeedState(ca);
+      if (state?.complete) { log('all nine chains seeded — eighteen pools open', 'up'); return; }
+      if (!moved) { log('nothing advanced this pass — stopping', 'warn'); return; }
+      log(`round ${round} done · still to go: ${state?.remaining.join(' ') ?? '?'}`);
+      await sleep(4000);
+    }
+    if (!S.seedStop) log('ran out of rounds — press seed again to keep going', 'warn');
+  } finally {
+    S.seedRunning = false;
     paintSeed();
   }
 }
@@ -1584,63 +1703,29 @@ function paintSeed() {
   const rows = $('lnSeedRows');
   if (!rows) return;
   if (!S.seedCa) { rows.innerHTML = ''; return; }
-  rows.innerHTML = C.CHAINS.map((c) => {
-    const s = S.seed[c.id];
-    const bag = S.seedBag?.chains.find((x) => x.id === c.id);
-    const dep = !s ? '…' : s.deployed ? '<span class="up">yes</span>' : '<span class="warn">no</span>';
-    const pools = !s ? '…' : `${s.hooked ? '<span class="up">hooked</span>' : '<span class="dim">hooked</span>'} · ${s.hookless ? '<span class="up">hookless</span>' : '<span class="dim">hookless</span>'}`;
-    const btn = (act, label, on) =>
-      `<button class="btn small ${on ? '' : 'off'}" data-seed="${act}:${c.id}"${on ? '' : ' disabled'}>${label}</button>`;
-    const acts = [
-      btn('deploy', 'deploy', s && !s.deployed),
-      c.id === C.HOME_CHAIN ? '' : btn('bridge', 'bridge share', Boolean(s?.deployed)),
-      btn('wall', 'open pools', Boolean(s?.deployed && (!s.hooked || !s.hookless))),
-      btn('check', 'recheck', true),
-    ].filter(Boolean).join(' ');
+  const d = S.seed;
+  const head = `<div class="tr" style="grid-template-columns:minmax(0,1fr) auto;border-bottom:1px solid #1a1f27">
+    <div>${d ? `<b class="${d.complete ? 'up' : 'acc'}">${9 - d.chains.filter((x) => x.done).length === 0 ? 'complete' : `${d.chains.filter((x) => x.done).length}/9 chains done`}</b>
+      <span class="dim"> · ${C.fmtNum(d.share, 6)} per chain to ${h(C.short(d.relayer))}</span>` : 'reading chain state…'}</div>
+    <div>${S.seedRunning
+      ? '<button class="btn small" data-seed="stop:0">stop</button>'
+      : '<button class="btn go" data-seed="run:0">seed all nine</button>'}</div>
+  </div>`;
+
+  rows.innerHTML = head + C.CHAINS.map((c) => {
+    const st = d?.chains.find((x) => x.id === c.id);
+    const mark = (on, label) => `<span class="${on ? 'up' : 'dim'}">${on ? '✓' : '·'} ${label}</span>`;
+    const state = !st ? '…'
+      : `${mark(st.deployed, 'deployed')} ${mark(st.funded || (st.hooked && st.hookless), 'funded')} ` +
+        `${mark(st.hooked, 'hooked')} ${mark(st.hookless, 'hookless')}`;
     return `<div class="tr" style="grid-template-columns:90px 110px minmax(0,1fr) minmax(0,1.6fr)">
-      <div style="font-weight:700">${h(c.short)}${bag?.token ? `<div class="dim" style="font-size:10px;font-weight:400">${C.fmtNum(bag.token, 4)}</div>` : ''}</div>
-      <div>${dep}</div><div style="font-size:11px">${pools}</div><div>${acts}</div>
+      <div style="font-weight:700">${h(c.short)}</div>
+      <div class="${st?.done ? 'up' : st?.next ? 'warn' : 'dim'}">${st ? (st.done ? 'done' : st.next ?? '—') : '…'}</div>
+      <div style="font-size:11px">${state}</div>
+      <div>${st && !st.done && !S.seedRunning
+        ? `<button class="btn small" data-seed="step:${c.id}">${h(st.next ?? 'retry')}</button>` : ''}</div>
     </div>`;
   }).join('');
-}
-
-async function seedStep(act, chainId, ca) {
-  const c = C.byId[chainId];
-  if (act === 'check') { S.seed[chainId] = await C.api('/api/pools', { ca, chain: chainId }); paintSeed(); return; }
-
-  if (act === 'deploy') {
-    const meta = S.launchMeta ?? await recoverLaunchMeta(ca);
-    log(`asking the relayer to deploy ${ca} on ${c.short}…`);
-    const r = await C.apiPost('/api/relay', { action: 'deploy', chainId, token: ca,
-      name: meta.name, symbol: meta.symbol, tagline: meta.tagline ?? '', logoURI: meta.logoURI,
-      creator: W.address });
-    log(r.skipped ? `${c.short}: already deployed` : `${c.short}: deploy ${r.hash ?? 'requested'}`, 'up');
-  } else if (act === 'bridge') {
-    if (!W.address) { await connect(); if (!W.address) return; }
-    const bag = await C.api('/api/bag', { address: W.address, ca });
-    const home = bag.chains.find((x) => x.id === C.HOME_CHAIN);
-    const share = (home?.token ?? 0) / C.CHAINS.filter((x) => x.id !== C.HOME_CHAIN).length;
-    const amount = prompt(`how much to bridge to ${c.short}?`, String(share.toFixed(6)));
-    if (!amount) return;
-    const tx = await C.apiPost('/api/tx/bridge', { ca, from: C.HOME_CHAIN, to: chainId,
-      amount, recipient: W.address });
-    const done = await runSteps(tx.steps);
-    if (done.length) await requestMintFor(C.HOME_CHAIN, done[0].hash);
-  } else if (act === 'wall') {
-    log(`asking the relayer to open ${c.short}’s pools…`);
-    const r = await C.apiPost('/api/relay', { action: 'wall', chainId, token: ca });
-    log(`${c.short}: hooked ${r.hooked?.ok ? 'ok' : r.hooked?.reason ?? '—'}, hookless ${r.hookless?.ok ? 'ok' : r.hookless?.reason ?? '—'}`);
-  }
-  // The relay's answer is not evidence: it has reported failures for pools that
-  // opened and successes for pools that did not. Read the chain.
-  S.seed[chainId] = await C.api('/api/pools', { ca, chain: chainId }).catch(() => null);
-  paintSeed();
-}
-
-async function recoverLaunchMeta(ca) {
-  const t = S.tokens.find((x) => x.address.toLowerCase() === ca.toLowerCase());
-  if (!t) throw new Error('no metadata for that CA — launch it here, or fill the launch form first');
-  return { name: t.name ?? t.symbol, symbol: t.symbol, tagline: t.tagline ?? '', logoURI: t.logoURI ?? '' };
 }
 
 /* ================================================================ bridge */

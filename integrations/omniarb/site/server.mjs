@@ -31,7 +31,8 @@ import { nativePrices, toUsd } from '../src/prices.mjs';
 import { quoteBuy, quoteSell, ARTIFACT } from '../src/quote.mjs';
 import { requestMint } from '../src/bridge.mjs';
 import { uploadMetadata, curveSqrtPrice, deployRemote, wallChain, tokenFromReceipt,
-  saltFor, LAUNCH_ABI, LAUNCH_FEE_WEI, DEFAULT_HOOK_PARAMS } from '../src/launch.mjs';
+  saltFor, LAUNCH_ABI, LAUNCH_FEE_WEI, DEFAULT_HOOK_PARAMS, RELAYER,
+  relayerHoldsFloat, isDeployedOn } from '../src/launch.mjs';
 import { fetchLiveConfig, readLiveConfig } from '../src/refresh.mjs';
 import * as be from './birdeye.mjs';
 
@@ -806,6 +807,97 @@ async function apiRelay(body) {
   throw new Error(`relay action not proxied: ${action || '(none)'}`);
 }
 
+// -------------------------------------------------------------------- seed
+//
+// A launch is not done when the Base transaction confirms. It is done when the
+// same CA exists on nine chains with both pools open on each — nine deploys,
+// eight bridges, eight relayer mints, eighteen pools. Every one of those can
+// fail on its own, so the page drives them in a loop and this reports the
+// ground truth it drives against.
+//
+// The float goes to the RELAYER, not to the launcher: the relayer is what opens
+// the pools, and it can only open them from what it holds.
+
+async function apiSeedState(ca, address) {
+  const token = getAddress(ca);
+  const home = chainById(HOME_CHAIN);
+
+  const held = address
+    ? await publicClient(home).readContract({ address: token, abi: ERC20_ABI,
+        functionName: 'balanceOf', args: [getAddress(address)] }).catch(() => 0n)
+    : 0n;
+  const share = held / BigInt(CHAINS.length);
+
+  const rows = await Promise.all(CHAINS.map(async (c) => {
+    const [deployed, pools] = await Promise.all([
+      isDeployedOn(c, token).catch(() => false),
+      fastPools(c, token).catch(() => []),
+    ]);
+    const hooked = pools.some((p) => p.viaOmniRouter);
+    const hookless = pools.some((p) => !p.viaOmniRouter);
+    // Whether the relayer already has the float here decides whether the move
+    // has happened. Skipping this check is what took a 303M position down to
+    // 1.6M over four resumed runs, each handing over another ninth for nothing.
+    const funded = deployed && share > 0n
+      ? await relayerHoldsFloat(c, token, share).catch(() => false)
+      : false;
+    return { id: c.id, short: c.short, name: c.name, explorer: c.explorer,
+      deployed, hooked, hookless, funded,
+      done: deployed && hooked && hookless,
+      next: !deployed ? 'deploy' : (!funded && !(hooked && hookless)) ? 'move'
+        : (!hooked || !hookless) ? 'wall' : null };
+  }));
+
+  return jsonSafe({
+    token, relayer: RELAYER, held: num(held), share: num(share), shareWei: share.toString(),
+    chains: rows, complete: rows.every((r) => r.done),
+    remaining: rows.filter((r) => !r.done).map((r) => r.short),
+  });
+}
+
+/**
+ * Move one chain's share of the float to the relayer.
+ *
+ * Base is a transfer — the relayer is already on the chain the tokens are on.
+ * Everywhere else it is a burn, and it refuses to build one for a chain where
+ * the token does not exist yet: bridgeOut burns unconditionally while bridgeIn
+ * mints into the token contract, so bridging ahead of the deploy destroys
+ * supply that can never be minted. That mistake cost 269 million tokens once.
+ */
+async function txSeed({ ca, chain, from, amount }) {
+  const token = getAddress(ca);
+  const c = chainById(chain);
+  if (!c) throw new Error(`unknown chain ${chain}`);
+  const home = chainById(HOME_CHAIN);
+  const who = getAddress(from);
+
+  let wei;
+  if (amount != null && amount !== '') wei = parseUnits(String(amount), 18);
+  else {
+    const held = await publicClient(home).readContract({ address: token, abi: ERC20_ABI,
+      functionName: 'balanceOf', args: [who] });
+    wei = held / BigInt(CHAINS.length);
+  }
+  if (wei <= 0n) throw new Error('nothing to move — the launcher wallet holds no float on Base');
+
+  if (c.id === HOME_CHAIN) {
+    return jsonSafe({ steps: [step(`fund the relayer on ${c.short}`, home, token,
+      encodeFunctionData({ abi: ERC20_ABI, functionName: 'transfer', args: [getAddress(RELAYER), wei] }),
+      0n, 'the relayer opens the pools from what it holds')], amount: num(wei), to: RELAYER });
+  }
+
+  if (!await isDeployedOn(c, token)) {
+    throw new Error(`${token} is not deployed on ${c.name} yet — deploy first, or the burn destroys supply`);
+  }
+  return jsonSafe({
+    steps: [step(`bridge the share to ${c.short}`, home, PORTAL,
+      encodeFunctionData({ abi: PORTAL_ABI, functionName: 'bridgeOut',
+        args: [token, BigInt(c.id), getAddress(RELAYER), wei] }),
+      0n, `burns on Base; the relayer mints to itself on ${c.name} and opens the pools`)],
+    amount: num(wei), to: RELAYER,
+  });
+}
+
 /** Which of a chain's two pools are actually open — the check the relay's answer needs. */
 async function apiPools(ca, chain) {
   const token = getAddress(ca);
@@ -1033,6 +1125,7 @@ const routes = {
   },
   '/api/pending': (q) => apiPending(q.get('address'), q.get('lookback'), q.get('chain')),
   '/api/pools': (q) => apiPools(q.get('ca'), q.get('chain')),
+  '/api/seedstate': (q) => apiSeedState(q.get('ca'), q.get('address')),
   '/api/minted': (q) => apiMinted({ chain: q.get('chain'), messageId: q.get('messageId') }),
 };
 
@@ -1047,6 +1140,7 @@ const routes = {
 const writeRoutes = {
   '/api/tx/trade': (b) => txTrade(b),
   '/api/tx/bridge': (b) => txBridge(b),
+  '/api/tx/seed': (b) => txSeed(b),
   '/api/tx/launch': (b) => txLaunch(b),
   '/api/metadata': (b) => apiMetadata(b),
   '/api/relay': (b) => apiRelay(b),

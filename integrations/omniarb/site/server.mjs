@@ -1049,7 +1049,10 @@ export async function handler(req, res) {
     return;
   }
 
-  const file = url.pathname === '/' ? 'index.html' : url.pathname.replace(/^\/+/, '');
+  // The desk is the site. omniview — the older, read-only explorer this grew out
+  // of — keeps its own path rather than the front door.
+  const PAGES = { '/': 'desk.html', '/desk': 'desk.html', '/explore': 'index.html', '/omniview': 'index.html' };
+  const file = PAGES[url.pathname] ?? url.pathname.replace(/^\/+/, '');
   try {
     const buf = await readFile(join(here, 'public', file));
     send(200, buf, MIME[extname(file)] ?? 'application/octet-stream');
@@ -1063,8 +1066,8 @@ export default handler;
 // Started directly (rather than imported by a serverless wrapper): bind a port.
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   createServer(handler).listen(PORT, HOST, () => {
-    console.log(`omniview   http://${HOST}:${PORT}/`);
-    console.log(`desk       http://${HOST}:${PORT}/desk.html`);
+    console.log(`desk       http://${HOST}:${PORT}/`);
+    console.log(`omniview   http://${HOST}:${PORT}/explore`);
     console.log(`birdeye covers ${paintable().map((c) => c.short).join(', ')}` +
       ` · pool-derived prices on ${CHAINS.filter((c) => !be.covers(c.id)).map((c) => c.short).join(', ')}`);
     console.log('no key here: the visitor’s wallet signs every transaction');

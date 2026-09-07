@@ -20,7 +20,7 @@ const S = {
   sort: { key: 'mcap', dir: 'desc' },
   supplyMiss: new Set(), liveChains: new Set(), polledChains: [], stream: null, offered: new Set(),
   seedStop: false, seedRunning: false,
-  seedShareWei: null, fundedThisRun: new Map(), deployTries: new Map(), requiredOnly: null, extrasDone: false,
+  seedShareWei: null, fundedThisRun: new Map(), deployTries: new Map(), requiredOnly: null,
   sel: null, venues: [], beTok: null, dec: 18,
   charts: null, chartHours: 24, chartType: '15m', hiddenChains: new Set(), chartBusy: false,
   size: 50, bridged: true, hookless: true,
@@ -1866,8 +1866,8 @@ function mountLaunch() {
     // stop: every chain still gets its CA, its curve and its native pools.
     S.requiredOnly = tx.requiredOnly === true;
     if (S.requiredOnly) {
-      log(`the relayer is short of OMNI on ${tx.blocked?.join(' ') || 'some chains'} — every pool it can stock ` +
-        'still opens, and the rest fill in on a later pass', 'warn');
+      log(`the relayer is short of OMNI on ${tx.blocked?.join(' ') || 'some chains'} — the native pools still ` +
+        'open everywhere; its OMNI pair there opens when it is stocked', 'warn');
     }
     const done = await runSteps(tx.steps);
     if (!done.length) return;
@@ -2074,6 +2074,21 @@ async function loadSeedState(ca) {
   return S.seed;
 }
 
+/**
+ * How many pools each chain actually carries, painted onto the seed board.
+ *
+ * A launch pays for four per chain — native and OMNI, hooked and hookless —
+ * and the relay attempts the rest of the quote universe on top for free,
+ * opening whichever it happens to hold inventory for. The only honest number
+ * is the one the PoolManager reports, so it is read rather than assumed.
+ */
+async function countPools(ca) {
+  const census = await C.api('/api/poolcensus', { ca }).catch(() => null);
+  if (!census?.chains || !S.seed?.chains) return;
+  for (const row of S.seed.chains) row.pools = census.chains[row.id]?.count ?? null;
+  paintSeed();
+}
+
 /** One chain, one step forward. Returns true when that chain is finished. */
 async function seedChain(chainId, ca, { donate = false } = {}) {
   const c = C.byId[chainId];
@@ -2142,10 +2157,19 @@ async function seedChain(chainId, ca, { donate = false } = {}) {
       return seedChain(chainId, ca);
     }
     if (r.error) throw new Error(r.error);
-    const pools = (r.pools ?? []).map((p) =>
+    // Only the four a launch pays for: native and OMNI, hooked and hookless.
+    // The relay attempts the whole quote universe — stables and ten memecoins
+    // per chain, both hooks, thirty pools a chain — and reports each optional
+    // one it cannot stock as skipped. Printing all of that buries the four
+    // that matter in twenty-six lines of inventory it was never given.
+    const all = r.pools ?? r.wall?.pools ?? [];
+    const paid = all.filter((p) => p.required);
+    const extras = all.length - paid.length;
+    const line = paid.map((p) =>
       `${p.label ?? p.symbol ?? '?'} ${p.seeded ? 'ok' : p.skipped ? 'skipped' : p.error ?? '—'}`).join(', ');
     log(`${c.short}: deploy ${brief(r.deploy)} · allocation ${brief(r.allocation)} · curve ${brief(r.curve)}` +
-        (pools ? ` · ${pools}` : ''), r.complete ? 'up' : undefined);
+        (line ? ` · ${line}` : '') +
+        (extras ? ` · ${extras} optional quote pools left unstocked` : ''), r.complete ? 'up' : undefined);
     await sleep(6000);
   } else if (!st.funded && (st.next === 'move' || donate)) {
     // The relayer's own wallet splitting its own allocation, or a holder who
@@ -2329,7 +2353,6 @@ async function runSeed(ca) {
   S.seedStop = false;
   S.seedRunning = true;
   S.seedNoInit = false;
-  S.extrasDone = false;
   S.fundedThisRun = new Map();
   S.deployTries = new Map();
   paintSeed();
@@ -2337,6 +2360,7 @@ async function runSeed(ca) {
   try {
     const first = await loadSeedState(ca);
     if (!first) return;
+    countPools(ca);
     if (S.requiredOnly == null) {
       const r = await loadReady(ca);
       S.requiredOnly = r ? r.requiredOnly === true : false;
@@ -2379,31 +2403,7 @@ async function runSeed(ca) {
       }
 
       const state = await loadSeedState(ca);
-      if (state?.complete && !S.extrasDone) {
-        // Native and the curve are the floor, not the finish. Every chain gets
-        // another initialize to open the OMNI, stable and memecoin pools that
-        // the relay could not stock the first time round.
-        S.extrasDone = true;
-        log('every chain has its curve and native pools — going back round for the OMNI, stable and memecoin pools', 'acc');
-        for (const c of C.CHAINS) {
-          if (S.seedStop) break;
-          const row = state.chains.find((x) => x.id === c.id);
-          if (row?.queueStuck) continue;
-          try {
-            const r = await C.apiPost('/api/relay', { action: 'initialize', token: ca, chainId: c.id,
-              launchHash: state.launchHash ?? undefined });
-            const pools = (r.pools ?? []);
-            const open = pools.filter((p) => p.seeded).length;
-            log(`${c.short}: ${open} more pool${open === 1 ? '' : 's'} opened` +
-              (pools.length ? ` of ${pools.length} tried` : '') +
-              (r.error ? ` · ${String(r.error).split('\n')[0]}` : ''));
-          } catch (e) { log(`${c.short}: ${String(e.message).split('\n')[0]}`, 'warn'); }
-          await sleep(3000);
-        }
-        const census = await C.api('/api/poolcensus', { ca }).catch(() => null);
-        if (census) log(`${ca}: ${census.total} pools across ${census.live} chains`, 'up');
-        continue;
-      }
+      countPools(ca);
       if (state?.complete) {
         log(state.v3 ? `all nine chains done — eighteen pools, ${state.curves?.open ?? 0} curve${state.curves?.open === 1 ? '' : 's'}`
           : 'all nine chains seeded — eighteen pools open', 'up');
@@ -2465,6 +2465,7 @@ function paintSeed() {
       : `${mark(st.deployed, 'deployed')} ${mark(st.funded || (st.hooked && st.hookless), 'funded')} ` +
         `${mark(st.hooked, 'hooked')} ${mark(st.hookless, 'hookless')}` +
         (st.curve === null ? '' : ` ${mark(st.curve, 'curve')}`) +
+        (st.pools != null ? ` <span class="dim">· ${st.pools} pool${st.pools === 1 ? '' : 's'}</span>` : '') +
         (st.queueStuck ? ` <span class="down">· ${st.queueStuck} of the relayer’s transactions stuck behind nonce ${st.queueBlockedAt}</span>` : '') +
         (st.relayerHeld > 0 && !st.done ? ` <span class="dim">· relayer holds ${C.fmtNum(st.relayerHeld, 4)}</span>` : '') +
         (dry ? ` <span class="warn" title="the relayer pays for the deploy and the wall itself">· relayer has ${C.fmtNum(st.relayerGas, 3)} of ${C.fmtNum(st.relayerNeeds, 3)} ${h(st.nativeSymbol)}</span>` : '');

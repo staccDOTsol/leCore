@@ -17,6 +17,7 @@ const S = {
   chains: {}, nativeUsd: {}, beOk: null,
   tokens: [], live: {}, be: {}, supplies: {}, pools: {}, poolScan: 0, scan: '', boot: 'booting',
   sort: { key: 'mcap', dir: 'desc' },
+  supplyMiss: new Set(),
   sel: null, venues: [], beTok: null, dec: 18,
   charts: null, chartHours: 24, chartType: '15m', hiddenChains: new Set(), chartBusy: false,
   size: 50, bridged: true, hookless: true,
@@ -96,6 +97,9 @@ function refresh() {
   $('tickText').textContent = 'tick ' + S.tick;
   pollChains();
   prices();
+  // Supply moves every time anyone bridges, and a chain that missed at boot has
+  // to get another go — the float total is wrong, not merely stale, without it.
+  if (S.tokens.length) supplies(S.tokens);
   if (S.sel) loadVenues(S.sel.address);
   if (S.tab === 'chart' && S.sel) loadCharts();
 }
@@ -188,15 +192,34 @@ async function discover() {
   } else if (deep) { absorb(deep); }
 }
 
+/**
+ * A chain read that fails once must not stay failed.
+ *
+ * These are single public endpoints and they drop requests. Reading nine chains
+ * once at boot and never again is how Robinhood ends up missing from a float
+ * total that is then presented as the answer — the number was wrong by half and
+ * nothing on screen said so. Retries with backoff, and the caller reports what
+ * is still unread rather than quietly summing what arrived.
+ */
+async function batchWithRetry(ch, calls, tries = 4) {
+  for (let i = 0; i < tries; i += 1) {
+    try {
+      const res = await C.rpcBatch(ch, calls);
+      if (res.some((x) => x != null)) return res;      // all-null means the node refused
+    } catch { /* fall through to the wait */ }
+    await new Promise((r) => setTimeout(r, 800 * 2 ** i));
+  }
+  return null;
+}
+
 async function liveness(tokens) {
   await Promise.all(C.CHAINS.map(async (ch) => {
-    try {
-      const res = await C.rpcBatch(ch, tokens.map((t) => ({ method: 'eth_getCode', params: [t.address, 'latest'] })));
-      tokens.forEach((t, i) => {
-        S.live[t.address] = { ...(S.live[t.address] || {}), [ch.id]: res[i] == null ? null : res[i].length > 4 };
-      });
-      paintBoard();
-    } catch { /* one chain down is not fatal */ }
+    const res = await batchWithRetry(ch, tokens.map((t) => ({ method: 'eth_getCode', params: [t.address, 'latest'] })));
+    if (!res) return;
+    tokens.forEach((t, i) => {
+      S.live[t.address] = { ...(S.live[t.address] || {}), [ch.id]: res[i] == null ? null : res[i].length > 4 };
+    });
+    paintBoard();
   }));
 }
 
@@ -206,18 +229,18 @@ async function supplies(tokens) {
   await Promise.all(C.CHAINS.map(async (ch) => {
     const calls = tokens.map((t) => ({ method: 'eth_call', params: [{ to: t.address, data: '0x18160ddd' }, 'latest'] }));
     if (ch.id === C.HOME_CHAIN) tokens.forEach((t) => calls.push({ method: 'eth_call', params: [{ to: t.address, data: '0x313ce567' }, 'latest'] }));
-    try {
-      const res = await C.rpcBatch(ch, calls);
-      tokens.forEach((t, i) => {
-        const cur = { ...(S.supplies[t.address] || {}) };
-        if (res[i] != null && res[i] !== '0x') cur[ch.id] = C.hexToBig(res[i]);
-        const d = res[tokens.length + i];
-        if (d != null && d !== '0x') cur.dec = Number(C.hexToBig(d));
-        S.supplies[t.address] = cur;
-      });
-      paintBoard();
-      paintVenues();
-    } catch { /* same */ }
+    const res = await batchWithRetry(ch, calls);
+    if (!res) { S.supplyMiss.add(ch.id); paintVenues(); return; }
+    S.supplyMiss.delete(ch.id);
+    tokens.forEach((t, i) => {
+      const cur = { ...(S.supplies[t.address] || {}) };
+      if (res[i] != null && res[i] !== '0x') cur[ch.id] = C.hexToBig(res[i]);
+      const d = res[tokens.length + i];
+      if (d != null && d !== '0x') cur.dec = Number(C.hexToBig(d));
+      S.supplies[t.address] = cur;
+    });
+    paintBoard();
+    paintVenues();
   }));
 }
 
@@ -474,8 +497,8 @@ async function poolCensus(tokens) {
           params: [{ to: ch.poolManager, data: C.extsloadData(C.poolStateSlot(C.poolIdFor(t.address, hooks))) }, 'latest'] });
       }
     }
-    try {
-      const r = await C.rpcBatch(ch, calls);
+    const r = await batchWithRetry(ch, calls);
+    if (r) {
       tokens.forEach((t, i) => {
         const cur = { ...(S.pools[t.address] || {}) };
         cur[ch.id] = {
@@ -484,7 +507,7 @@ async function poolCensus(tokens) {
         };
         S.pools[t.address] = cur;
       });
-    } catch { /* a chain that will not answer leaves its column unknown */ }
+    }
     S.poolScan -= 1;
     paintBoard();
   }));
@@ -600,6 +623,8 @@ function paintBoardRows() {
     const unknown = C.CHAINS.filter((c) => liveMap[c.id] == null);
     const n = on.length;
     const sup = supTotalOf(t);
+    const supRead = S.supplies[t.address] || {};
+    const missing9 = C.CHAINS.filter((c) => supRead[c.id] == null).length;
     const mc = be && sup ? be.value * sup : null;
     const pc = poolCountOf(t);
     const liveText = !Object.keys(liveMap).length ? '…'
@@ -620,7 +645,7 @@ function paintBoardRows() {
       <div class="ell" style="color:${liveColor};font-size:11px">${h(liveText)}</div>
       <div class="r">${be ? C.fmtUsd(be.value) : '—'}</div>
       <div class="r ${chgCls}">${chg}</div>
-      <div class="r acc">${mc ? C.fmtUsd(mc) : '—'}</div>
+      <div class="r ${missing9 ? 'warn' : 'acc'}" ${missing9 ? `title="${missing9} chain${missing9 === 1 ? '' : 's'} unread — this is a floor"` : ''}>${mc ? C.fmtUsd(mc) + (missing9 ? '*' : '') : '—'}</div>
       <div class="r soft">${be && be.liquidity ? C.fmtUsd(be.liquidity) : '—'}</div>
     </div>`;
   }).join('');
@@ -979,12 +1004,25 @@ function paintVenues() {
   const total = C.CHAINS.reduce((a, c) => a + (sup[c.id] != null ? C.fromWei(sup[c.id], dec) : 0), 0);
   const px = S.beTok ? S.beTok.value : null;
 
-  $('vMcap').textContent = total && px ? C.fmtUsd(total * px) : 'no birdeye print';
+  // A sum over eight chains is not a nine-chain total. Rather than printing a
+  // number that is wrong by whatever the unread chain holds, say which chain is
+  // missing — the retry is already running, and a wrong total presented plainly
+  // is worse than no total.
+  const unread = C.CHAINS.filter((c) => sup[c.id] == null);
+  const partial = unread.length > 0;
+  $('vMcap').innerHTML = !total || !px ? 'no birdeye print'
+    : partial ? `<span class="warn" title="incomplete">${C.fmtUsd(total * px)}*</span>`
+      : C.fmtUsd(total * px);
   $('vFloat').textContent = total ? `${C.fmtNum(total, 6)} ${S.sel.symbol || ''}` : '…';
-  $('vHolding').textContent = `${C.CHAINS.filter((c) => sup[c.id] > 0n).length}/9 chains hold float`;
-  $('vFloatNote').textContent = total
-    ? 'supply is burned on the source and minted on the destination, so no single chain shows the real float — this is the sum of nine totalSupply() reads, priced at the birdeye print.'
-    : 'reading totalSupply() on all nine chains…';
+  $('vHolding').textContent = partial
+    ? `${9 - unread.length}/9 chains read · ${unread.map((c) => c.short).join(' ')} missing`
+    : `${C.CHAINS.filter((c) => sup[c.id] > 0n).length}/9 chains hold float`;
+  $('vFloatNote').textContent = partial
+    ? `${unread.map((c) => c.short).join(', ')} did not answer totalSupply(), so the figures above are a floor, not the float — ` +
+      'they are being retried, and the total is marked with an asterisk until every chain is in.'
+    : total
+      ? 'supply is burned on the source and minted on the destination, so no single chain shows the real float — this is the sum of nine totalSupply() reads, priced at the birdeye print.'
+      : 'reading totalSupply() on all nine chains…';
 
   $('vSupply').innerHTML = C.CHAINS.map((c) => {
     const v = sup[c.id] != null ? C.fromWei(sup[c.id], dec) : null;
@@ -999,7 +1037,7 @@ function paintVenues() {
         <div style="height:3px;background:${bar};width:${(share || 0).toFixed(2)}%"></div>
       </div>
       <div style="display:flex;justify-content:space-between;gap:6px;font-size:10px" class="mut">
-        <span>${v == null ? '—' : C.fmtNum(v, 4)}</span><span class="soft">${v != null && px ? C.fmtUsd(v * px) : '—'}</span>
+        <span${v == null ? ' class="warn"' : ''}>${v == null ? 'unread' : C.fmtNum(v, 4)}</span><span class="soft">${v != null && px ? C.fmtUsd(v * px) : '—'}</span>
       </div>
     </div>`;
   }).join('');

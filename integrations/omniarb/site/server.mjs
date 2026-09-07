@@ -26,6 +26,7 @@ import { formatUnits, parseUnits, parseEther, getAddress, encodeFunctionData, de
 import { CHAINS, chainById, HOME_CHAIN, PORTAL, PORTAL_ABI, ERC20_ABI, PAD, PAD_ABI, ROUTER_ABI,
   NATIVE, POOL_FEE, POOL_TICK_SPACING, rpcsFor, arbHelperFor, recordDeployment, FACTORY } from '../src/config.mjs';
 import { publicClient } from '../src/chain.mjs';
+import { queueOf as readQueue } from '../src/unstick.mjs';
 import { fetchIndexedTokens, fetchLaunchedTokens, discoverCurve, getLogsChunked, poolId,
   readPoolState, tokenMeta } from '../src/discovery.mjs';
 import { nativePrices, toUsd } from '../src/prices.mjs';
@@ -39,6 +40,7 @@ import { uploadMetadata, curveSqrtPrice, deployRemote, wallChain, tokenFromRecei
   saltFor, LAUNCH_ABI, LAUNCH_FEE_WEI, DEFAULT_HOOK_PARAMS, RELAYER,
   relayerHoldsFloat, isDeployedOn, recoverMeta } from '../src/launch.mjs';
 import { fetchLiveConfig, readLiveConfig } from '../src/refresh.mjs';
+import { unstickAccount, unstickAll, watchQueues } from '../src/unstick.mjs';
 import * as be from './birdeye.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -959,17 +961,49 @@ function launchGate(d, oneSignature) {
  * from the page looked exactly like a slow bridge. Mined against pending says
  * so in one call.
  */
+const queueOf = (c, address = RELAYER) => readQueue(c, getAddress(address));
+
+/**
+ * Replace whatever is blocking the relayer's queue, from here.
+ *
+ * Only possible when this process was given a key for it (RELAYER_KEY). It is
+ * not needed to use the desk and no visitor's transaction touches it: the page
+ * still signs everything a visitor does. It exists because the relayer jams on
+ * Linea faster than anyone can clear it by hand, and a jammed relayer stops
+ * every mint, deploy and pool on that chain for everybody.
+ */
+async function apiUnstick(body = {}) {
+  const account = unstickAccount();
+  if (!account) {
+    return { key: false, chains: [],
+      note: 'this deployment holds no relayer key — set RELAYER_KEY to let it clear its own queues' };
+  }
+  const chains = body.chain ? [chainById(body.chain)].filter(Boolean) : CHAINS;
+  // Asked for by hand, so do it now rather than after the usual settling time.
+  return unstickAll({ account, chains, afterMs: Number(body.afterMs ?? 0), send: body.dry !== true });
+}
+
 async function apiQueue(chain, address) {
   const c = chainById(chain);
   if (!c) throw new Error(`unknown chain ${chain}`);
-  const who = address ? getAddress(address) : getAddress(RELAYER);
-  const pc = publicClient(c);
-  const [mined, pending] = await Promise.all([
-    pc.getTransactionCount({ address: who }),
-    pc.getTransactionCount({ address: who, blockTag: 'pending' }),
-  ]);
-  return { chain: c.short, chainId: c.id, address: who, mined, pending,
-    stuck: Math.max(0, pending - mined), blockedAt: pending > mined ? mined : null };
+  const q = await queueOf(c, address ?? RELAYER);
+  return { chain: c.short, chainId: c.id, address: getAddress(address ?? RELAYER), ...q };
+}
+
+/**
+ * Refuse to burn tokens towards a chain whose relayer cannot transact.
+ *
+ * bridgeOut destroys the supply on this side and the mint on the other is the
+ * relayer's own transaction. When its queue there is jammed, that mint is
+ * accepted, given a hash, and never mined — so the burn is real and the credit
+ * is not, for as long as the jam lasts. It is recoverable, and it should still
+ * never be started on purpose.
+ */
+async function refuseIfJammed(dst, what) {
+  const q = await queueOf(dst);
+  if (!q.stuck) return q;
+  throw new Error(`${what} needs the relayer to mint on ${dst.name}, and it has ${q.stuck} transactions ` +
+    `stuck behind nonce ${q.blockedAt} there — nothing of its own can land until that clears`);
 }
 
 /** Read the new CA out of a launch receipt, the same way the bot does. */
@@ -1201,7 +1235,11 @@ async function apiSeedState(ca, address, hash) {
       : operator && share > 0n ? share
         : split ? relayerHeld : BASE_SHARE;
     const done = deployed && hooked && hookless && !(v3 && curve === false);
-    const next = !deployed ? 'deploy'
+    // Every remaining step on a chain is a transaction the relayer signs there.
+    // A jammed queue means none of them can land, however healthy the rest of
+    // the state looks, so the honest next step is to wait rather than to ask.
+    const next = queue.stuck && !done ? 'jammed'
+      : !deployed ? 'deploy'
       : done ? null
         : v3 ? 'initialize'
           : funded && wallSafe ? 'wall'
@@ -1212,9 +1250,10 @@ async function apiSeedState(ca, address, hash) {
     // opens both pools — is the relayer's own transaction paid from the
     // relayer's own wallet, so a dry relayer blocks the whole chain and does it
     // silently until something tries and fails.
-    const [gas, price] = await Promise.all([
+    const [gas, price, queue] = await Promise.all([
       publicClient(c).getBalance({ address: getAddress(RELAYER) }).catch(() => null),
       publicClient(c).getGasPrice().catch(() => null),
+      queueOf(c).catch(() => ({ stuck: 0, blockedAt: null })),
     ]);
     const need = price != null ? price * 2_500_000n : null;   // a deploy plus a wall
     const mine = gas != null && need != null && gas < need ? need - gas : 0n;
@@ -1228,6 +1267,7 @@ async function apiSeedState(ca, address, hash) {
       shortfallSource: quoted.has(c.id) ? 'site' : 'estimated',
       relayerShortWei: short > 0n ? short.toString() : null,
       relayerHeld: num(relayerHeld), wallBudgetWei: wallBudget > 0n ? wallBudget.toString() : null, wallSafe,
+      queueStuck: queue.stuck, queueBlockedAt: queue.blockedAt,
       deployed, hooked, hookless, curve, pad, funded, done, next };
   }));
 
@@ -1277,8 +1317,12 @@ async function apiLaunchReady(token) {
     const have = o?.have != null ? BigInt(o.have) : null;
     const need = o?.need != null ? BigInt(o.need) : null;
     const stock = have != null && need != null && have < need ? (need * 11n) / 10n - have : 0n;
-    const p = await omniPools(c).catch(() => null);
+    const [p, queue] = await Promise.all([
+      omniPools(c).catch(() => null),
+      queueOf(c).catch(() => ({ stuck: 0, blockedAt: null })),
+    ]);
     return { id: c.id, short: c.short, name: c.name, nativeSymbol: c.nativeSymbol,
+      queueStuck: queue.stuck, queueBlockedAt: queue.blockedAt,
       omniOk: o?.available === true, omniError: o?.error ?? null,
       omniHave: num(have), omniNeed: num(need), stockWei: stock > 0n ? stock.toString() : null,
       gapBps: p?.gapBps ?? null, drift: p?.gapBps != null && BigInt(p.gapBps) > DRIFT_BPS,
@@ -1327,6 +1371,7 @@ async function txStockOmni({ chain, from, amountWei }) {
     throw new Error(`you hold ${C_fmt(here)} OMNI on ${c.short} and not ${C_fmt(wei)} on any one chain — ` +
       bals.filter((b) => b.bal > 0n).map((b) => `${b.c.short} ${C_fmt(b.bal)}`).join(', '));
   }
+  await refuseIfJammed(c, 'stocking the relayer');
   return jsonSafe({ route: 'bridge', chainId: c.id, mintFrom: src.id, via: src.short, amount: num(wei), to: RELAYER,
     steps: [step(`bridge OMNI ${src.short} → ${c.short} for the relayer`, src, PORTAL,
       encodeFunctionData({ abi: PORTAL_ABI, functionName: 'bridgeOut',
@@ -1529,6 +1574,7 @@ async function txSeed({ ca, chain, from, amountWei, amount, donate }) {
   if (!await isDeployedOn(c, token)) {
     throw new Error(`${token} is not deployed on ${c.name} yet — deploy first, or the burn destroys supply`);
   }
+  await refuseIfJammed(c, 'this move');
   return jsonSafe({
     steps: [step(`bridge the share to ${c.short}`, home, PORTAL,
       encodeFunctionData({ abi: PORTAL_ABI, functionName: 'bridgeOut',
@@ -2011,6 +2057,7 @@ const routes = {
   '/api/seedstate': (q) => apiSeedState(q.get('ca'), q.get('address'), q.get('hash')),
   '/api/launchready': (q) => apiLaunchReady(q.get('token')),
   '/api/queue': (q) => apiQueue(q.get('chain'), q.get('address')),
+  '/api/unstick': () => apiUnstick({ dry: true }),
   // Name and symbol off the contract, logo off the site's index: a CA seeded in
   // a later session has no launch form to read them from, and the remote deploy
   // cannot be made without them.
@@ -2038,6 +2085,7 @@ const writeRoutes = {
   '/api/tx/stockomni': (b) => txStockOmni(b),
   '/api/tx/deployhelper': (b) => txDeployHelper(b),
   '/api/helper': (b) => apiHelper(b),
+  '/api/unstick': (b) => apiUnstick(b),
   '/api/tx/align': (b) => txAlign(b),
   '/api/tx/launch': (b) => txLaunch(b),
   '/api/metadata': (b) => apiMetadata(b),
@@ -2163,6 +2211,18 @@ export function start() {
     console.log('no key here: the visitor’s wallet signs every transaction');
     watchConfig();
     setInterval(watchConfig, 10 * 60_000).unref();
+    // One exception, and it signs nothing a visitor asked for: with a relayer
+    // key this clears the relayer's own jammed nonces. Linea re-jams within
+    // minutes, and while it is jammed no mint, deploy or pool lands there for
+    // anyone. Without the key it does not start and the desk reports the jam.
+    const watcher = watchQueues({
+      everyMs: Number(process.env.UNSTICK_EVERY ?? 60) * 1000,
+      afterMs: Number(process.env.UNSTICK_AFTER ?? 90) * 1000,
+      onEvent: (line) => console.log(`unstick    ${line}`),
+    });
+    console.log(watcher
+      ? `unstick    watching every chain's queue for ${watcher.address}`
+      : 'unstick    no relayer key here — a jammed queue is reported, not cleared');
   }).on('error', (e) => { console.error(e.message); process.exit(1); });
 }
 

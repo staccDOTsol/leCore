@@ -1906,9 +1906,10 @@ function paintReady() {
   if (!el) return;
   const r = S.ready;
   if (!r) { el.innerHTML = ''; return; }
-  const bad = r.chains.filter((c) => c.stockWei || c.drift || (!c.omniOk && c.omniError));
+  const bad = r.chains.filter((c) => c.stockWei || c.drift || c.queueStuck || (!c.omniOk && c.omniError));
   const lines = bad.map((c) => {
     const bits = [];
+    if (c.queueStuck) bits.push(`${c.queueStuck} of the relayer’s transactions stuck behind nonce ${c.queueBlockedAt} — nothing can land there`);
     if (c.stockWei) bits.push(`relayer holds ${C.fmtNum(c.omniHave)} OMNI, needs ${C.fmtNum(c.omniNeed)}`);
     if (c.drift) bits.push(`OMNI pools ${c.gapBps} bps apart (${c.hookedTpn > c.hooklessTpn ? 'hooked' : 'hookless'} cheaper)`);
     if (!bits.length && c.omniError) bits.push(c.omniError);
@@ -1922,8 +1923,9 @@ function paintReady() {
       : `<span class="acc">launching opens the required pools on all nine chains</span>${cost}. the relayer is short of OMNI ` +
         `on ${h((r.blocked ?? []).join(' ') || 'some chains')}, so its stable and memecoin extras wait for a later pass — ` +
         `nothing you have to fix.${lines}<div style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap">` +
-        bad.map((c) => (c.stockWei ? `<button class="btn small" data-ready="stock:${c.id}">stock ${h(c.short)} anyway</button>` : '') +
-          (c.drift ? `<button class="btn small" data-ready="align:${c.id}">align ${h(c.short)} (pays you)</button>` : '')).join('') +
+        bad.map((c) => (c.queueStuck ? '' :
+          (c.stockWei ? `<button class="btn small" data-ready="stock:${c.id}">stock ${h(c.short)} anyway</button>` : '') +
+          (c.drift ? `<button class="btn small" data-ready="align:${c.id}">align ${h(c.short)} (pays you)</button>` : ''))).join('') +
         '</div>';
 }
 
@@ -2033,6 +2035,16 @@ async function seedChain(chainId, ca, { donate = false } = {}) {
   const st = (d?.chains ?? []).find((x) => x.id === chainId);
   if (!st) return null;
   if (st.done) return true;
+
+  // Every step left on a chain is a transaction the relayer signs there. When
+  // its queue is jammed none of them can land, so asking is worse than waiting:
+  // the deploy and the initialize come back with hashes that never mine, and a
+  // bridge burns supply the mint cannot credit until it clears.
+  if (st.queueStuck) {
+    log(`${c.short}: the relayer has ${st.queueStuck} transactions stuck behind nonce ${st.queueBlockedAt} — ` +
+      'nothing can land there until that clears. skipping it', 'warn');
+    return null;
+  }
 
   if (!st.deployed) {
     // Twice per chain per run. A deploy the relayer keeps refusing — reverting,
@@ -2354,7 +2366,8 @@ function paintSeed() {
       : '<button class="btn go" data-seed="run:0">seed all nine</button>'}</div>
   </div>`;
 
-  const LABEL = { deploy: 'deploy', initialize: 'initialize', wall: 'wall', move: 'move', allocation: 'waiting on allocation' };
+  const LABEL = { deploy: 'deploy', initialize: 'initialize', wall: 'wall', move: 'move',
+    allocation: 'waiting on allocation', jammed: 'relayer queue jammed' };
   rows.innerHTML = head + C.CHAINS.map((c) => {
     const st = d?.chains.find((x) => x.id === c.id);
     const mark = (on, label) => `<span class="${on ? 'up' : 'dim'}">${on ? '✓' : '·'} ${label}</span>`;
@@ -2363,11 +2376,12 @@ function paintSeed() {
       : `${mark(st.deployed, 'deployed')} ${mark(st.funded || (st.hooked && st.hookless), 'funded')} ` +
         `${mark(st.hooked, 'hooked')} ${mark(st.hookless, 'hookless')}` +
         (st.curve === null ? '' : ` ${mark(st.curve, 'curve')}`) +
+        (st.queueStuck ? ` <span class="down">· ${st.queueStuck} of the relayer’s transactions stuck behind nonce ${st.queueBlockedAt}</span>` : '') +
         (st.relayerHeld > 0 && !st.done ? ` <span class="dim">· relayer holds ${C.fmtNum(st.relayerHeld, 4)}</span>` : '') +
         (dry ? ` <span class="warn" title="the relayer pays for the deploy and the wall itself">· relayer has ${C.fmtNum(st.relayerGas, 3)} of ${C.fmtNum(st.relayerNeeds, 3)} ${h(st.nativeSymbol)}</span>` : '');
     const acts = [];
     if (st && !st.done && !S.seedRunning) {
-      if (st.next && st.next !== 'allocation') acts.push(`<button class="btn small" data-seed="step:${c.id}">${h(LABEL[st.next] ?? st.next)}</button>`);
+      if (st.next && st.next !== 'allocation' && st.next !== 'jammed') acts.push(`<button class="btn small" data-seed="step:${c.id}">${h(LABEL[st.next] ?? st.next)}</button>`);
       if (st.next === 'allocation' && !d.needsWallet) acts.push(`<button class="btn small" data-seed="donate:${c.id}" title="burn a ninth of your own balance to the relayer here — yours to give, never taken">donate my share</button>`);
       if (dry && !d.needsWallet) acts.push(`<button class="btn small" data-seed="fund:${c.id}" title="send the relayer its shortfall from your wallet, over Relay if you are not on this chain">top up from my wallet</button>`);
     }

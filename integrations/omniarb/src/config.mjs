@@ -225,10 +225,11 @@ export const arbHelperFor = (c) =>
 
 /** Record a freshly deployed helper so later runs find it. */
 export function recordDeployment(chainId, address) {
-  const current = { ...deployments(), [String(chainId)]: address };
+  // Remember it before writing: a read-only filesystem is a reason to lose the
+  // note on restart, not a reason to forget an address deployed a second ago.
+  _deployments = { ...deployments(), [String(chainId)]: address };
   const path = new URL('../deployments.json', import.meta.url);
-  writeFileSync(path, `${JSON.stringify(current, null, 2)}\n`);
-  _deployments = current;
+  writeFileSync(path, `${JSON.stringify(_deployments, null, 2)}\n`);
 }
 
 // ------------------------------------------------------------------- ABIs

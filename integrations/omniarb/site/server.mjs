@@ -24,7 +24,7 @@ import { formatUnits, parseUnits, parseEther, getAddress, encodeFunctionData, de
   encodeAbiParameters, keccak256 } from 'viem';
 
 import { CHAINS, chainById, HOME_CHAIN, PORTAL, PORTAL_ABI, ERC20_ABI, PAD, PAD_ABI, ROUTER_ABI,
-  NATIVE, POOL_FEE, POOL_TICK_SPACING, rpcsFor, arbHelperFor, FACTORY } from '../src/config.mjs';
+  NATIVE, POOL_FEE, POOL_TICK_SPACING, rpcsFor, arbHelperFor, recordDeployment, FACTORY } from '../src/config.mjs';
 import { publicClient } from '../src/chain.mjs';
 import { fetchIndexedTokens, fetchLaunchedTokens, discoverCurve, getLogsChunked, poolId,
   readPoolState, tokenMeta } from '../src/discovery.mjs';
@@ -1305,14 +1305,18 @@ const C_fmt = (wei) => Number(formatUnits(wei, 18)).toLocaleString('en-US', { ma
 /**
  * Bring a chain's two OMNI pools back within the site's tolerance.
  *
- * Where the OmniArb helper is deployed both pools are reachable and this is the
- * bot's own two-leg arb: buy the cheap one, sell into the dear one, each moved
- * halfway. Where it is not (most chains) only the hooked pool can be traded, so
- * it is moved the whole way on its own — a buy if it is the cheap one, a sell
- * if it is the dear one — and the wallet ends up holding what that leg bought
- * or raised. The size comes from the pool's own liquidity: for a v4 pool at
- * sqrt price S with liquidity L, moving S by a fraction f costs L·f/((1−f)·S)
- * of native going in, or L·S·f of token going in.
+ * Price here is tokens per native, so the pool where OMNI is CHEAP carries the
+ * higher sqrt price. There are two ways to close the gap and they cost entirely
+ * different things: buy the cheap pool down, which spends native, or sell OMNI
+ * into the dear pool, which spends OMNI and hands back native. The second is
+ * the profitable side of the same trade the arb bot takes, so a wallet holding
+ * OMNI and no gas can still do it — and on most chains it is the only one it
+ * can afford. So both are priced, and the one this wallet can actually fund
+ * wins; a bridge of its own OMNI counts as affordable, a bridge of native it
+ * does not have anywhere does not.
+ *
+ * Sizing, for a v4 pool at sqrt price S with liquidity L: moving S by a
+ * fraction f takes L·f/((1−f)·S) of native in, or L·S·f of token in.
  */
 async function txAlign({ chain, from }) {
   const c = chainById(chain);
@@ -1320,65 +1324,127 @@ async function txAlign({ chain, from }) {
   const who = getAddress(from);
   const p = await omniPools(c);
   if (p.gapBps == null) throw new Error(`OMNI does not have both pools on ${c.name}`);
-  if (BigInt(p.gapBps) <= DRIFT_BPS) return jsonSafe({ chainId: c.id, gapBps: p.gapBps, steps: [], legs: [], note: 'within tolerance' });
+  const settled = { chainId: c.id, gapBps: p.gapBps, steps: [], legs: [], note: 'within tolerance' };
+  if (BigInt(p.gapBps) <= DRIFT_BPS) return jsonSafe(settled);
 
-  // tokensPerNative is sqrt²: the higher it is, the cheaper the token there.
-  const cheap = p.hooked.tokensPerNative > p.hookless.tokensPerNative ? 'hooked' : 'hookless';
+  const cheap = p.hooked.sqrtPriceX96 > p.hookless.sqrtPriceX96 ? 'hooked' : 'hookless';
   const dear = cheap === 'hooked' ? 'hookless' : 'hooked';
   const S = { hooked: p.hooked.sqrtPriceX96, hookless: p.hookless.sqrtPriceX96 };
   const L = { hooked: p.hooked.liquidity, hookless: p.hookless.liquidity };
-  // Gap on sqrt prices, in bps; take it down to SETTLE_BPS inside the line.
   const sqrtGap = ((S[cheap] - S[dear]) * 10000n) / S[dear];
-  const target = (DRIFT_BPS - SETTLE_BPS) / 2n;   // on the sqrt, half the price tolerance
+  const target = (DRIFT_BPS - SETTLE_BPS) / 2n;      // on the sqrt, half the price tolerance
   const move = sqrtGap > target ? sqrtGap - target : 0n;
-  if (move <= 0n) return jsonSafe({ chainId: c.id, gapBps: p.gapBps, steps: [], legs: [], note: 'within tolerance' });
+  if (move <= 0n) return jsonSafe(settled);
 
   const Q96 = 1n << 96n;
-  const nativeToLower = (venue, fb) => (L[venue] * Q96 * fb) / ((10000n - fb) * S[venue]);   // buy: S falls by fb
-  const tokenToRaise = (venue, fb) => (L[venue] * S[venue] * fb) / (10000n * Q96);          // sell: S rises by fb
-  const helper = arbHelperFor(c);
-  const legs = [];
-  if (helper) {
-    const half = (move + 1n) / 2n;
-    legs.push({ venue: cheap, side: 'buy', wei: nativeToLower(cheap, half) });
-    legs.push({ venue: dear, side: 'sell', wei: tokenToRaise(dear, half) });
-  } else if (cheap === 'hooked') {
-    legs.push({ venue: 'hooked', side: 'buy', wei: nativeToLower('hooked', move) });
-  } else {
-    legs.push({ venue: 'hooked', side: 'sell', wei: tokenToRaise('hooked', move) });
-  }
+  const buyWei = (L[cheap] * Q96 * move) / ((10000n - move) * S[cheap]);
+  const sellWei = (L[dear] * S[dear] * move) / (10000n * Q96);
 
-  // What the wallet must hold on this chain for the legs, and whether it does.
   const pc = publicClient(c);
-  const [nativeHave, omniHave, gasPrice] = await Promise.all([
+  const [nativeHere, omniHere, gasPrice, elsewhere] = await Promise.all([
     pc.getBalance({ address: who }).catch(() => 0n),
     pc.readContract({ address: getAddress(OMNI), abi: ERC20_ABI, functionName: 'balanceOf', args: [who] }).catch(() => 0n),
     pc.getGasPrice().catch(() => 0n),
+    omniBalances(who),
   ]);
-  const nativeNeed = legs.filter((l) => l.side === 'buy').reduce((a, l) => a + l.wei, 0n) + gasPrice * 400_000n * BigInt(legs.length);
-  const omniNeed = legs.filter((l) => l.side === 'sell').reduce((a, l) => a + l.wei, 0n);
-  const shorts = [];
-  if (omniHave < omniNeed) shorts.push({ what: 'omni', needWei: (omniNeed - omniHave).toString(), haveWei: omniHave.toString() });
-  if (nativeHave < nativeNeed) shorts.push({ what: 'native', needWei: (nativeNeed - nativeHave).toString(), haveWei: nativeHave.toString() });
-  const brief = legs.map((l) => ({ venue: l.venue, side: l.side, amount: num(l.wei),
-    unit: l.side === 'buy' ? c.nativeSymbol : 'OMNI' }));
-  if (shorts.length) {
-    // Where the wallet does hold the OMNI, so the page can bring it over first.
-    const omniShort = shorts.find((x) => x.what === 'omni');
-    const source = omniShort
-      ? (await omniBalances(who)).find((b) => b.c.id !== c.id && b.bal >= BigInt(omniShort.needWei))?.c ?? null
-      : null;
-    return jsonSafe({ chainId: c.id, gapBps: p.gapBps, cheap, legs: brief, steps: [], short: shorts[0], shorts,
-      source: source ? { id: source.id, short: source.short } : null });
+  const helper = arbHelperFor(c);
+  // What the legs actually cost to send, not a round number: on a chain where
+  // the whole balance is a third of a cent, an over-generous reserve is the
+  // difference between doing the trade and reporting it as unaffordable. The
+  // approve is only counted when the wallet has not already given one.
+  const spender = helper && dear !== 'hooked' ? getAddress(helper) : getAddress(c.router);
+  const approved = await allowanceOf(c, getAddress(OMNI), who, spender).catch(() => 0n);
+  const gasReserve = gasPrice * (250_000n + (approved >= sellWei ? 0n : 50_000n));
+
+  const plan = (side) => {
+    const venue = side === 'buy' ? cheap : dear;
+    const wei = side === 'buy' ? buyWei : sellWei;
+    // Only the hooked pool has a router. The hookless one needs the OmniArb
+    // helper, which is a one-off deploy this wallet can make itself.
+    const needsHelper = venue !== 'hooked' && !helper;
+    const src = side === 'sell' && omniHere < wei
+      ? elsewhere.find((b) => b.c.id !== c.id && b.bal >= wei)?.c ?? null : null;
+    // Everything that has to arrive before the leg can be signed, source or no
+    // source: the page brings each one over, and a shortage left off this list
+    // is one it never fixes and then retries into forever.
+    const shorts = [];
+    if (side === 'sell' && omniHere < wei) {
+      shorts.push({ what: 'omni', needWei: (wei - omniHere).toString(), haveWei: omniHere.toString(), from: src?.short ?? null });
+    }
+    const native = side === 'buy' ? wei + gasReserve : gasReserve + (needsHelper ? gasPrice * 1_400_000n : 0n);
+    if (nativeHere < native) shorts.push({ what: 'native', needWei: (native - nativeHere).toString(), haveWei: nativeHere.toString() });
+    // Cheapest first: pay from what is here, then from OMNI this wallet holds
+    // on another chain (a burn and a mint we drive ourselves), then a helper
+    // deploy, and only last a native top-up — the one thing that needs money
+    // this wallet may not have anywhere.
+    const missing = shorts.some((x) => x.what === 'omni') && !src;
+    const cost = missing ? 9 : shorts.some((x) => x.what === 'native') ? 3 : needsHelper ? 2 : src ? 1 : 0;
+    return { side, venue, wei, needsHelper, src, shorts, cost,
+      brief: { venue, side, amount: num(wei), unit: side === 'buy' ? c.nativeSymbol : 'OMNI' } };
+  };
+
+  const chosen = [plan('sell'), plan('buy')].sort((a, b) => a.cost - b.cost)[0];
+  // Price is tokens per native, so native out is tokens in DIVIDED by it. The
+  // sell leg pays the wallet; saying so is the difference between "this costs
+  // you 880k OMNI" and "this is the profitable side of the arb".
+  const proceeds = chosen.side === 'sell' ? (chosen.wei * Q96 * Q96) / (S[dear] * S[dear]) : null;
+  const common = { chainId: c.id, gapBps: p.gapBps, cheap, legs: [chosen.brief],
+    proceeds: proceeds == null ? null : num(proceeds) };
+
+  if (chosen.needsHelper && !chosen.shorts.length) {
+    return jsonSafe({ ...common, steps: [], needsHelper: true,
+      note: `the ${chosen.venue} pool has no router — deploy the OmniArb helper here first` });
+  }
+  if (chosen.shorts.length) {
+    return jsonSafe({ ...common, steps: [], needsHelper: chosen.needsHelper,
+      short: chosen.shorts[0], shorts: chosen.shorts,
+      source: chosen.src ? { id: chosen.src.id, short: chosen.src.short } : null });
   }
 
-  const steps = [];
-  for (const l of legs) {
-    const t = await txTrade({ ca: OMNI, chain: c.id, venue: l.venue, side: l.side,
-      amount: formatUnits(l.wei, 18), from: who, slippageBps: 3000 });
-    steps.push(...t.steps);
+  const t = await txTrade({ ca: OMNI, chain: c.id, venue: chosen.venue, side: chosen.side,
+    amount: formatUnits(chosen.wei, 18), from: who, slippageBps: 3000 });
+  return jsonSafe({ ...common, steps: t.steps, needsHelper: false, short: null });
+}
+
+/**
+ * Deploy the OmniArb helper, from the visitor's own wallet.
+ *
+ * omnichain's router only ever builds a PoolKey carrying its own hook, so the
+ * hookless pool at the same CA is unreachable without this. It holds no state
+ * and no balances between calls, and one per chain serves everybody.
+ */
+function txDeployHelper({ chain, from }) {
+  const c = chainById(chain);
+  if (!c) throw new Error(`unknown chain ${chain}`);
+  const have = arbHelperFor(c);
+  if (have) return jsonSafe({ chainId: c.id, address: getAddress(have), steps: [], skipped: true });
+  const bytecode = ARTIFACT.bytecode?.object ?? ARTIFACT.bytecode;
+  if (typeof bytecode !== 'string' || !/^0x[0-9a-fA-F]+$/.test(bytecode)) throw new Error('no helper bytecode in the build');
+  return jsonSafe({ chainId: c.id, address: null, skipped: false, from: getAddress(from ?? RELAYER),
+    steps: [{ label: `deploy the OmniArb helper on ${c.short}`, chainId: c.id, chainName: c.name,
+      to: null, data: bytecode, value: '0x0',
+      note: 'a stateless v4 swap helper — it is what makes the hookless pool reachable at all' }] });
+}
+
+/** Record a helper someone just deployed, after checking the code is really ours. */
+async function apiHelper({ chain, address, hash }) {
+  const c = chainById(chain);
+  if (!c) throw new Error(`unknown chain ${chain}`);
+  let at = address ? getAddress(address) : null;
+  if (!at && hash) {
+    const rec = await publicClient(c).getTransactionReceipt({ hash });
+    at = rec?.contractAddress ? getAddress(rec.contractAddress) : null;
   }
-  return jsonSafe({ chainId: c.id, gapBps: p.gapBps, cheap, legs: brief, steps, short: null });
+  if (!at) throw new Error('no address and no deployment receipt to read one from');
+  const code = await publicClient(c).getBytecode({ address: at }).catch(() => null);
+  const want = ARTIFACT.deployedBytecode?.object ?? ARTIFACT.deployedBytecode;
+  if (!code || code === '0x') throw new Error(`nothing deployed at ${at} on ${c.name}`);
+  // Metadata trailers differ per compile; the body is what has to match.
+  if (typeof want === 'string' && code.slice(0, 200) !== want.slice(0, 200)) {
+    throw new Error(`the code at ${at} is not the OmniArb helper`);
+  }
+  try { recordDeployment(c.id, at.toLowerCase()); } catch { /* read-only fs: in-memory is enough */ }
+  return { chainId: c.id, address: at, recorded: true };
 }
 
 /**
@@ -1935,6 +2001,8 @@ const writeRoutes = {
   '/api/tx/seed': (b) => txSeed(b),
   '/api/tx/fundrelayer': (b) => txFundRelayer(b),
   '/api/tx/stockomni': (b) => txStockOmni(b),
+  '/api/tx/deployhelper': (b) => txDeployHelper(b),
+  '/api/helper': (b) => apiHelper(b),
   '/api/tx/align': (b) => txAlign(b),
   '/api/tx/launch': (b) => txLaunch(b),
   '/api/metadata': (b) => apiMetadata(b),

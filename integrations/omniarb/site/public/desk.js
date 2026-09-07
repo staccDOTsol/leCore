@@ -1534,7 +1534,10 @@ async function runSteps(steps) {
     // wallet a complete one. It still does its own checks, but it has less to
     // do on an RPC we do not control — and a wallet that cannot estimate gas
     // refuses to send at all.
-    const tx = { from: W.address, to: s.to, data: s.data, value: s.value };
+    // A step with no `to` is a contract creation — the OmniArb helper. Wallets
+    // want the field absent, not null.
+    const tx = { from: W.address, data: s.data, value: s.value };
+    if (s.to) tx.to = s.to;
     const gas = await estimateFor(s).catch(() => null);
     if (gas) Object.assign(tx, gas);
 
@@ -1553,7 +1556,7 @@ async function runSteps(steps) {
 /** Gas limit and fees, priced through our proxy rather than the wallet's node. */
 async function estimateFor(s) {
   const [est, block, tip] = await Promise.all([
-    C.rpc(s.chainId, 'eth_estimateGas', [{ from: W.address, to: s.to, data: s.data, value: s.value }]),
+    C.rpc(s.chainId, 'eth_estimateGas', [{ from: W.address, ...(s.to ? { to: s.to } : {}), data: s.data, value: s.value }]),
     C.rpc(s.chainId, 'eth_getBlockByNumber', ['latest', false]),
     C.rpc(s.chainId, 'eth_maxPriorityFeePerGas', []).catch(() => null),
   ]);
@@ -1911,22 +1914,32 @@ async function stockOmni(ch) {
 async function alignPools(ch, depth = 0) {
   const tx = await C.apiPost('/api/tx/align', { chain: ch.id, from: W.address });
   if (tx.error) throw new Error(tx.error);
-  if (!tx.steps?.length && !tx.short) { log(`${ch.short}: pools within tolerance`); return false; }
+  if (!tx.steps?.length && !tx.short && !tx.needsHelper) { log(`${ch.short}: pools within tolerance`); return false; }
+  // The hookless pool has no router anywhere. One stateless helper per chain
+  // makes it reachable, for this wallet and every one after it.
+  if (tx.needsHelper && !tx.short) {
+    if (depth > 2) { log(`${ch.short}: helper still missing`, 'down'); return false; }
+    await deployHelper(ch);
+    return alignPools(ch, depth + 1);
+  }
   if (tx.short) {
     if (depth > 1) { log(`${ch.short}: still short after bringing funds over — ${tx.short.what}`, 'down'); return false; }
     // Every shortage in one pass — an align on Linea can need both the OMNI to
     // sell and the gas to sell it with, and neither is on Linea yet.
     for (const short of tx.shorts ?? [tx.short]) {
-    const need = (BigInt(short.needWei) * 11n) / 10n;
+    // Twice what is missing: a hop that lands exactly enough for the gas is
+    // spent by the transaction it paid for, and the next block prices higher.
+    const need = short.what === 'native' ? BigInt(short.needWei) * 2n : (BigInt(short.needWei) * 11n) / 10n;
     if (short.what === 'omni') {
-      if (!tx.source) { log(`${ch.short}: the align needs ${C.fmtNum(Number(need) / 1e18, 0)} OMNI here and no chain of yours holds that much`, 'down'); return false; }
-      log(`${ch.short}: bringing ${C.fmtNum(Number(need) / 1e18, 0)} OMNI over from ${tx.source.short} for the align`);
+      const from = tx.source ?? null;
+      if (!from) { log(`${ch.short}: the align needs ${C.fmtNum(Number(need) / 1e18, 0)} OMNI here and no chain of yours holds that much`, 'down'); return false; }
+      log(`${ch.short}: bringing ${C.fmtNum(Number(need) / 1e18, 0)} OMNI over from ${from.short} for the align`);
       const b = await C.apiPost('/api/tx/bridge', { ca: OMNI_CA,
-        from: tx.source.id, to: ch.id, amount: String(Number(need) / 1e18), recipient: W.address });
+        from: from.id, to: ch.id, amount: String(Number(need) / 1e18), recipient: W.address });
       if (b.error) throw new Error(b.error);
       const done = await runSteps(b.steps);
       if (!done.length) throw new Error('cancelled');
-      await requestMintFor(tx.source.id, done[0].hash);
+      await requestMintFor(from.id, done[0].hash);
     } else {
       log(`${ch.short}: the align needs ${C.fmtNum(Number(need) / 1e18, 4)} ${ch.nativeSymbol} here — bringing it over`);
       const f = await C.apiPost('/api/tx/fundrelayer', { chain: ch.id, amountWei: need.toString(), from: W.address,
@@ -1940,11 +1953,26 @@ async function alignPools(ch, depth = 0) {
     return alignPools(ch, depth + 1);
   }
   log(`${ch.short}: OMNI pools ${tx.gapBps} bps apart — ` +
-    tx.legs.map((l) => `${l.side} ${C.fmtNum(l.amount, 4)} ${l.unit} on the ${l.venue} pool`).join(', '));
+    tx.legs.map((l) => `${l.side} ${C.fmtNum(l.amount, 4)} ${l.unit} on the ${l.venue} pool`).join(', ') +
+    (tx.proceeds ? ` · pays you about ${C.fmtNum(tx.proceeds, 4)} ${ch.nativeSymbol}` : ''));
   const done = await runSteps(tx.steps);
   if (!done.length) throw new Error('cancelled');
   log(`${ch.short}: pools nudged`, 'up');
   return true;
+}
+
+/** One stateless v4 helper per chain: without it the hookless pool is unreachable. */
+async function deployHelper(ch) {
+  const tx = await C.apiPost('/api/tx/deployhelper', { chain: ch.id, from: W.address });
+  if (tx.error) throw new Error(tx.error);
+  if (tx.skipped) return tx.address;
+  log(`${ch.short}: no OmniArb helper here — deploying one (it holds nothing and serves everyone)`);
+  const done = await runSteps(tx.steps);
+  if (!done.length) throw new Error('cancelled');
+  const r = await C.apiPost('/api/helper', { chain: ch.id, hash: done[0].hash });
+  if (r.error) throw new Error(r.error);
+  log(`${ch.short}: helper at ${C.short(r.address)}`, 'up');
+  return r.address;
 }
 
 /**

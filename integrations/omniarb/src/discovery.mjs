@@ -83,13 +83,22 @@ export async function getLogsChunked(pc, params, span = 5000n) {
       return params.event ? parseEventLogs({ abi: [params.event], logs }) : logs;
     } catch { /* fall through to the chunked RPC walk */ }
   }
+  // viem's getLogs takes an event, not raw topics: handed topics it silently
+  // drops the filter and returns every log at the address.
+  const raw = params.topics && !params.event
+    ? async (q) => (await pc.request({ method: 'eth_getLogs', params: [{
+        address: q.address, topics: q.topics,
+        fromBlock: `0x${BigInt(q.fromBlock ?? 0n).toString(16)}`,
+        toBlock: q.toBlock == null || q.toBlock === 'latest' ? 'latest' : `0x${BigInt(q.toBlock).toString(16)}`,
+      }] })).map((l) => ({ ...l, blockNumber: BigInt(l.blockNumber), logIndex: Number(l.logIndex) }))
+    : (q) => pc.getLogs(q);
   try {
-    return await pc.getLogs(params);
+    return await raw(params);
   } catch {
     const out = [];
     for (let a = params.fromBlock; a <= params.toBlock; a += span) {
       const b = a + span - 1n > params.toBlock ? params.toBlock : a + span - 1n;
-      try { out.push(...await pc.getLogs({ ...params, fromBlock: a, toBlock: b })); } catch { /* skip */ }
+      try { out.push(...await raw({ ...params, fromBlock: a, toBlock: b })); } catch { /* skip */ }
     }
     return out;
   }

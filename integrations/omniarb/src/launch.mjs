@@ -119,9 +119,11 @@ async function relay(payload) {
  * It opens two: the hooked pool the site's router trades, and the hookless one
  * it cannot — which is the pair the whole arbitrage surface is built on.
  */
-export async function wallChain({ chainId, token, sqrtPriceX96 = null }) {
+export async function wallChain({ chainId, token, sqrtPriceX96 = null, tokenBudget = null }) {
   const payload = { action: 'wall', chainId: Number(chainId), token };
   if (sqrtPriceX96 != null) payload.sqrtPriceX96 = sqrtPriceX96.toString();
+  // Without a budget the relay spends everything the relayer holds on the chain.
+  if (tokenBudget != null) payload.tokenBudget = String(tokenBudget);
   const res = await relay(payload);
   const read = (v) => {
     if (!v || typeof v !== 'object') return null;

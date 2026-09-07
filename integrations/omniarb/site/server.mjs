@@ -942,7 +942,7 @@ async function apiLaunched({ hash }) {
   const token = await tokenFromReceipt(rec, c.launcher, rec.from);
   if (!token) throw new Error(`${hash} succeeded but no token address could be read from its logs`);
   _discovered.clear();   // the board should show it immediately
-  return { token, explorer: `${c.explorer}/tx/${hash}` };
+  return { token, hash, explorer: `${c.explorer}/tx/${hash}` };
 }
 
 /**
@@ -1020,6 +1020,13 @@ async function apiRelay(body) {
     const r = await relayPost({ action, token: body.token ? getAddress(body.token) : undefined });
     return { ...r.data, httpOk: r.ok, status: r.status };
   }
+  if (action === 'fundChains') {
+    // The relayer moves its own Base gas out to the chains it is short on, over
+    // Relay, from what launches paid it. Amounts and destinations are its call:
+    // nothing in the body chooses them, and nobody signs anything.
+    const r = await relayPost({ action, token: body.token ? getAddress(body.token) : undefined });
+    return { ...r.data, httpOk: r.ok, status: r.status };
+  }
   if (action === 'initialize') {
     const r = await relayPost({
       action, token: getAddress(body.token), chainId: Number(body.chainId),
@@ -1038,7 +1045,8 @@ async function apiRelay(body) {
   }
   if (action === 'wall') {
     const sqrt = body.sqrtPriceX96 ?? (await curveSqrtPrice(getAddress(body.token)));
-    const r = await wallChain({ chainId: body.chainId, token: getAddress(body.token), sqrtPriceX96: sqrt });
+    const r = await wallChain({ chainId: body.chainId, token: getAddress(body.token), sqrtPriceX96: sqrt,
+      tokenBudget: /^\d+$/.test(String(body.tokenBudget ?? '')) ? String(body.tokenBudget) : undefined });
     return jsonSafe({ action, ...r });
   }
   throw new Error(`relay action not proxied: ${action || '(none)'}`);
@@ -1055,9 +1063,33 @@ async function apiRelay(body) {
 // The float goes to the RELAYER, not to the launcher: the relayer is what opens
 // the pools, and it can only open them from what it holds.
 
-async function apiSeedState(ca, address) {
+// The pool allocation every launch mints to the relayer on Base, and one chain's
+// share of it. What the relayer holds on Base above this is eight other chains'.
+const BASE_SHARE = (4_000_000_000n * 10n ** 18n) / BigInt(CHAINS.length);
+
+const LAUNCH_ALLOC_ABI = [{ type: 'function', name: 'curveAllocationOf', stateMutability: 'view',
+  inputs: [{ type: 'address' }], outputs: [{ type: 'uint256' }] }];
+
+/** The Base transaction that created this token, from the factory's own log. */
+async function launchHashOf(token) {
+  const home = chainById(HOME_CHAIN);
+  const topic = `0x${'0'.repeat(24)}${token.slice(2).toLowerCase()}`;
+  const logs = await getLogsChunked(publicClient(home), {
+    address: getAddress(FACTORY), topics: [FACTORY_DEPLOY_TOPIC, topic], fromBlock: 0n, toBlock: 99_999_999n,
+  }).catch(() => []);
+  return logs?.[0]?.transactionHash ?? null;
+}
+
+async function apiSeedState(ca, address, hash) {
   const token = getAddress(ca);
   const home = chainById(HOME_CHAIN);
+  const who = address ? getAddress(address) : null;
+  // The relayer's own wallet is the one place a float worth splitting nine ways
+  // lives. Every other wallet's balance is that person's position: a v3 launch
+  // mints the pool and curve allocations straight to the relayer and takes
+  // nothing from the creator, and a seed that spends the creator's tokens is
+  // not a step, it is the bug that burned one ape 24M at a time.
+  const operator = Boolean(who && who === getAddress(RELAYER));
 
   // The site prices the relayer's own shortfall per chain — pool bids, curve fee
   // and gas, from the actual pool count. That is a better number than anything
@@ -1068,10 +1100,21 @@ async function apiSeedState(ca, address) {
     if (row?.shortfall && row.shortfall !== '0') quoted.set(Number(row.chainId), BigInt(row.shortfall));
   }
 
-  const held = address
-    ? await publicClient(home).readContract({ address: token, abi: ERC20_ABI,
-        functionName: 'balanceOf', args: [getAddress(address)] }).catch(() => 0n)
-    : 0n;
+  const balanceOf = (c, owner) => publicClient(c).readContract({ address: token, abi: ERC20_ABI,
+    functionName: 'balanceOf', args: [getAddress(owner)] });
+  const [curveAlloc, relayerBase, launchHash] = await Promise.all([
+    launcherFromGate().then((g) => g?.address
+      ? publicClient(home).readContract({ address: g.address, abi: LAUNCH_ALLOC_ABI,
+          functionName: 'curveAllocationOf', args: [token] })
+      : 0n).catch(() => 0n),
+    balanceOf(home, RELAYER).catch(() => 0n),
+    /^0x[0-9a-fA-F]{64}$/.test(hash ?? '') ? Promise.resolve(hash) : launchHashOf(token),
+  ]);
+  // A v3 launch is one signature: the relayer holds this token's eight curve
+  // supplies and its pool allocation, and `initialize` per chain does the rest.
+  const v3 = curveAlloc > 0n;
+
+  const held = operator ? relayerBase : 0n;
   const share = held / BigInt(CHAINS.length);
 
   const rows = await Promise.all(CHAINS.map(async (c) => {
@@ -1081,18 +1124,31 @@ async function apiSeedState(ca, address) {
     ]);
     const hooked = pools.some((p) => p.viaOmniRouter);
     const hookless = pools.some((p) => !p.viaOmniRouter);
-    // Whether the relayer already has the float here decides whether the move
-    // has happened. Skipping this check is what took a 303M position down to
-    // 1.6M over four resumed runs, each handing over another ninth for nothing.
-    const funded = deployed && share > 0n
-      ? await relayerHoldsFloat(c, token, share).catch(() => false)
-      : false;
-    // Without a wallet there is no balance to take a ninth of, so "move" is not
-    // a step anyone can be offered — say what is actually blocking instead.
+    // What the relayer holds here is what a wall can spend here. On Base that is
+    // the whole allocation — 4B on v2, 12B on v3 — and a wall with no budget
+    // spends every token of it on Base's two pools, which is exactly what
+    // emptied one v3 launch's eight destination curves into Base. One ninth of
+    // what is left after the curve supplies is the share Base is meant to keep.
+    const relayerHeld = deployed ? await balanceOf(c, RELAYER).catch(() => 0n) : 0n;
+    const funded = relayerHeld > 0n && (share > 0n ? relayerHeld >= share / 2n : true);
+    // Base is safe to wall from here only when what the relayer holds there is
+    // already one chain's share — its own wallet splitting, or a site that has
+    // bridged the other eight out. A whole allocation sitting on Base waits for
+    // the site (initialize, or the admin backfill) to split it; nothing here
+    // can, and a wall with a budget the live relay may not honour is a bet
+    // with eight chains' worth of supply.
+    const split = relayerHeld <= BASE_SHARE + BASE_SHARE / 100n;
+    const wallSafe = c.id !== HOME_CHAIN || operator || split;
+    const wallBudget = c.id !== HOME_CHAIN ? relayerHeld
+      : operator && share > 0n ? share
+        : split ? relayerHeld : BASE_SHARE;
+    const done = deployed && hooked && hookless;
     const next = !deployed ? 'deploy'
-      : deployed && hooked && hookless ? null
-        : !address ? 'connect'
-          : !funded ? 'move' : 'wall';
+      : done ? null
+        : v3 ? 'initialize'
+          : funded && wallSafe ? 'wall'
+            : operator ? 'move'
+              : 'allocation';
     // What the relayer must be able to pay for on this chain, not just what it
     // holds. Every remaining step here — the deploy of the CA, and the wall that
     // opens both pools — is the relayer's own transaction paid from the
@@ -1113,12 +1169,13 @@ async function apiSeedState(ca, address) {
       relayerGas: num(gas), relayerNeeds: num(need != null && quoted.has(c.id) ? (gas ?? 0n) + short : need),
       shortfallSource: quoted.has(c.id) ? 'site' : 'estimated',
       relayerShortWei: short > 0n ? short.toString() : null,
-      deployed, hooked, hookless, funded,
-      done: deployed && hooked && hookless, next };
+      relayerHeld: num(relayerHeld), wallBudgetWei: wallBudget > 0n ? wallBudget.toString() : null, wallSafe,
+      deployed, hooked, hookless, funded, done, next };
   }));
 
   return jsonSafe({
-    token, relayer: RELAYER, needsWallet: !address,
+    token, relayer: RELAYER, needsWallet: !who, operator, v3, launchHash,
+    curveAllocation: num(curveAlloc), relayerBase: num(relayerBase),
     held: num(held), share: num(share), shareWei: share.toString(),
     chains: rows, complete: rows.every((r) => r.done),
     remaining: rows.filter((r) => !r.done).map((r) => r.short),
@@ -1134,12 +1191,20 @@ async function apiSeedState(ca, address) {
  * mints into the token contract, so bridging ahead of the deploy destroys
  * supply that can never be minted. That mistake cost 269 million tokens once.
  */
-async function txSeed({ ca, chain, from, amountWei, amount }) {
+async function txSeed({ ca, chain, from, amountWei, amount, donate }) {
   const token = getAddress(ca);
   const c = chainById(chain);
   if (!c) throw new Error(`unknown chain ${chain}`);
   const home = chainById(HOME_CHAIN);
   const who = getAddress(from);
+  // The float that seeds a chain is the relayer's allocation, minted to it at
+  // launch. Anyone else's balance is their position, and building a burn of it
+  // here is how a creator's ape went out 24M at a time under the name of a
+  // "share". Only the relayer's own wallet splits from here — or a holder who
+  // says, on a button that says it, that they want to donate.
+  if (who !== getAddress(RELAYER) && donate !== true) {
+    throw new Error('the seeding float is the relayer\'s allocation, not your tokens — nothing to sign here');
+  }
 
   // The caller fixes the share once and passes it as wei on every leg. Deriving
   // it here per chain takes a ninth of a balance that the previous leg just
@@ -1632,7 +1697,7 @@ const routes = {
   },
   '/api/pending': (q) => apiPending(q.get('address'), q.get('lookback'), q.get('chain')),
   '/api/pools': (q) => apiPools(q.get('ca'), q.get('chain')),
-  '/api/seedstate': (q) => apiSeedState(q.get('ca'), q.get('address')),
+  '/api/seedstate': (q) => apiSeedState(q.get('ca'), q.get('address'), q.get('hash')),
   // Name and symbol off the contract, logo off the site's index: a CA seeded in
   // a later session has no launch form to read them from, and the remote deploy
   // cannot be made without them.

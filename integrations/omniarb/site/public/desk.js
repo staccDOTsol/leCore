@@ -19,7 +19,7 @@ const S = {
   sort: { key: 'mcap', dir: 'desc' },
   supplyMiss: new Set(), liveChains: new Set(), polledChains: [], stream: null, offered: new Set(),
   seedStop: false, seedRunning: false,
-  seedShareWei: null, fundedThisRun: new Map(),
+  seedShareWei: null, fundedThisRun: new Map(), deployTries: new Map(),
   sel: null, venues: [], beTok: null, dec: 18,
   charts: null, chartHours: 24, chartType: '15m', hiddenChains: new Set(), chartBusy: false,
   size: 50, bridged: true, hookless: true,
@@ -1816,6 +1816,7 @@ function mountLaunch() {
     const r = await C.apiPost('/api/launched', { hash: done[0].hash });
     log(`launched ${r.token}`, 'acc');
     $('lnSeedCa').value = r.token;
+    S.launchHash = { ca: r.token, hash: r.hash ?? done[0].hash };
     S.launchMeta = { name, symbol, tagline: $('lnTagline').value.trim(), logoURI: meta.logoURI };
     discover();
     // Straight into seeding. A token on one chain is not a launch on this thing.
@@ -1835,7 +1836,18 @@ function mountLaunch() {
     const [act, id] = b.dataset.seed.split(':');
     if (act === 'run') { guard(() => runSeed($('lnSeedCa').value.trim())); return; }
     if (act === 'stop') { S.seedStop = true; log('stopping after this step', 'warn'); return; }
-    guard(() => seedChain(Number(id), $('lnSeedCa').value.trim()));
+    const ca = $('lnSeedCa').value.trim();
+    if (act === 'donate') { guard(() => seedChain(Number(id), ca, { donate: true })); return; }
+    if (act === 'fund') {
+      guard(async () => {
+        const st = S.seed?.chains?.find((x) => x.id === Number(id));
+        if (!st?.relayerShortWei) { log(`${C.byId[Number(id)]?.short}: relayer is not short there`); return; }
+        await fundRelayer(Number(id), (BigInt(st.relayerShortWei) * 12n) / 10n);
+        await loadSeedState(ca);
+      });
+      return;
+    }
+    guard(() => seedChain(Number(id), ca));
   });
 }
 
@@ -1852,7 +1864,8 @@ async function loadSeedState(ca) {
   S.seedCa = ca;
   paintSeed();
   try {
-    S.seed = await C.api('/api/seedstate', { ca, address: W.address || null });
+    const hash = S.launchHash?.ca?.toLowerCase() === ca.toLowerCase() ? S.launchHash.hash : null;
+    S.seed = await C.api('/api/seedstate', { ca, address: W.address || null, hash });
   } catch (e) {
     S.seed = null;
     log('seed state failed: ' + e.message, 'down');
@@ -1862,13 +1875,19 @@ async function loadSeedState(ca) {
 }
 
 /** One chain, one step forward. Returns true when that chain is finished. */
-async function seedChain(chainId, ca) {
+async function seedChain(chainId, ca, { donate = false } = {}) {
   const c = C.byId[chainId];
-  const st = (S.seed?.chains ?? []).find((x) => x.id === chainId);
-  if (!st) return false;
+  const d = S.seed;
+  const st = (d?.chains ?? []).find((x) => x.id === chainId);
+  if (!st) return null;
   if (st.done) return true;
 
   if (!st.deployed) {
+    // Twice per chain per run. A deploy the relayer keeps refusing — reverting,
+    // or out of gas after its own top-up — is not going to land on the third ask.
+    const tries = (S.deployTries.get(chainId) ?? 0) + 1;
+    if (tries > 2) { log(`${c.short}: deploy asked for twice already — leaving it for the next run`, 'warn'); return null; }
+    S.deployTries.set(chainId, tries);
     const meta = S.launchMeta ?? await recoverLaunchMeta(ca);
     log(`${c.short}: asking the relayer to deploy the CA…`);
     const r = await C.apiPost('/api/relay', { action: 'deploy', chainId, token: ca,
@@ -1881,40 +1900,69 @@ async function seedChain(chainId, ca) {
       const p = await C.api('/api/pools', { ca, chain: chainId }).catch(() => null);
       if (p?.deployed) { log(`${c.short}: CA is live`, 'up'); break; }
     }
-  } else if (!st.funded && !(st.hooked && st.hookless)) {
-    // Only ever moved once: the relayer already holding this chain's share is
-    // the check that stops a resumed run handing it another ninth for free.
-    // A single-chain step outside a run has no fixed share yet; take the one on
-    // screen rather than letting the server derive a fresh, smaller one.
-    S.seedShareWei ??= (S.seed?.shareWei && S.seed.shareWei !== '0') ? S.seed.shareWei : null;
-    if (!S.seedShareWei) throw new Error('no float on Base to split — connect the launching wallet');
+  } else if (d.v3 && !S.seedNoInit && !donate) {
+    // One signature was the launch. The relayer holds this token's curve supply
+    // for every destination and its pool allocation, and `initialize` on a chain
+    // is deploy, allocation, curve and pools in one call — the same call is the
+    // resume. Nobody signs anything here.
+    log(`${c.short}: asking the relayer to initialize — allocation, curve, pools…`);
+    const r = await C.apiPost('/api/relay', { action: 'initialize', token: ca, chainId,
+      launchHash: d.launchHash ?? undefined });
+    if (/bad action/i.test(String(r.error ?? ''))) {
+      // The site's code has it; its deployment does not yet. Until it does, the
+      // only pools that can open are the ones the relayer already holds float for.
+      S.seedNoInit = true;
+      log('omnichain.family has not shipped `initialize` yet — only walling where the relayer already holds this token', 'warn');
+      return seedChain(chainId, ca);
+    }
+    if (r.error) throw new Error(r.error);
+    const pools = (r.pools ?? []).map((p) =>
+      `${p.label ?? p.symbol ?? '?'} ${p.seeded ? 'ok' : p.skipped ? 'skipped' : p.error ?? '—'}`).join(', ');
+    log(`${c.short}: deploy ${brief(r.deploy)} · allocation ${brief(r.allocation)} · curve ${brief(r.curve)}` +
+        (pools ? ` · ${pools}` : ''), r.complete ? 'up' : undefined);
+    await sleep(6000);
+  } else if (!st.funded && (st.next === 'move' || donate)) {
+    // The relayer's own wallet splitting its own allocation, or a holder who
+    // pressed the button that says "donate". Nobody else's balance is a float.
+    S.seedShareWei ??= (d?.operator && d.shareWei && d.shareWei !== '0') ? d.shareWei : null;
     const tx = await C.apiPost('/api/tx/seed', { ca, chain: chainId, from: W.address,
-      amountWei: S.seedShareWei });
+      amountWei: S.seedShareWei ?? undefined, donate });
+    if (tx.error) throw new Error(tx.error);
     // Log what the server actually built, not what this end believed it asked
     // for: those two disagreeing is how three chains got three different splits
     // while every line said the same number.
-    log(`${c.short}: moving ${C.fmtNum(tx.amount, 6)} to the relayer…`);
+    log(`${c.short}: ${donate ? 'donating' : 'moving'} ${C.fmtNum(tx.amount, 6)} to the relayer…`);
     const done = await runSteps(tx.steps);
     if (!done.length) throw new Error('cancelled');
     if (chainId !== C.HOME_CHAIN) await requestMintFor(C.HOME_CHAIN, done[0].hash);
+  } else if (!st.funded) {
+    log(`${c.short}: the relayer holds none of this token here — its allocation is on Base and only ` +
+        'omnichain.family can bridge it out (initialize / admin backfill). nothing to sign', 'warn');
+    return null;
+  } else if (st.wallSafe === false) {
+    log(`${c.short}: the relayer holds the whole allocation here (${C.fmtNum(st.relayerHeld, 4)}) — a wall now would spend ` +
+        'all of it on this chain. waiting for omnichain.family to split it across the nine', 'warn');
+    return null;
   } else {
-    log(`${c.short}: opening pools…`);
-    const r = await C.apiPost('/api/relay', { action: 'wall', chainId, token: ca });
+    // Only what was sent here for this chain: a wall with no budget spends every
+    // token the relayer holds on the chain, and on Base that is the whole
+    // allocation for all nine.
+    const wall = { action: 'wall', chainId, token: ca, tokenBudget: st.wallBudgetWei ?? undefined };
+    log(`${c.short}: opening pools from ${C.fmtNum(st.relayerHeld, 6)} the relayer holds…`);
+    const r = await C.apiPost('/api/relay', wall);
     log(`${c.short}: hooked ${r.hooked?.ok ? 'ok' : r.hooked?.reason ?? '—'}, ` +
         `hookless ${r.hookless?.ok ? 'ok' : r.hookless?.reason ?? '—'}`);
 
-    // "relayer short on X" is not a failure to retry: nothing changes until
-    // somebody sends it gas, so the loop would spin here forever otherwise.
+    // "relayer short on X" is not a failure to retry: nothing changes until it
+    // gets gas. The relayer moves its own Base gas out over Relay — once per
+    // chain per run, because a second shortfall means something else is wrong.
     const short = shortfallOf(r.hooked?.reason) ?? shortfallOf(r.hookless?.reason);
-    // Twice per chain per run: gas moves between the estimate and the send, so
-    // one top-up can land just short. Beyond that something else is wrong and
-    // spending more will not fix it.
     const tries = S.fundedThisRun.get(chainId) ?? 0;
-    if (short && tries < 2) {
+    if (short && tries < 1) {
       S.fundedThisRun.set(chainId, tries + 1);
-      if (await fundRelayer(chainId, short)) {
+      if (await relayerSelfFund(ca, c.short)) {
         await sleep(3000);
-        const again = await C.apiPost('/api/relay', { action: 'wall', chainId, token: ca });
+        const again = await C.apiPost('/api/relay', wall);
         log(`${c.short}: retry — hooked ${again.hooked?.ok ? 'ok' : again.hooked?.reason ?? '—'}, ` +
             `hookless ${again.hookless?.ok ? 'ok' : again.hookless?.reason ?? '—'}`);
       }
@@ -1933,6 +1981,39 @@ async function seedChain(chainId, ca) {
     paintSeed();
   }
   return Boolean(p?.deployed && p?.hooked && p?.hookless);
+}
+
+/** One word for a sub-report from `initialize`, whatever shape it came in. */
+function brief(v) {
+  if (v == null) return '—';
+  if (typeof v === 'string') return v;
+  if (v.error) return String(v.error).split('\n')[0];
+  if (v.skipped) return 'skipped';
+  if (v.status) return String(v.status);
+  return v.ok === false ? 'failed' : 'ok';
+}
+
+/**
+ * Ask the relayer to move its own gas out from Base to the chains it is short
+ * on. The launch paid it; Relay carries it; nothing here touches your wallet.
+ */
+async function relayerSelfFund(ca, only = null) {
+  const r = await C.apiPost('/api/relay', { action: 'fundChains', token: ca }).catch((e) => ({ error: e.message }));
+  if (r.error) { log(`relayer self-fund: ${String(r.error).split('\n')[0]}`, 'down'); return false; }
+  if (r.funded) { log('relayer can pay everywhere', 'up'); return true; }
+  let hit = false;
+  for (const s of r.sent ?? []) {
+    if (s.error) { log(`${s.short}: relayer self-fund failed — ${s.error}`, 'down'); continue; }
+    hit = hit || !only || s.short === only;
+    log(`${s.short}: relayer sent itself ${(Number(s.wei) / 1e18).toPrecision(3)} over Relay` +
+        (s.hash ? ` · ${s.hash.slice(0, 10)}…` : ''));
+  }
+  if ((r.sent ?? []).some((s) => s.hash)) {
+    // Relay settles on the far side after the Base transaction confirms.
+    log('waiting for Relay to land…');
+    await sleep(45000);
+  }
+  return hit;
 }
 
 /**
@@ -2017,33 +2098,31 @@ async function runSeed(ca) {
   if (!W.address) { await connect(); if (!W.address) return; }
   S.seedStop = false;
   S.seedRunning = true;
+  S.seedNoInit = false;
   S.fundedThisRun = new Map();
+  S.deployTries = new Map();
   paintSeed();
 
   try {
     const first = await loadSeedState(ca);
     if (!first) return;
 
-    // Fund the relayer before anything else, on every chain that cannot pay.
-    // The deploy is its transaction too, not only the wall, so a dry relayer
-    // blocks the chain from the first step — waiting for a wall to fail before
-    // topping it up means the run never gets far enough to ask.
+    // A dry relayer blocks a chain from its first step — the deploy is its
+    // transaction too, not only the wall. It funds itself from Base, over Relay,
+    // out of what launches paid it; nothing here asks your wallet.
     const broke = first.chains.filter((c) => !c.done && c.relayerShortWei);
     if (broke.length) {
-      log(`relayer cannot pay on ${broke.map((c) => c.short).join(' ')} — topping up first`, 'warn');
-      for (const c of broke) {
-        if (S.seedStop) break;
-        try { await fundRelayer(c.id, (BigInt(c.relayerShortWei) * 12n) / 10n); }
-        catch (e) { log(`${c.short}: top-up failed — ${String(e.message).split('\n')[0]}`, 'down'); }
-      }
+      log(`relayer cannot pay on ${broke.map((c) => c.short).join(' ')} — asking it to move its own gas out from Base`, 'warn');
+      await relayerSelfFund(ca);
       await loadSeedState(ca);
     }
     // Fix the share once. Recomputing it after each move takes a ninth of a
     // shrinking balance and short-changes every later chain.
-    S.seedShareWei = first.shareWei && first.shareWei !== '0' ? first.shareWei : null;
-    if (!S.seedShareWei) { log('this wallet holds no float on Base to split', 'down'); return; }
-    log(`seeding ${ca}: ${first.remaining.length} of 9 chains to go, ` +
-      `${C.fmtNum(first.share, 6)} per chain`, 'acc');
+    S.seedShareWei = first.operator && first.shareWei && first.shareWei !== '0' ? first.shareWei : null;
+    log(`seeding ${ca}: ${first.remaining.length} of 9 chains to go` +
+      (first.v3 ? ' · one-signature launch — the relayer holds the allocation, nothing more to sign'
+        : first.operator ? ` · ${C.fmtNum(first.share, 6)} per chain from the relayer’s own float`
+          : ' · from what the relayer holds; your tokens stay yours'), 'acc');
 
     for (let round = 1; round <= 12 && !S.seedStop; round += 1) {
       const order = [C.HOME_CHAIN, ...C.CHAINS.map((c) => c.id).filter((id) => id !== C.HOME_CHAIN)];
@@ -2053,9 +2132,10 @@ async function runSeed(ca) {
         const row = S.seed?.chains?.find((x) => x.id === id);
         if (!row || row.done) continue;
         try {
-          const ok = await seedChain(id, ca);
+          const r = await seedChain(id, ca);
+          if (r === null) continue;      // nothing this side can move
           moved += 1;
-          if (ok) log(`${C.byId[id].short}: done — both pools open`, 'up');
+          if (r === true) log(`${C.byId[id].short}: done — both pools open`, 'up');
         } catch (e) {
           const m = String(e?.message ?? e);
           if (/user rejected|denied|4001|cancelled/i.test(m)) { S.seedStop = true; log('you cancelled — stopping', 'warn'); break; }
@@ -2065,7 +2145,12 @@ async function runSeed(ca) {
 
       const state = await loadSeedState(ca);
       if (state?.complete) { log('all nine chains seeded — eighteen pools open', 'up'); return; }
-      if (!moved) { log('nothing advanced this pass — stopping', 'warn'); return; }
+      if (!moved) {
+        log(state?.remaining?.length
+          ? `nothing more to do from here — ${state.remaining.join(' ')} wait on the relayer’s allocation`
+          : 'nothing advanced this pass — stopping', 'warn');
+        return;
+      }
       log(`round ${round} done · still to go: ${state?.remaining.join(' ') ?? '?'}`);
       await sleep(4000);
     }
@@ -2083,17 +2168,20 @@ function paintSeed() {
   // Loaded state, not merely a placeholder: paintSeed runs on every refresh
   // tick, long before the first read comes back.
   const d = S.seed?.chains ? S.seed : null;
+  const who = !d ? ''
+    : d.v3 ? ` · one signature: the relayer holds ${C.fmtNum(d.curveAllocation, 3)} of curve supply + the pool allocation on Base — nothing here asks your wallet`
+      : d.operator ? ` · ${C.fmtNum(d.share, 6)} per chain from the relayer’s ${C.fmtNum(d.relayerBase, 6)} on Base`
+        : ` · the relayer holds ${C.fmtNum(d.relayerBase, 6)} on Base for these pools; only it or omnichain.family bridges that out — your tokens stay yours`;
   const head = `<div class="tr" style="grid-template-columns:minmax(0,1fr) auto;border-bottom:1px solid #1a1f27">
     <div>${!d ? 'reading chain state…'
       : `<b class="${d.complete ? 'up' : 'acc'}">${d.complete ? 'complete' : `${d.chains.filter((x) => x.done).length}/9 chains done`}</b>` +
-        (d.needsWallet ? '<span class="warn"> · connect a wallet to compute each chain’s share</span>'
-          : d.share > 0 ? `<span class="dim"> · ${C.fmtNum(d.share, 6)} per chain to ${h(C.short(d.relayer))}</span>`
-            : '<span class="warn"> · this wallet holds no float on Base to split</span>')}</div>
+        `<span class="dim">${h(who)}</span>`}</div>
     <div>${S.seedRunning
       ? '<button class="btn small" data-seed="stop:0">stop</button>'
       : '<button class="btn go" data-seed="run:0">seed all nine</button>'}</div>
   </div>`;
 
+  const LABEL = { deploy: 'deploy', initialize: 'initialize', wall: 'wall', move: 'move', allocation: 'waiting on allocation' };
   rows.innerHTML = head + C.CHAINS.map((c) => {
     const st = d?.chains.find((x) => x.id === c.id);
     const mark = (on, label) => `<span class="${on ? 'up' : 'dim'}">${on ? '✓' : '·'} ${label}</span>`;
@@ -2101,13 +2189,19 @@ function paintSeed() {
     const state = !st ? '…'
       : `${mark(st.deployed, 'deployed')} ${mark(st.funded || (st.hooked && st.hookless), 'funded')} ` +
         `${mark(st.hooked, 'hooked')} ${mark(st.hookless, 'hookless')}` +
+        (st.relayerHeld > 0 && !st.done ? ` <span class="dim">· relayer holds ${C.fmtNum(st.relayerHeld, 4)}</span>` : '') +
         (dry ? ` <span class="warn" title="the relayer pays for the deploy and the wall itself">· relayer has ${C.fmtNum(st.relayerGas, 3)} of ${C.fmtNum(st.relayerNeeds, 3)} ${h(st.nativeSymbol)}</span>` : '');
-    return `<div class="tr" style="grid-template-columns:90px 110px minmax(0,1fr) minmax(0,1.6fr)">
+    const acts = [];
+    if (st && !st.done && !S.seedRunning) {
+      if (st.next && st.next !== 'allocation') acts.push(`<button class="btn small" data-seed="step:${c.id}">${h(LABEL[st.next] ?? st.next)}</button>`);
+      if (st.next === 'allocation' && !d.needsWallet) acts.push(`<button class="btn small" data-seed="donate:${c.id}" title="burn a ninth of your own balance to the relayer here — yours to give, never taken">donate my share</button>`);
+      if (dry && !d.needsWallet) acts.push(`<button class="btn small" data-seed="fund:${c.id}" title="send the relayer its shortfall from your wallet, over Relay if you are not on this chain">top up from my wallet</button>`);
+    }
+    return `<div class="tr" style="grid-template-columns:90px 130px minmax(0,1fr) minmax(0,1.6fr)">
       <div style="font-weight:700">${h(c.short)}</div>
-      <div class="${st?.done ? 'up' : st?.next ? 'warn' : 'dim'}">${st ? (st.done ? 'done' : st.next ?? '—') : '…'}</div>
+      <div class="${st?.done ? 'up' : st?.next ? 'warn' : 'dim'}">${st ? (st.done ? 'done' : (LABEL[st.next] ?? st.next ?? '—')) : '…'}</div>
       <div style="font-size:11px">${state}</div>
-      <div>${st && !st.done && !S.seedRunning && st.next !== 'connect'
-        ? `<button class="btn small" data-seed="step:${c.id}">${h(st.next ?? 'retry')}</button>` : ''}</div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap">${acts.join('')}</div>
     </div>`;
   }).join('');
 }

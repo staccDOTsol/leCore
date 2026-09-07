@@ -50,7 +50,8 @@ export const CHAINS = [
     hook: '0x816b4043fe55b9a982c2baefb746c9f541c380cc',
     router: '0x514f4489af1f1f8e5646a79063703eb9681baf8e',
     launcher: '0x62b0bc3ae794fc6a4d7a3809063bf777a9947345',
-    // Hookr launchpad on this chain: a v3 launch gets a curve here.
+    // Hookr launchpad on this chain: a v3 launch gets a curve here. The relay's
+    // relayerFunding quote names the live one per chain; these are the fallback.
     pad: '0xaAed6fab06D53311220F35421Dda5cc6D6e9d6C3',
     factoryFromBlock: 55377450n,
   },
@@ -73,6 +74,7 @@ export const CHAINS = [
     hook: '0xf1233150d60d96f4f9086a535738b53625a980cc',
     router: '0x7fd50b16aaf927359091e80a458282d14a55cb52',
     launcher: null,
+    pad: '0x81aAeD349d54f5006157F80131A847Dd566EDF12',
     factoryFromBlock: 25913286n,
   },
   {
@@ -83,6 +85,7 @@ export const CHAINS = [
     hook: '0x552658e4dcb00c069ab97244489c830a87b380cc',
     router: '0xf9b44eb5c2e9d2f799686b4cb265fa2195cc5f8e',
     launcher: null,
+    pad: '0x223645A29035eDF9788657d7678b8Ea485d0cf63',
     factoryFromBlock: 502103226n,
   },
   {
@@ -93,6 +96,7 @@ export const CHAINS = [
     hook: '0x2e119e43217cee9ba42bb153c4f8a81226d400cc',
     router: '0x58477a34b692e4d2fb4fdd980985c28b39820afd',
     launcher: null,
+    pad: '0x11F2E5d13c13Fd74d6cb06535b256F08AF3acbCC',
     factoryFromBlock: 120168189n,
   },
   {
@@ -103,6 +107,7 @@ export const CHAINS = [
     hook: '0xd14b20a40b605879d250902b024cc41b677500cc',
     router: '0xc7d0ac9b81c588a0a39b926ec0a30b0b0900f89a',
     launcher: null,
+    pad: '0x7904ae09c2Da5F9B9FE46ee841a6478c469B74a6',
     factoryFromBlock: 93288779n,
   },
   {
@@ -113,6 +118,7 @@ export const CHAINS = [
     hook: '0x03f4051e621ee3f3652adef2c453458a777e40cc',
     router: '0xa609492856d183ed523b9876d2d61ac14575040e',
     launcher: null,
+    pad: '0xbc103e86bda260559C67207aaC92c116B683F7F5',
     factoryFromBlock: 34651246n,
   },
   {
@@ -123,6 +129,7 @@ export const CHAINS = [
     hook: '0xb8dd684f503c3386595d4a8886f29e0388b100cc',
     router: '0x6045be984284b77545ffe80cc898eb598c613054',
     launcher: null,
+    pad: '0x223645A29035eDF9788657d7678b8Ea485d0cf63',
     factoryFromBlock: 31944078n,
   },
   {
@@ -133,6 +140,7 @@ export const CHAINS = [
     hook: '0xe89ab12a7dca7b4cb269002826dab40b04d440cc',
     router: '0xf2a932a2eb170ee9ce6550b43316fa13209d1521',
     launcher: null,
+    pad: '0xcb4CbBf0952cAe76fB252d4B71D0b6A83E7a49E4',
     factoryFromBlock: 102273109n,
   },
 ];

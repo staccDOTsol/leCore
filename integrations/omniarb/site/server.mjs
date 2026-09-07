@@ -454,7 +454,7 @@ async function apiCurve(ca, sizeEth, sizeTok, chain) {
   const pc = publicClient(on);
   // Each chain's own launchpad, where it has one. Reading Base's pad for a
   // Robinhood curve answered every chain with Base's numbers.
-  const pad = on.pad ? getAddress(on.pad) : null;
+  const pad = padFor(on);
   const read = (fn, args = []) => (pad
     ? pc.readContract({ address: pad, abi: PAD_ABI, functionName: fn, args }).catch(() => null)
     : Promise.resolve(null));
@@ -491,7 +491,7 @@ async function apiCurve(ca, sizeEth, sizeTok, chain) {
   }
 
   return jsonSafe({
-    address: token, onCurve, graduated: Boolean(pad) && !onCurve, pad, chainId: on.id,
+    address: token, onCurve, graduated: Boolean(pad) && !onCurve && (held ?? 0n) > 0n, pad, chainId: on.id,
     priceNative: num(price),
     curveSupply: num(curveSupply),
     padHolds: num(held),
@@ -1023,6 +1023,7 @@ async function apiRelay(body) {
   if (action === 'launcher') return apiLauncher();
   if (action === 'relayerFunding') {
     const r = await relayPost({ action, token: body.token ? getAddress(body.token) : undefined });
+    if (r.ok) notePads(r.data);
     return { ...r.data, httpOk: r.ok, status: r.status };
   }
   if (action === 'fundChains') {
@@ -1067,6 +1068,18 @@ async function apiRelay(body) {
 //
 // The float goes to the RELAYER, not to the launcher: the relayer is what opens
 // the pools, and it can only open them from what it holds.
+
+// Launchpads per chain, as the relay last reported them. The site deploys pads
+// as it goes and its relayerFunding quote names the live one for each chain, so
+// that answer wins over the address baked into the chain table.
+const PADS = new Map();
+function notePads(funding) {
+  for (const row of funding?.chains ?? []) {
+    const pad = row?.curve?.pad;
+    if (row?.chainId && /^0x[0-9a-fA-F]{40}$/.test(pad ?? '')) PADS.set(Number(row.chainId), getAddress(pad));
+  }
+}
+const padFor = (c) => PADS.get(c.id) ?? (c.pad ? getAddress(c.pad) : null);
 
 // The pool allocation every launch mints to the relayer on Base, and one chain's
 // share of it. What the relayer holds on Base above this is eight other chains'.
@@ -1137,9 +1150,10 @@ async function apiSeedState(ca, address, hash) {
     const relayerHeld = deployed ? await balanceOf(c, RELAYER).catch(() => 0n) : 0n;
     // A v3 launch is also a curve on every chain that has a launchpad. Only
     // Base and Robinhood have one today; the rest read as "no pad", not "no curve".
-    const curve = !c.pad ? null
+    const pad = padFor(c);
+    const curve = !pad ? null
       : !deployed ? false
-        : await publicClient(c).readContract({ address: getAddress(c.pad), abi: PAD_ABI,
+        : await publicClient(c).readContract({ address: pad, abi: PAD_ABI,
             functionName: 'currentCurvePrice', args: [token] }).then((p) => p > 0n).catch(() => false);
     const funded = relayerHeld > 0n && (share > 0n ? relayerHeld >= share / 2n : true);
     // Base is safe to wall from here only when what the relayer holds there is
@@ -1181,7 +1195,7 @@ async function apiSeedState(ca, address, hash) {
       shortfallSource: quoted.has(c.id) ? 'site' : 'estimated',
       relayerShortWei: short > 0n ? short.toString() : null,
       relayerHeld: num(relayerHeld), wallBudgetWei: wallBudget > 0n ? wallBudget.toString() : null, wallSafe,
-      deployed, hooked, hookless, curve, pad: c.pad ?? null, funded, done, next };
+      deployed, hooked, hookless, curve, pad, funded, done, next };
   }));
 
   return jsonSafe({

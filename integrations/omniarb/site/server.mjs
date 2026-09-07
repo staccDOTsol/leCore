@@ -1718,6 +1718,99 @@ async function txFundRelayer({ chain, amountWei, from, prefer, origin, recipient
   throw new Error(`no route to fund the relayer on ${c.name} — ${tried.join(' · ')}`);
 }
 
+/**
+ * Every v4 pool this token has on this chain, whatever it is paired with.
+ *
+ * fastPools only ever looks at the native pair, because that is all a launch
+ * used to open. A v3 launch opens a curve and then pools against OMNI, the
+ * chain's stables and ten memecoins, so counting the native pair reported
+ * fourteen where the truth was several times that — and no table of quote
+ * addresses kept here would stay right, since the memecoins are whatever
+ * Birdeye ranked that hour.
+ *
+ * The PoolManager says it exactly. Initialize carries currency0 and currency1
+ * indexed, so asking for both positions is the whole census: every quote, every
+ * hook, no list to maintain.
+ */
+const V4_INITIALIZE_TOPIC = '0xdd466e674ea557f56295e2d0218a125ea4b4f0f6f3307b95f85e6110838d6438';
+const _census = new Map();
+
+async function poolsOfToken(c, token) {
+  const key = `${c.id}:${token.toLowerCase()}`;
+  const hit = _census.get(key);
+  if (hit && Date.now() - hit.at < 60_000) return hit.pools;
+
+  const asTopic = `0x${'0'.repeat(24)}${token.slice(2).toLowerCase()}`;
+  const pc = publicClient(c);
+  // No pool for a launched token predates the factory that launched it, and on
+  // the two chains Etherscan does not index this is walked in chunks over RPC —
+  // from block zero that is a thousand requests and a request that never
+  // returns. The floor is the only thing that keeps it cheap.
+  const from = c.factoryFromBlock ?? 0n;
+  // Ask the node outright first. Eight of the nine answer a full-range
+  // eth_getLogs on an indexed topic in under a second, which beats both the
+  // chunked walk and Etherscan; the chunking is there for the one that will
+  // not (Linea refuses the range) and for a node that is having a bad day.
+  const scan = async (topics) => {
+    const params = [{ address: getAddress(c.poolManager), topics,
+      fromBlock: `0x${from.toString(16)}`, toBlock: 'latest' }];
+    try {
+      const logs = await pc.request({ method: 'eth_getLogs', params });
+      if (Array.isArray(logs)) return logs;
+    } catch { /* range refused, or a node that does not index this */ }
+    return getLogsChunked(pc, { address: getAddress(c.poolManager), topics,
+      fromBlock: from, toBlock: 99_999_999n }, 500_000n).catch(() => []);
+  };
+  const [asOne, asZero] = await Promise.all([
+    scan([V4_INITIALIZE_TOPIC, null, null, asTopic]),
+    scan([V4_INITIALIZE_TOPIC, null, asTopic, null]),
+  ]);
+
+  const word = (data, i) => `0x${String(data).slice(2 + 64 * i, 2 + 64 * (i + 1))}`;
+  const pools = [];
+  const seen = new Set();
+  for (const [logs, tokenIsOne] of [[asOne, true], [asZero, false]]) {
+    for (const l of logs) {
+      const id = l.topics?.[1];
+      if (!id || seen.has(id)) continue;
+      seen.add(id);
+      const other = `0x${(tokenIsOne ? l.topics[2] : l.topics[3]).slice(26)}`;
+      const hooks = `0x${word(l.data, 2).slice(26)}`;
+      pools.push({ poolId: id, quote: getAddress(other), hooks: getAddress(hooks),
+        native: /^0x0{40}$/i.test(other), viaOmniRouter: hooks.toLowerCase() === c.hook.toLowerCase(),
+        fee: Number(BigInt(word(l.data, 0))) });
+    }
+  }
+  _census.set(key, { at: Date.now(), pools });
+  return pools;
+}
+
+/**
+ * The same census across all nine chains, which is what the board counts with.
+ */
+async function apiPoolCensus(ca) {
+  const token = getAddress(ca);
+  const rows = await Promise.all(CHAINS.map(async (c) => {
+    // A chain that will not answer in time reports as unread, not as empty: a
+    // board that quietly turns a slow node into "no pools" is worse than one
+    // that says it does not know yet.
+    const pools = await Promise.race([
+      poolsOfToken(c, token).catch(() => null),
+      new Promise((r) => setTimeout(() => r(null), 25_000)),
+    ]);
+    if (!pools) return [c.id, { count: null, hooked: false, hookless: false, quotes: 0 }];
+    const nativeHooked = pools.some((p) => p.native && p.viaOmniRouter);
+    const nativeHookless = pools.some((p) => p.native && !p.viaOmniRouter);
+    return [c.id, { count: pools.length, hooked: nativeHooked, hookless: nativeHookless,
+      quotes: new Set(pools.map((p) => p.quote.toLowerCase())).size,
+      pools: pools.map((p) => ({ quote: p.quote, hooked: p.viaOmniRouter, native: p.native })) }];
+  }));
+  const chains = Object.fromEntries(rows);
+  return jsonSafe({ token, chains,
+    total: rows.reduce((a, [, v]) => a + (v.count ?? 0), 0),
+    live: rows.filter(([, v]) => (v.count ?? 0) > 0).length });
+}
+
 /** Which of a chain's two pools are actually open — the check the relay's answer needs. */
 async function apiPools(ca, chain) {
   const token = getAddress(ca);
@@ -2079,6 +2172,7 @@ const routes = {
   },
   '/api/pending': (q) => apiPending(q.get('address'), q.get('lookback'), q.get('chain')),
   '/api/pools': (q) => apiPools(q.get('ca'), q.get('chain')),
+  '/api/poolcensus': (q) => apiPoolCensus(q.get('ca')),
   '/api/seedstate': (q) => apiSeedState(q.get('ca'), q.get('address'), q.get('hash')),
   '/api/launchready': (q) => apiLaunchReady(q.get('token')),
   '/api/queue': (q) => apiQueue(q.get('chain'), q.get('address')),

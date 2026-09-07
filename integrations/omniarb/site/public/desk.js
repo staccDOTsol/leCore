@@ -576,43 +576,36 @@ function mountBoard() {
  * are computable, so this needs no event scan.
  */
 async function poolCensus(tokens) {
-  S.poolScan += C.CHAINS.length;
+  // The board used to count the native pair and nothing else — two pools per
+  // chain, eighteen at most — because that is all a launch opened when it was
+  // written. A launch now opens a curve and then pools against OMNI, the
+  // chain's stables and whatever Birdeye ranked that hour, so counting the
+  // native pair reported fourteen where the real number was twenty-four. No
+  // table of quote addresses kept here would stay right for a day; the server
+  // reads the PoolManager's own Initialize logs, which name every pair.
+  const queue = [...tokens];
+  S.poolScan += queue.length;
   paintBoard();
-  await Promise.all(C.CHAINS.map(async (ch) => {
-    const calls = [];
-    for (const t of tokens) {
-      for (const hooks of [ch.hook, '0x0']) {
-        calls.push({ method: 'eth_call',
-          params: [{ to: ch.poolManager, data: C.extsloadData(C.poolStateSlot(C.poolIdFor(t.address, hooks))) }, 'latest'] });
+  const worker = async () => {
+    for (let t = queue.shift(); t; t = queue.shift()) {
+      const r = await C.api('/api/poolcensus', { ca: t.address }).catch(() => null);
+      if (r?.chains) {
+        S.pools[t.address] = Object.fromEntries(Object.entries(r.chains)
+          .map(([id, v]) => [Number(id), v]));
       }
+      S.poolScan -= 1;
+      paintBoard();
     }
-    const r = await batchWithRetry(ch, calls);
-    if (r) {
-      tokens.forEach((t, i) => {
-        const cur = { ...(S.pools[t.address] || {}) };
-        cur[ch.id] = {
-          hooked: Boolean(C.decodeSlot0(r[i * 2])),
-          hookless: Boolean(C.decodeSlot0(r[i * 2 + 1])),
-        };
-        S.pools[t.address] = cur;
-      });
-    }
-    S.poolScan -= 1;
-    paintBoard();
-  }));
+  };
+  await Promise.all(Array.from({ length: 5 }, worker));
 }
 
-/** Open pools for one CA, summed over the chains that have answered. */
+/** Every open pool for one CA, over the chains that answered. */
 function poolCountOf(t) {
   const m = S.pools[t.address];
   if (!m) return null;
   let n = 0;
-  for (const c of C.CHAINS) {
-    const p = m[c.id];
-    if (!p) continue;
-    if (p.hooked) n += 1;
-    if (p.hookless) n += 1;
-  }
+  for (const c of C.CHAINS) n += m[c.id]?.count ?? 0;
   return n;
 }
 

@@ -35,10 +35,15 @@ export async function getLogs({ chainId, address, topics = [], fromBlock, toBloc
       address, fromBlock: String(BigInt(fromBlock ?? 0n)), toBlock: String(BigInt(toBlock ?? 99999999n)),
       page: String(page), offset: '1000', apikey: KEY,
     });
-    topics.forEach((t, i) => { if (t) q.set(`topic${i}`, Array.isArray(t) ? t[0] : t); });
-    // Etherscan wants the join operator spelled out for every adjacent pair.
-    for (let i = 1; i < topics.length; i += 1) {
-      if (topics[i] && topics[i - 1]) q.set(`topic${i - 1}_${i}_opr`, 'and');
+    const set = [];
+    topics.forEach((t, i) => { if (t) { q.set(`topic${i}`, Array.isArray(t) ? t[0] : t); set.push(i); } });
+    // Etherscan wants the join operator spelled out, and for the pair it is
+    // actually joining — not the adjacent one. A filter on topic0 and topic3
+    // with only adjacent operators emitted carries no operator at all, and the
+    // topic filter is then ignored: every pool on the chain comes back, or
+    // nothing does. Every set pair, explicitly.
+    for (let a = 0; a < set.length; a += 1) {
+      for (let b = a + 1; b < set.length; b += 1) q.set(`topic${set[a]}_${set[b]}_opr`, 'and');
     }
 
     const r = await fetch(`${BASE}?${q}`, { signal: AbortSignal.timeout(25_000) });

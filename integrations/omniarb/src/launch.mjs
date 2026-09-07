@@ -20,10 +20,12 @@
 // recorded before it is attempted, so a failure part-way leaves a record of
 // exactly which chains still owe a mint or a wall.
 
-import { keccak256, encodeAbiParameters, parseEther, formatEther, formatUnits, decodeEventLog } from 'viem';
+import { keccak256, encodeAbiParameters, parseEther, formatEther, formatUnits, decodeEventLog, getAddress } from 'viem';
 import { readFileSync } from 'node:fs';
 import { basename } from 'node:path';
-import { API, CHAINS, chainById, HOME_CHAIN, NATIVE, PORTAL, PORTAL_ABI, ERC20_ABI, PAD, PAD_ABI, OMNI_LAUNCHED_EVENT } from './config.mjs';
+import { API, CHAINS, chainById, HOME_CHAIN, NATIVE, PORTAL, PORTAL_ABI, ERC20_ABI, PAD, PAD_ABI,
+  POOL_FEE, POOL_TICK_SPACING, OMNI_LAUNCHED_EVENT } from './config.mjs';
+import { poolId, readPoolState } from './discovery.mjs';
 import { publicClient, walletClient } from './chain.mjs';
 
 /** Flat fee the launcher charges, on top of the creator's own buy. */
@@ -137,6 +139,64 @@ export async function wallChain({ chainId, token, sqrtPriceX96 = null }) {
     hooked: hooked ?? { ok: false, reason: 'not reported by relay' },
     hookless: hookless ?? { ok: false, reason: 'not reported by relay' },
   };
+}
+
+/**
+ * Which of this chain's two pools are actually open, read from the chain.
+ *
+ * The relay's reply cannot be trusted for this in either direction: it returned
+ * "HTTP request failed" for Base where the pool did open, and success-shaped
+ * transaction hashes for Arbitrum that opened nothing (both mined, both
+ * status=success, neither created a pool). On-chain state is the only answer.
+ */
+export async function poolsOpen(chain, token) {
+  const key = (hooks) => ({
+    currency0: NATIVE, currency1: getAddress(token),
+    fee: POOL_FEE, tickSpacing: POOL_TICK_SPACING, hooks: getAddress(hooks),
+  });
+  const check = async (hooks) => {
+    try {
+      const st = await readPoolState(chain, poolId(key(hooks)));
+      return Boolean(st?.initialized);
+    } catch { return false; }
+  };
+  const [hooked, hookless] = await Promise.all([check(chain.hook), check(NATIVE)]);
+  return { hooked, hookless, both: hooked && hookless };
+}
+
+/**
+ * Keep asking until the pools are actually there.
+ *
+ * The wall service is unreliable rather than refusing: the same chain returns
+ * "not an OmniFactory token", then "relayer short", then a timeout, across
+ * identical calls — and sometimes opens the pools anyway. So this drives to the
+ * observed state instead of reading the reply: check, ask, wait, check again.
+ */
+export async function wallUntilOpen({ chain, token, sqrtPriceX96, attempts = 4, onStep = () => {} }) {
+  let last = null;
+  for (let i = 0; i < attempts; i += 1) {
+    const before = await poolsOpen(chain, token);
+    if (before.both) return { ...before, attempts: i, reason: 'already open' };
+
+    last = await wallChain({ chainId: chain.id, token, sqrtPriceX96 }).catch((e) => ({
+      hooked: { ok: false, reason: e.message.slice(0, 90) },
+      hookless: { ok: false, reason: e.message.slice(0, 90) },
+    }));
+
+    // Give the relayer's transactions time to land before believing anything.
+    await new Promise((r) => setTimeout(r, 6000));
+    const after = await poolsOpen(chain, token);
+    if (after.both) return { ...after, attempts: i + 1, reason: 'opened' };
+    if (after.hooked !== before.hooked || after.hookless !== before.hookless) {
+      onStep(`${chain.short}: progress — hooked ${after.hooked}, hookless ${after.hookless}`);
+    }
+    if (i < attempts - 1) {
+      onStep(`${chain.short}: retry ${i + 1}/${attempts - 1} (${last.hooked.reason || last.hookless.reason || 'no pool yet'})`.slice(0, 150));
+      await new Promise((r) => setTimeout(r, 4000 * (i + 1)));
+    }
+  }
+  const final = await poolsOpen(chain, token);
+  return { ...final, attempts, reason: last?.hooked?.reason || last?.hookless?.reason || 'unknown' };
 }
 
 /** The Base curve price, which every pool is opened at. */
@@ -340,9 +400,16 @@ export async function seedChain({ account, token, chain, amount, sqrtPriceX96,
   // slice for nothing, and since each run takes a fresh balance/9 that is a
   // compounding giveaway: four resumed runs took a 303M position down to 1.6M
   // while every wall was still failing for an unrelated reason.
+  const open = await poolsOpen(chain, token);
+  if (open.both) {
+    onStep(`${chain.short}: both pools already open — nothing to do`);
+    return { hooked: { ok: true, reason: '' }, hookless: { ok: true, reason: '' }, verified: true };
+  }
   if (await relayerHoldsFloat(chain, token, amount)) {
-    onStep(`${chain.short} already funded with float — walling only`);
-    return wallChain({ chainId: chain.id, token, sqrtPriceX96 });
+    onStep(`${chain.short}: float already there — walling (hooked ${open.hooked}, hookless ${open.hookless})`);
+    const r = await wallUntilOpen({ chain, token, sqrtPriceX96, onStep });
+    return { hooked: { ok: r.hooked, reason: r.hooked ? '' : r.reason },
+      hookless: { ok: r.hookless, reason: r.hookless ? '' : r.reason }, verified: true };
   }
 
   if (chain.id !== HOME_CHAIN) {
@@ -396,7 +463,9 @@ export async function seedChain({ account, token, chain, amount, sqrtPriceX96,
   }
 
   onStep(`opening pools on ${chain.short}`);
-  return wallChain({ chainId: chain.id, token, sqrtPriceX96 });
+  const r = await wallUntilOpen({ chain, token, sqrtPriceX96, onStep });
+  return { hooked: { ok: r.hooked, reason: r.hooked ? '' : r.reason },
+    hookless: { ok: r.hookless, reason: r.hookless ? '' : r.reason }, verified: true };
 }
 
 /** Everything after the Base launch: split the float and seed all nine chains. */

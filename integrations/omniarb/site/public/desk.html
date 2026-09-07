@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
 <title>omniarb desk</title>
 <link rel="icon" href="/mark.svg" />
 <link rel="preconnect" href="https://fonts.googleapis.com" />
@@ -133,6 +133,144 @@
   footer.bot { margin-top: 26px; padding-top: 16px; border-top: 1px solid #1c2027; display: flex;
     flex-wrap: wrap; gap: 12px; justify-content: space-between; font-size: 10.5px; color: #4d545e; }
   .hidden { display: none !important; }
+
+  /* ------------------------------------------------------------- mobile
+     A phone gets one screenful before anything is scrolled, so the top of the
+     page has to be worth it: header, chain strip, tabs, and the hero — with the
+     first rows already visible under them. Everything below reflows from a
+     spreadsheet into stacked rows; a dense grid that needs sideways scrolling to
+     read one number is not a mobile table. */
+  @media (max-width: 760px) {
+    .page { padding-bottom: max(28px, env(safe-area-inset-bottom)); }
+    .wrap { padding: 0 12px; }
+
+    header.top { padding: 14px 0 10px; gap: 10px; }
+    .brand img { width: 34px; height: 34px; border-radius: 8px; }
+    .brand h1 { font-size: 20px; }
+    .brand p { display: none; }
+    header.top .row { gap: 6px; width: 100%; }
+    header.top .pill, header.top .btn { padding: 5px 9px; font-size: 10.5px; }
+    #wallet { margin-left: auto; }
+
+    /* Nine chains in one swipeable strip rather than five rows of cards. */
+    .rail { display: flex; gap: 6px; padding: 10px 0; overflow-x: auto;
+      scroll-snap-type: x proximity; -webkit-overflow-scrolling: touch; }
+    .rail::-webkit-scrollbar { display: none; }
+    .rail { scrollbar-width: none; }
+    .rail .c { flex: 0 0 auto; min-width: 92px; padding: 7px 9px; scroll-snap-align: start; }
+    .rail .kv:nth-of-type(1), .rail .kv:nth-of-type(2) { display: none; }  /* blk + gas: not a phone's job */
+    .rail .kv:nth-of-type(3) { margin-top: 6px; }
+
+    nav.tabs { gap: 0; }
+    nav.tabs button { padding: 10px 12px; font-size: 11.5px; }
+    nav.tabs .sel { display: none; }
+
+    .hero { margin-top: 10px; padding: 12px 13px; gap: 12px; }
+    .heroMark { width: 42px; height: 42px; border-radius: 11px; font-size: 13px; }
+    .heroBody { min-width: 0; flex: 1 1 auto; }
+    .heroName { font-size: 18px; }
+    .heroBody .dim { font-size: 10px; }
+    .heroStats { width: 100%; display: grid; grid-template-columns: 1fr 1fr; gap: 10px 18px; }
+    .heroStats .v { font-size: 16px; }
+    .heroActs { width: 100%; }
+    .heroActs .btn { flex: 1; }
+
+    .cards { grid-template-columns: 1fr 1fr; gap: 8px; padding: 10px 0; }
+    /* On the board the hero already carries the headline number, so these four
+       become a swipeable strip rather than two rows pushing the table off the
+       screen. The chart tab has no hero, so its cards keep the grid. */
+    #tab-board .cards { display: flex; overflow-x: auto; scroll-snap-type: x proximity;
+      -webkit-overflow-scrolling: touch; scrollbar-width: none; }
+    #tab-board .cards::-webkit-scrollbar { display: none; }
+    #tab-board .card { flex: 0 0 auto; min-width: 132px; scroll-snap-align: start; }
+    .card { padding: 10px 11px; }
+    .card .v { font-size: 17px; }
+    .card .k { font-size: 9px; }
+    .card .n { font-size: 9.5px; }
+
+    .row { gap: 8px; }
+    .grow, .row > div[style*="min-width"] { min-width: 0 !important; flex: 1 1 100% !important; }
+    input[type=text], input[type=number], select, textarea { padding: 9px 10px; font-size: 16px; }
+    .panel { padding: 12px 13px; }
+
+    /* Tables become stacked rows. The header row labels columns that no longer
+       exist side by side, so it goes; each row carries its own shape instead. */
+    .table .th { display: none; }
+    .table .tr { grid-template-columns: minmax(0, 1fr) auto !important;
+      row-gap: 3px; column-gap: 10px; padding: 11px 12px; font-size: 12px; }
+    .table .tr > * { min-width: 0; }
+    .table .note { padding: 12px; font-size: 10.5px; }
+
+    /* board: token + price, then pools + 24h, then mcap + liquidity. ca and age
+       are lookup detail, not something to read at a glance on a phone. */
+    .t-board .tr > :nth-child(2), .t-board .tr > :nth-child(3) { display: none; }
+    .t-board .tr > :nth-child(1) { grid-area: 1 / 1; }
+    .t-board .tr > :nth-child(5) { grid-area: 1 / 2; font-weight: 700; }
+    .t-board .tr > :nth-child(4) { grid-area: 2 / 1; }
+    .t-board .tr > :nth-child(6) { grid-area: 2 / 2; }
+    .t-board .tr > :nth-child(7) { grid-area: 3 / 1; text-align: left; }
+    .t-board .tr > :nth-child(8) { grid-area: 3 / 2; }
+
+    /* venues: chain+venue, price, liquidity/fee/tick, reach. */
+    .t-venues .tr > :nth-child(3) { display: none; }             /* native price */
+    .t-venues .tr > :nth-child(1) { grid-area: 1 / 1; }
+    .t-venues .tr > :nth-child(4) { grid-area: 1 / 2; font-weight: 700; }
+    .t-venues .tr > :nth-child(2) { grid-area: 2 / 1; }
+    .t-venues .tr > :nth-child(8) { grid-area: 2 / 2; }          /* gap */
+    .t-venues .tr > :nth-child(5) { grid-area: 3 / 1; text-align: left; }
+    .t-venues .tr > :nth-child(6) { grid-area: 3 / 2; }          /* fee */
+    .t-venues .tr > :nth-child(7) { display: none; }             /* tick */
+    .t-venues .tr > :nth-child(9) { grid-area: 4 / 1 / auto / span 2; }
+
+    /* bag: chain + usd, then native and token. */
+    .t-bag .tr > :nth-child(1) { grid-area: 1 / 1; }
+    .t-bag .tr > :nth-child(3) { grid-area: 1 / 2; font-weight: 700; }
+    .t-bag .tr > :nth-child(2) { grid-area: 2 / 1; text-align: left; }
+    .t-bag .tr > :nth-child(4) { grid-area: 2 / 2; }
+    .t-bag .tr > :nth-child(5) { grid-area: 3 / 2; }
+    .t-bag .tr > :nth-child(6) { grid-area: 3 / 1; padding-left: 0 !important; }
+
+    .t-bridge .tr > :nth-child(1) { grid-area: 1 / 1; }
+    .t-bridge .tr > :nth-child(2) { grid-area: 1 / 2; font-weight: 700; }
+    .t-bridge .tr > :nth-child(3) { grid-area: 2 / 1; text-align: left; }
+    .t-bridge .tr > :nth-child(4) { grid-area: 2 / 2; }
+
+    .t-curve .tr > :nth-child(1) { grid-area: 1 / 1; }
+    .t-curve .tr > :nth-child(2) { grid-area: 1 / 2; }
+    .t-curve .tr > :nth-child(3) { grid-area: 2 / 2; }
+    .t-curve .tr > :nth-child(4) { grid-area: 2 / 1; }
+    .t-curve .btn { padding: 7px 12px; }
+
+    .t-seed .tr > :nth-child(1) { grid-area: 1 / 1; }
+    .t-seed .tr > :nth-child(2) { grid-area: 1 / 2; }
+    .t-seed .tr > :nth-child(3) { grid-area: 2 / 1 / auto / span 2; }
+    .t-seed .tr > :nth-child(4) { grid-area: 3 / 1 / auto / span 2; display: flex; flex-wrap: wrap; gap: 6px; }
+
+    .t-pend .tr > :nth-child(1) { grid-area: 1 / 1; }
+    .t-pend .tr > :nth-child(2) { grid-area: 1 / 2; }
+    .t-pend .tr > :nth-child(3) { grid-area: 2 / 1 / auto / span 2; }
+    .t-pend .tr > :nth-child(4) { grid-area: 3 / 1 / auto / span 2; }
+
+    /* Route cards: the four numbers wrap into a grid instead of one long line. */
+    #rList .panel > .row > div[style*="display:flex"] { width: 100%;
+      display: grid !important; grid-template-columns: 1fr 1fr 1fr 1fr; gap: 8px !important; }
+    #rList .panel > .row > div[style*="display:flex"] .r { text-align: left; }
+
+    .chartbox { padding: 8px 6px 4px; }
+    .legend { gap: 5px; }
+    .legend button { padding: 5px 8px; font-size: 10px; }
+    .tip { min-width: 140px; font-size: 10.5px; padding: 7px 9px; }
+
+    .log { max-height: 220px; font-size: 10.5px; }
+    footer.bot { font-size: 9.5px; gap: 8px; }
+  }
+
+  @media (max-width: 420px) {
+    .cards { grid-template-columns: 1fr 1fr; }
+    .heroStats { gap: 8px 12px; }
+    nav.tabs button { padding: 10px 10px; font-size: 11px; }
+  }
+
 </style>
 </head>
 <body>

@@ -329,7 +329,7 @@ function mountBoard() {
     <div style="padding-bottom:12px">
       <input type="text" id="q" placeholder="filter ticker / name / ca" style="width:100%" />
     </div>
-    <div class="table">
+    <div class="table t-board">
       <div class="th" style="grid-template-columns:${BOARD_COLS}">
         <div>token</div><div>ca</div><div>age</div><div>pools · live</div>
         <div class="r">px (usd)</div><div class="r">24h</div><div class="r">mcap · 9ch</div><div class="r">liq (usd)</div>
@@ -644,9 +644,16 @@ function drawChart() {
   const svg = $('chartSvg');
   if (!svg) return;
   const box = $('chartBox');
-  const W = Math.max(420, box.clientWidth - 28);
-  const H = 380;
-  const pad = { l: 66, r: 62, t: 14, b: 26 };
+  // The chart is drawn at the container's real pixel width, so nothing is
+  // squashed by a viewBox stretch. On a phone the axis gutters have to shrink
+  // with it — 66px of left margin on a 340px canvas leaves no chart.
+  const W = Math.max(300, box.clientWidth - (innerWidth <= 760 ? 12 : 28));
+  const narrow = W < 560;
+  const H = narrow ? 260 : 380;
+  const pad = narrow ? { l: 46, r: 40, t: 12, b: 22 } : { l: 66, r: 62, t: 14, b: 26 };
+  const fs = narrow ? 9 : 10;
+  const gridLines = narrow ? 3 : 4;
+  const timeTicks = narrow ? 2 : 4;
   svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
   svg.setAttribute('height', H);
 
@@ -671,18 +678,18 @@ function drawChart() {
   const path = (pts) => pts.map((p, i) => `${i ? 'L' : 'M'}${X(p.t).toFixed(1)} ${Y(p.c).toFixed(1)}`).join(' ');
 
   const grid = [];
-  for (let i = 0; i <= 4; i += 1) {
-    const v = lo + ((hi - lo) * i) / 4;
+  for (let i = 0; i <= gridLines; i += 1) {
+    const v = lo + ((hi - lo) * i) / gridLines;
     const y = Y(v).toFixed(1);
     grid.push(`<line x1="${pad.l}" y1="${y}" x2="${W - pad.r}" y2="${y}" stroke="#161b22" stroke-width="1"/>`);
     grid.push(`<text x="${pad.l - 8}" y="${y}" text-anchor="end" dominant-baseline="middle" fill="#5f6672"
-      font-size="10" font-family="JetBrains Mono, monospace">${h(C.fmtUsd(v))}</text>`);
+      font-size="${fs}" font-family="JetBrains Mono, monospace">${h(C.fmtUsd(v))}</text>`);
   }
   const ticks = [];
-  for (let i = 0; i <= 4; i += 1) {
-    const t = t0 + ((t1 - t0) * i) / 4;
-    ticks.push(`<text x="${X(t).toFixed(1)}" y="${H - 6}" text-anchor="${i === 0 ? 'start' : i === 4 ? 'end' : 'middle'}"
-      fill="#5f6672" font-size="10" font-family="JetBrains Mono, monospace">${h(C.clock(t))}</text>`);
+  for (let i = 0; i <= timeTicks; i += 1) {
+    const t = t0 + ((t1 - t0) * i) / timeTicks;
+    ticks.push(`<text x="${X(t).toFixed(1)}" y="${H - 6}" text-anchor="${i === 0 ? 'start' : i === timeTicks ? 'end' : 'middle'}"
+      fill="#5f6672" font-size="${fs}" font-family="JetBrains Mono, monospace">${h(C.clock(t))}</text>`);
   }
 
   const area = `${path(d.agg)} L${X(t1).toFixed(1)} ${Y(lo).toFixed(1)} L${X(t0).toFixed(1)} ${Y(lo).toFixed(1)} Z`;
@@ -695,7 +702,7 @@ function drawChart() {
   const endLabels = visible.map((s) => {
     const p = s.points.at(-1);
     return `<text x="${(X(p.t) + 6).toFixed(1)}" y="${Y(p.c).toFixed(1)}" dominant-baseline="middle"
-      fill="${C.byId[s.id].color}" font-size="10" font-family="JetBrains Mono, monospace">${h(s.short)}</text>`;
+      fill="${C.byId[s.id].color}" font-size="${fs}" font-family="JetBrains Mono, monospace">${h(s.short)}</text>`;
   }).join('');
 
   // Chains Birdeye cannot see: one honest dot at the current pool price, no line.
@@ -703,7 +710,7 @@ function drawChart() {
     <circle cx="${(W - pad.r).toFixed(1)}" cy="${Y(s.spotUsd).toFixed(1)}" r="3" fill="#0b0d11"
       stroke="${C.byId[s.id].color}" stroke-width="1.5"/>
     <text x="${(W - pad.r + 7).toFixed(1)}" y="${Y(s.spotUsd).toFixed(1)}" dominant-baseline="middle"
-      fill="#7d8590" font-size="10" font-family="JetBrains Mono, monospace">${h(s.short)} ·pool</text>`).join('');
+      fill="#7d8590" font-size="${fs}" font-family="JetBrains Mono, monospace">${h(s.short)} ·pool</text>`).join('');
 
   const aggEnd = d.agg.at(-1);
   svg.innerHTML = `
@@ -714,13 +721,15 @@ function drawChart() {
     ${endLabels}
     ${spotMarks}
     <text x="${(X(aggEnd.t) + 6).toFixed(1)}" y="${Y(aggEnd.c).toFixed(1)}" dominant-baseline="middle"
-      fill="${C.AGG_COLOR}" font-size="11" font-weight="700" font-family="JetBrains Mono, monospace">agg</text>
+      fill="${C.AGG_COLOR}" font-size="${fs + 1}" font-weight="700" font-family="JetBrains Mono, monospace">agg</text>
     ${ticks.join('')}
     <line id="chCross" x1="0" y1="${pad.t}" x2="0" y2="${H - pad.b}" stroke="#3d4a5c" stroke-width="1" opacity="0"/>
     <g id="chDots"></g>`;
 
   _chartHit = { d, X, Y, pad, W, H, visible, t0, t1 };
   svg.onmousemove = onChartMove;
+  svg.ontouchstart = svg.ontouchmove = (ev) => { onChartMove(ev.touches[0]); ev.preventDefault(); };
+  svg.ontouchend = () => svg.onmouseleave();
   svg.onmouseleave = () => {
     $('chartTip').classList.add('hidden');
     svg.querySelector('#chCross').setAttribute('opacity', '0');
@@ -762,9 +771,13 @@ function onChartMove(e) {
     <div class="t" style="margin:6px 0 0">${a.chains} chain${a.chains === 1 ? '' : 's'} in this bucket</div>`;
   tip.classList.remove('hidden');
   const box = $('chartBox').getBoundingClientRect();
-  const left = e.clientX - box.left + 16;
-  tip.style.left = Math.min(left, box.width - tip.offsetWidth - 12) + 'px';
-  tip.style.top = Math.max(8, e.clientY - box.top - tip.offsetHeight / 2) + 'px';
+  const w = tip.offsetWidth;
+  // Flip to the left of the cursor rather than running off the right edge.
+  const raw = e.clientX - box.left;
+  const left = raw + 16 + w > box.width ? raw - 16 - w : raw + 16;
+  tip.style.left = Math.max(6, Math.min(left, box.width - w - 6)) + 'px';
+  tip.style.top = Math.max(6, Math.min(e.clientY - box.top - tip.offsetHeight / 2,
+    box.height - tip.offsetHeight - 6)) + 'px';
 }
 
 /* ================================================================ venues */
@@ -798,7 +811,7 @@ function mountVenues() {
       <span class="pill">tick gap <b id="vTickGap">—</b></span>
       <span class="pill" id="vWhere">…</span>
     </div>
-    <div class="table">
+    <div class="table t-venues">
       <div class="th" style="grid-template-columns:${VENUE_COLS}">
         <div>chain</div><div>venue</div><div class="r">px (native)</div><div class="r">px (usd)</div>
         <div class="r">liquidity</div><div class="r">fee</div><div class="r">tick</div><div class="r">gap</div><div>reach</div>
@@ -1189,7 +1202,7 @@ function mountCurve() {
           <input type="text" id="cvSlip" value="1000" style="width:100%" /></div>
         <button class="btn go" id="cvQuote">quote</button>
       </div>
-      <div class="table" style="margin-top:14px">
+      <div class="table t-curve" style="margin-top:14px">
         <div class="th" style="grid-template-columns:130px minmax(0,1fr) minmax(0,1fr) 170px">
           <div>venue</div><div class="r">tokens for the buy</div><div class="r">eth for the sell</div><div>act</div>
         </div>
@@ -1311,7 +1324,7 @@ function mountLaunch() {
           <input type="text" id="lnSeedCa" placeholder="0x…" style="width:100%" /></div>
         <button class="btn go" id="lnSeedLoad">read state</button>
       </div>
-      <div class="table" style="margin-top:14px">
+      <div class="table t-seed" style="margin-top:14px">
         <div class="th" style="grid-template-columns:90px 110px minmax(0,1fr) minmax(0,1.6fr)">
           <div>chain</div><div>deployed</div><div>pools</div><div>steps</div>
         </div>
@@ -1468,14 +1481,14 @@ function mountBridge() {
         processed() on the destination. no database.
       </div>
     </div>
-    <div class="table" style="margin-bottom:12px">
+    <div class="table t-bridge" style="margin-bottom:12px">
       <div class="th" style="grid-template-columns:110px minmax(0,1fr) minmax(0,1fr) 120px">
         <div>chain</div><div class="r">token balance</div><div class="r">native</div><div>use as source</div>
       </div>
       <div id="brRows"></div>
       <div class="note" id="brNote">connect a wallet to read balances.</div>
     </div>
-    <div class="table" style="margin-bottom:12px">
+    <div class="table t-pend" style="margin-bottom:12px">
       <div class="th" style="grid-template-columns:150px minmax(0,1fr) minmax(0,1.4fr) 140px">
         <div>burned → owed</div><div class="r">amount</div><div>message</div><div>act</div>
       </div>
@@ -1604,7 +1617,7 @@ function mountBag() {
       <input type="text" id="bagAddr" class="grow" placeholder="wallet 0x… — reads native + token balance on all nine chains" />
       <button class="btn go" id="bagGo">read balances</button>
     </div>
-    <div class="table">
+    <div class="table t-bag">
       <div class="th" style="grid-template-columns:100px minmax(0,1fr) 100px minmax(0,1fr) 100px minmax(0,1.4fr)">
         <div>chain</div><div class="r">native</div><div class="r">usd</div><div class="r">token</div><div class="r">usd</div><div style="padding-left:14px">best exit</div>
       </div>

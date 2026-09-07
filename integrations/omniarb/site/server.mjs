@@ -949,6 +949,29 @@ function launchGate(d, oneSignature) {
   return { failure: null, requiredOnly: d.quoteReady !== true, blocked };
 }
 
+/**
+ * Is this address's nonce queue moving on this chain?
+ *
+ * A chain that refuses one transaction refuses every later one from the same
+ * key, because nonces are ordered. The relayer sat at nonce 210 on Linea for
+ * an hour and a half with 159 transactions queued behind it, so every mint
+ * anyone asked for there was accepted, given a hash, and never mined — which
+ * from the page looked exactly like a slow bridge. Mined against pending says
+ * so in one call.
+ */
+async function apiQueue(chain, address) {
+  const c = chainById(chain);
+  if (!c) throw new Error(`unknown chain ${chain}`);
+  const who = address ? getAddress(address) : getAddress(RELAYER);
+  const pc = publicClient(c);
+  const [mined, pending] = await Promise.all([
+    pc.getTransactionCount({ address: who }),
+    pc.getTransactionCount({ address: who, blockTag: 'pending' }),
+  ]);
+  return { chain: c.short, chainId: c.id, address: who, mined, pending,
+    stuck: Math.max(0, pending - mined), blockedAt: pending > mined ? mined : null };
+}
+
 /** Read the new CA out of a launch receipt, the same way the bot does. */
 async function apiLaunched({ hash }) {
   const c = chainById(HOME_CHAIN);
@@ -1987,6 +2010,7 @@ const routes = {
   '/api/pools': (q) => apiPools(q.get('ca'), q.get('chain')),
   '/api/seedstate': (q) => apiSeedState(q.get('ca'), q.get('address'), q.get('hash')),
   '/api/launchready': (q) => apiLaunchReady(q.get('token')),
+  '/api/queue': (q) => apiQueue(q.get('chain'), q.get('address')),
   // Name and symbol off the contract, logo off the site's index: a CA seeded in
   // a later session has no launch form to read them from, and the remote deploy
   // cannot be made without them.

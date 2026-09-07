@@ -1851,7 +1851,13 @@ function mountLaunch() {
     // Entirely optional: the launch never needs these. They are here because a
     // relayer short of OMNI is a thing an operator may want to fix, and the
     // align leg pays whoever takes it.
-    guard(async () => { await (act === 'stock' ? stockOmni(ch) : alignPools(ch)); await loadReady(); });
+    guard(async () => {
+      // Without this the builder is handed a null address and answers
+      // `Address "null" is invalid` — a bug report, for a missing connection.
+      if (!W.address) { await connect(); if (!W.address) return; }
+      await (act === 'stock' ? stockOmni(ch) : alignPools(ch));
+      await loadReady();
+    });
   });
 
   $('lnSeedRows').addEventListener('click', (e) => {
@@ -2449,7 +2455,17 @@ async function requestMintFor(chainId, hash) {
     const m = await C.api('/api/minted', { chain: dst.id, messageId: r.messageId }).catch(() => null);
     if (m?.processed) { log(`minted on ${r.to}`, 'up'); loadPending(); return; }
   }
-  log(`not minted yet — the burn is on chain and stays re-requestable (message ${C.short(r.messageId)})`, 'warn');
+  // "Not yet" is the wrong story when the relayer's queue on that chain has
+  // stopped moving: the mint was accepted and given a hash, and it will sit
+  // behind the blocked nonce for as long as that lasts.
+  const dst = C.CHAINS.find((c) => c.short === r.to);
+  const q = dst ? await C.api('/api/queue', { chain: dst.id }).catch(() => null) : null;
+  if (q?.stuck) {
+    log(`${r.to}: the relayer has ${q.stuck} transactions stuck behind nonce ${q.blockedAt} — nothing of its own ` +
+      `can land there until that one is replaced. your burn is on chain and stays re-requestable`, 'down');
+  } else {
+    log(`not minted yet — the burn is on chain and stays re-requestable (message ${C.short(r.messageId)})`, 'warn');
+  }
   loadPending();
 }
 

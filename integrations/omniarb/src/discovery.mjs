@@ -14,7 +14,8 @@ import { API, CHAINS, chainById, NATIVE, POOL_FEE, POOL_TICK_SPACING, POOLS_SLOT
   PAD, PAD_ABI, HOME_CHAIN, ERC20_ABI, POOL_MANAGER_ABI,
   V4_INITIALIZE_EVENT, OMNI_LAUNCHED_EVENT } from './config.mjs';
 import { publicClient } from './chain.mjs';
-import { keccak256, encodeAbiParameters } from 'viem';
+import { keccak256, encodeAbiParameters, encodeEventTopics, parseEventLogs } from 'viem';
+import * as etherscan from './etherscan.mjs';
 
 /** Tokens the site has indexed. */
 export async function fetchIndexedTokens() {
@@ -51,8 +52,24 @@ export async function fetchLaunchedTokens({ lookbackBlocks = 200_000n } = {}) {
   return [...out.values()];
 }
 
-/** getLogs with an automatic fallback to fixed-size ranges for strict RPCs. */
+/**
+ * getLogs over a range, by whatever route can actually answer it.
+ *
+ * Etherscan first where it covers the chain: one call over an unbounded range
+ * instead of dozens of sequential 5,000-block chunks, each of which the public
+ * endpoints are free to drop. Everything else — Robinhood, Monad, a missing key,
+ * a rate limit — falls through to the RPC path unchanged.
+ */
 export async function getLogsChunked(pc, params, span = 5000n) {
+  const chainId = pc.chain?.id;
+  if (params.event && etherscan.covers(chainId)) {
+    try {
+      const topics = encodeEventTopics({ abi: [params.event], eventName: params.event.name, args: params.args });
+      const logs = await etherscan.getLogs({ chainId, address: params.address, topics,
+        fromBlock: params.fromBlock, toBlock: params.toBlock });
+      return parseEventLogs({ abi: [params.event], logs });
+    } catch { /* fall through to the chunked RPC walk */ }
+  }
   try {
     return await pc.getLogs(params);
   } catch {

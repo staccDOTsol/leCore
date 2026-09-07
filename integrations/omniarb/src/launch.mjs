@@ -24,7 +24,7 @@ import { keccak256, encodeAbiParameters, parseEther, formatEther, formatUnits, d
 import { readFileSync } from 'node:fs';
 import { basename } from 'node:path';
 import { API, CHAINS, chainById, HOME_CHAIN, NATIVE, PORTAL, PORTAL_ABI, ERC20_ABI, PAD, PAD_ABI,
-  POOL_FEE, POOL_TICK_SPACING, OMNI_LAUNCHED_EVENT } from './config.mjs';
+  POOL_FEE, POOL_TICK_SPACING, OMNI_LAUNCHED_EVENT, FACTORY } from './config.mjs';
 import { poolId, readPoolState } from './discovery.mjs';
 import { publicClient, walletClient } from './chain.mjs';
 
@@ -233,15 +233,35 @@ function bigintSqrt(v) {
  */
 export async function tokenFromReceipt(rec, launcher, creator) {
   const pc = publicClient(chainById(HOME_CHAIN));
-  const isERC20 = async (addr) => {
-    try {
-      const [code, supply] = await Promise.all([
-        pc.getBytecode({ address: addr }),
-        pc.readContract({ address: addr, abi: ERC20_ABI, functionName: 'totalSupply' }),
-      ]);
-      return Boolean(code && code !== '0x') && supply > 0n;
-    } catch { return false; }
+
+  // A token minted seconds ago is not yet visible on every node behind the
+  // failover transport, and the probe reading zero is not the same as the token
+  // not existing — that mistake turned a successful launch into "no token
+  // address could be read from its logs" while the CA sat there on chain.
+  const isERC20 = async (addr, tries = 5) => {
+    for (let i = 0; i < tries; i += 1) {
+      try {
+        const [code, supply] = await Promise.all([
+          pc.getBytecode({ address: addr }),
+          pc.readContract({ address: addr, abi: ERC20_ABI, functionName: 'totalSupply' }),
+        ]);
+        if (code && code !== '0x' && supply > 0n) return true;
+      } catch { /* lagging node, or genuinely not a token */ }
+      if (i < tries - 1) await new Promise((r) => setTimeout(r, 1200 * (i + 1)));
+    }
+    return false;
   };
+
+  const asAddr = (t) => getAddress(`0x${t.slice(26)}`);
+
+  // The factory's own deploy log is the definitive answer and does not depend on
+  // the launcher's event shape, which changes every time it is redeployed. It is
+  // the same topic the board discovers launches with.
+  for (const log of rec.logs) {
+    if (log.address.toLowerCase() !== FACTORY.toLowerCase()) continue;
+    if (log.topics[0]?.toLowerCase() !== FACTORY_DEPLOY_TOPIC) continue;
+    if (log.topics[1]) return asAddr(log.topics[1]);
+  }
 
   for (const log of rec.logs) {
     try {
@@ -250,19 +270,22 @@ export async function tokenFromReceipt(rec, launcher, creator) {
     } catch { /* signature changed, fall through */ }
   }
 
-  const asAddr = (t) => `0x${t.slice(26)}`.toLowerCase();
   const me = creator.toLowerCase();
   for (const log of rec.logs) {
     if (log.address.toLowerCase() !== launcher.toLowerCase()) continue;
     const addrs = log.topics.slice(1).map(asAddr);
-    if (!addrs.includes(me)) continue;
+    if (!addrs.some((a) => a.toLowerCase() === me)) continue;
     for (const cand of addrs) {
-      if (cand === me) continue;
+      if (cand.toLowerCase() === me) continue;
       if (await isERC20(cand)) return cand;
     }
   }
   return null;
 }
+
+/** The factory event every launch emits, whoever the launcher is this week. */
+export const FACTORY_DEPLOY_TOPIC =
+  '0x03900b19b57eae1ba0347c51f7e5d3725c7eccc4ca914d44035b2023c0ed2d3b';
 
 /** Create the token and its curve on Base. Returns the token address. */
 export async function launchOnBase({ account, name, symbol, tagline, logoURI,

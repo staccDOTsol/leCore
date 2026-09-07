@@ -16,6 +16,7 @@ const S = {
   tab: 'board',
   chains: {}, nativeUsd: {}, beOk: null,
   tokens: [], live: {}, be: {}, supplies: {}, pools: {}, poolScan: 0, scan: '', boot: 'booting',
+  sort: { key: 'mcap', dir: 'desc' },
   sel: null, venues: [], beTok: null, dec: 18,
   charts: null, chartHours: 24, chartType: '15m', hiddenChains: new Set(), chartBusy: false,
   size: 50, bridged: true, hookless: true,
@@ -300,6 +301,40 @@ function paintActive() {
 
 /* ================================================================= board */
 
+/**
+ * Every sort the board offers, defined once — the header cells and the select
+ * both read this list, so they cannot drift apart.
+ *
+ * Each `of` returns null when the value is not known yet; unknowns always sort
+ * last regardless of direction, because a token whose price has not loaded is
+ * not the cheapest token.
+ */
+const SORTS = [
+  { key: 'mcap', label: 'mcap', of: (t) => { const be = S.be[t.address.toLowerCase()]; const sup = supTotalOf(t);
+    return be && sup ? be.value * sup : null; } },
+  { key: 'liq', label: 'liquidity', of: (t) => S.be[t.address.toLowerCase()]?.liquidity ?? null },
+  { key: 'px', label: 'price', of: (t) => S.be[t.address.toLowerCase()]?.value ?? null },
+  { key: 'chg', label: '24h change', of: (t) => S.be[t.address.toLowerCase()]?.priceChange24h ?? null },
+  { key: 'pools', label: 'pools', of: (t) => poolCountOf(t) },
+  { key: 'float', label: 'float', of: (t) => supTotalOf(t) || null },
+  { key: 'age', label: 'age', of: (t) => t.ts || null },
+  { key: 'symbol', label: 'ticker', of: (t) => (t.symbol || '').toLowerCase() || null },
+];
+const sortBy = (key) => SORTS.find((x) => x.key === key) ?? SORTS[0];
+
+function sortRows(rows) {
+  const { key, dir } = S.sort;
+  const of = sortBy(key).of;
+  const sign = dir === 'asc' ? 1 : -1;
+  return rows.map((t) => [t, of(t)]).sort(([, a], [, b]) => {
+    if (a == null && b == null) return 0;
+    if (a == null) return 1;          // unknowns last, both directions
+    if (b == null) return -1;
+    if (typeof a === 'string') return sign * a.localeCompare(b);
+    return sign * (a - b);
+  }).map(([t]) => t);
+}
+
 const BOARD_COLS = 'minmax(0,1.6fr) 118px 62px minmax(0,1.7fr) 86px 78px 104px 96px';
 
 function mountBoard() {
@@ -326,18 +361,40 @@ function mountBoard() {
         <div class="n" style="font-size:12px;margin-top:8px;color:#a8b0bb" id="bScan">scanning</div>
       </div>
     </div>
-    <div style="padding-bottom:12px">
-      <input type="text" id="q" placeholder="filter ticker / name / ca" style="width:100%" />
+    <div class="row" style="padding-bottom:12px;gap:8px">
+      <input type="text" id="q" class="grow" placeholder="filter ticker / name / ca" />
+      <select id="bSort" style="min-width:150px">
+        ${SORTS.map((x) => `<option value="${x.key}">${x.label}</option>`).join('')}
+      </select>
+      <button class="btn" id="bDir" title="ascending / descending">↓ high first</button>
     </div>
     <div class="table t-board">
-      <div class="th" style="grid-template-columns:${BOARD_COLS}">
-        <div>token</div><div>ca</div><div>age</div><div>pools · live</div>
-        <div class="r">px (usd)</div><div class="r">24h</div><div class="r">mcap · 9ch</div><div class="r">liq (usd)</div>
+      <div class="th sortable" id="bHead" style="grid-template-columns:${BOARD_COLS}">
+        <div data-sort="symbol">token</div><div>ca</div><div data-sort="age">age</div><div data-sort="pools">pools · live</div>
+        <div class="r" data-sort="px">px (usd)</div><div class="r" data-sort="chg">24h</div>
+        <div class="r" data-sort="mcap">mcap · 9ch</div><div class="r" data-sort="liq">liq (usd)</div>
       </div>
       <div id="bRows"></div>
       <div class="note" id="bNote">reading the factory…</div>
     </div>`;
   $('q').addEventListener('input', () => paintBoardRows());
+  $('bSort').value = S.sort.key;
+  $('bSort').addEventListener('change', (e) => { S.sort.key = e.target.value; paintBoardRows(); });
+  $('bDir').onclick = () => {
+    S.sort.dir = S.sort.dir === 'desc' ? 'asc' : 'desc';
+    paintBoardRows();
+  };
+  $('bHead').addEventListener('click', (e) => {
+    const c = e.target.closest('[data-sort]');
+    if (!c) return;
+    // Clicking the column you are already on flips it; a new column starts the
+    // way that column is usually read — biggest first for money, newest first
+    // for age, A-Z for a ticker.
+    if (S.sort.key === c.dataset.sort) S.sort.dir = S.sort.dir === 'desc' ? 'asc' : 'desc';
+    else { S.sort.key = c.dataset.sort; S.sort.dir = c.dataset.sort === 'symbol' ? 'asc' : 'desc'; }
+    $('bSort').value = S.sort.key;
+    paintBoardRows();
+  });
   $('bRows').addEventListener('click', (e) => {
     const r = e.target.closest('[data-ca]');
     if (!r) return;
@@ -467,8 +524,23 @@ function paintBoardRows() {
     || (t.name || '').toLowerCase().includes(q)
     || t.address.toLowerCase().includes(q));
   const unpooled = S.tokens.length - S.tokens.filter((t) => (poolCountOf(t) ?? 0) > 0).length;
+  const sorted = sortRows(rows);
 
-  $('bRows').innerHTML = rows.map((t) => {
+  const dirBtn = $('bDir');
+  if (dirBtn) {
+    dirBtn.textContent = S.sort.key === 'symbol'
+      ? (S.sort.dir === 'desc' ? '↓ Z–A' : '↑ A–Z')
+      : S.sort.key === 'age'
+        ? (S.sort.dir === 'desc' ? '↓ newest' : '↑ oldest')
+        : (S.sort.dir === 'desc' ? '↓ high first' : '↑ low first');
+  }
+  for (const c of $('bHead').querySelectorAll('[data-sort]')) {
+    const on = c.dataset.sort === S.sort.key;
+    c.dataset.active = String(on);
+    c.textContent = c.textContent.replace(/ [↑↓]$/, '') + (on ? (S.sort.dir === 'desc' ? ' ↓' : ' ↑') : '');
+  }
+
+  $('bRows').innerHTML = sorted.map((t) => {
     const be = S.be[t.address.toLowerCase()];
     const liveMap = S.live[t.address] || {};
     const on = C.CHAINS.filter((c) => liveMap[c.id] === true);
@@ -631,7 +703,9 @@ function paintChart() {
   $('chNote').innerHTML = `each thin line is one chain’s Birdeye close, drawn only where Birdeye actually has that chain — ` +
     `${h(d.unpaintable.join(' and '))} are not in its network list, so they get a spot marker read straight from the pool instead of an invented history. ` +
     `the fat line is the float-weighted aggregate: every chain’s print weighted by the supply sitting on that chain, because the portal moves float around and a plain mean would let an empty chain outvote a full one. ` +
-    `a chain that has not printed in a bucket carries its last print forward rather than dropping out of the average.`;
+    `a chain that has not printed in a bucket carries its last print forward rather than dropping out of the average. ` +
+    `the scale is set by the traded lines: a pool sitting far outside them is pinned to the edge with an arrow and its real number, ` +
+    `rather than flattening every other chain to fit it in.`;
 
   drawChart();
 }
@@ -667,11 +741,21 @@ function drawChart() {
   const t0 = d.agg[0].t; const t1 = d.agg.at(-1).t;
   const vals = [...d.agg.map((p) => p.c), ...visible.flatMap((s) => s.points.map((p) => p.c))];
   const spots = d.series.filter((s) => !s.covered && s.spotUsd > 0 && !S.hiddenChains.has(s.id));
-  vals.push(...spots.map((s) => s.spotUsd));
+
+  // The scale comes from the traded history, not from the spot markers. One
+  // stale pool — Linea currently sits 40x under everything else — would
+  // otherwise squash all seven real lines into a sliver at the top of the
+  // chart. Markers outside the resulting window are pinned to the edge and
+  // labelled with an arrow and their real number, so nothing is hidden and
+  // nothing is drawn where it is not.
   let lo = Math.min(...vals); let hi = Math.max(...vals);
   if (hi === lo) { hi = lo * 1.05 || 1; lo = lo * 0.95; }
+  for (const s of spots) {              // include a marker only if it fits
+    if (s.spotUsd > lo / 3 && s.spotUsd < hi * 3) { lo = Math.min(lo, s.spotUsd); hi = Math.max(hi, s.spotUsd); }
+  }
   const span = hi - lo;
-  lo -= span * 0.08; hi += span * 0.08;
+  // A price axis never goes below zero, however much headroom the padding wants.
+  lo = Math.max(0, lo - span * 0.08); hi += span * 0.08;
 
   const X = (t) => pad.l + ((t - t0) / Math.max(1, t1 - t0)) * (W - pad.l - pad.r);
   const Y = (v) => pad.t + (1 - (v - lo) / (hi - lo)) * (H - pad.t - pad.b);
@@ -706,11 +790,19 @@ function drawChart() {
   }).join('');
 
   // Chains Birdeye cannot see: one honest dot at the current pool price, no line.
-  const spotMarks = spots.map((s) => `
-    <circle cx="${(W - pad.r).toFixed(1)}" cy="${Y(s.spotUsd).toFixed(1)}" r="3" fill="#0b0d11"
-      stroke="${C.byId[s.id].color}" stroke-width="1.5"/>
-    <text x="${(W - pad.r + 7).toFixed(1)}" y="${Y(s.spotUsd).toFixed(1)}" dominant-baseline="middle"
-      fill="#7d8590" font-size="${fs}" font-family="JetBrains Mono, monospace">${h(s.short)} ·pool</text>`).join('');
+  const spotMarks = spots.map((s) => {
+    const off = s.spotUsd < lo ? -1 : s.spotUsd > hi ? 1 : 0;
+    const y = off ? Y(off < 0 ? lo : hi) : Y(s.spotUsd);
+    const x = W - pad.r;
+    const label = off
+      ? `${h(s.short)} ${off < 0 ? '↓' : '↑'} ${h(C.fmtUsd(s.spotUsd))}`
+      : `${h(s.short)} ·pool`;
+    return `
+    <circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="3" fill="#0b0d11"
+      stroke="${C.byId[s.id].color}" stroke-width="1.5"${off ? ' stroke-dasharray="2 1.5"' : ''}/>
+    <text x="${(x + 7).toFixed(1)}" y="${y.toFixed(1)}" dominant-baseline="middle"
+      fill="#7d8590" font-size="${fs}" font-family="JetBrains Mono, monospace">${label}</text>`;
+  }).join('');
 
   const aggEnd = d.agg.at(-1);
   svg.innerHTML = `

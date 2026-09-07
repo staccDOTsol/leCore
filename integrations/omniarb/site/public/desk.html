@@ -100,6 +100,9 @@
   .table .tr.pick:hover { background: #12161c; }
   .table .note { padding: 16px 14px; font-size: 11px; color: #5f6672; text-wrap: pretty; }
   .r { text-align: right; }
+  .th.sortable [data-sort] { cursor: pointer; user-select: none; }
+  .th.sortable [data-sort]:hover { color: #a8b0bb; }
+  .th.sortable [data-sort][data-active="true"] { color: #c9f24d; }
   .mut { color: #7d8590; } .dim { color: #5f6672; } .soft { color: #a8b0bb; }
   .up { color: #4de2a0; } .down { color: #ff5f56; } .warn { color: #ffb040; } .acc { color: #c9f24d; }
   .ell { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

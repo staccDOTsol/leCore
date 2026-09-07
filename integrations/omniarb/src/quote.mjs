@@ -10,7 +10,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { parseEther } from 'viem';
-import { ROUTER_ABI, PAD_ABI, PAD, HOME_CHAIN, chainById, arbHelperFor } from './config.mjs';
+import { ROUTER_ABI, PAD_ABI, PAD, HOME_CHAIN, chainById, arbHelperFor, padFor } from './config.mjs';
 import { publicClient, simOverrides, SIM_ACCOUNT, deadline } from './chain.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -111,18 +111,24 @@ export async function quoteV4(c, venue, { nativeIn = 0n, tokenIn = 0n } = {}) {
 
 // --------------------------------------------------------- the Base curve
 
-export async function quotePadBuy(token, nativeIn) {
+export async function quotePadBuy(token, nativeIn, chain = null) {
+  const c = chain ?? chainById(HOME_CHAIN);
+  const pad = padFor(c);
+  if (!pad) return null;
   try {
-    const r = await publicClient(chainById(HOME_CHAIN)).readContract({
-      address: PAD, abi: PAD_ABI, functionName: 'quoteBuy', args: [token, nativeIn] });
+    const r = await publicClient(c).readContract({
+      address: pad, abi: PAD_ABI, functionName: 'quoteBuy', args: [token, nativeIn] });
     return { tokensOut: r[0], totalCost: r[1] };
   } catch { return null; }
 }
 
-export async function quotePadSell(token, tokenIn) {
+export async function quotePadSell(token, tokenIn, chain = null) {
+  const c = chain ?? chainById(HOME_CHAIN);
+  const pad = padFor(c);
+  if (!pad) return null;
   try {
-    return await publicClient(chainById(HOME_CHAIN)).readContract({
-      address: PAD, abi: PAD_ABI, functionName: 'quoteSell', args: [token, tokenIn] });
+    return await publicClient(c).readContract({
+      address: pad, abi: PAD_ABI, functionName: 'quoteSell', args: [token, tokenIn] });
   } catch { return null; }
 }
 
@@ -132,7 +138,7 @@ export async function quotePadSell(token, tokenIn) {
 export async function quoteBuy(c, token, venue, nativeIn) {
   return memo(`b:${c.id}:${venueKey(venue)}:${token}:${nativeIn}`, async () => {
     if (venue.kind === 'curve') {
-      const q = await quotePadBuy(token, nativeIn);
+      const q = await quotePadBuy(token, nativeIn, c);
       return q ? q.tokensOut : null;
     }
     if (venue.viaOmniRouter) return quoteOmniBuy(c, token, nativeIn);
@@ -143,7 +149,7 @@ export async function quoteBuy(c, token, venue, nativeIn) {
 /** token -> native on whichever venue this is. Memoised per scan pass. */
 export async function quoteSell(c, token, venue, tokenIn) {
   return memo(`s:${c.id}:${venueKey(venue)}:${token}:${tokenIn}`, async () => {
-    if (venue.kind === 'curve') return quotePadSell(token, tokenIn);
+    if (venue.kind === 'curve') return quotePadSell(token, tokenIn, c);
     if (venue.viaOmniRouter) return quoteOmniSell(c, token, tokenIn);
     return quoteV4(c, venue, { tokenIn });
   });

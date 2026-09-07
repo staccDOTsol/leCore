@@ -16,10 +16,11 @@ const S = {
   tab: 'board',
   chains: {}, nativeUsd: {}, beOk: null,
   tokens: [], live: {}, be: {}, supplies: {}, pools: {}, poolScan: 0, scan: '', boot: 'booting',
+  curves: null, curveChain: null,
   sort: { key: 'mcap', dir: 'desc' },
   supplyMiss: new Set(), liveChains: new Set(), polledChains: [], stream: null, offered: new Set(),
   seedStop: false, seedRunning: false,
-  seedShareWei: null, fundedThisRun: new Map(), deployTries: new Map(), requiredOnly: null,
+  seedShareWei: null, fundedThisRun: new Map(), deployTries: new Map(), requiredOnly: null, extrasDone: false,
   sel: null, venues: [], beTok: null, dec: 18,
   charts: null, chartHours: 24, chartType: '15m', hiddenChains: new Set(), chartBusy: false,
   size: 50, bridged: true, hookless: true,
@@ -1628,15 +1629,24 @@ async function guard(fn) {
 function mountCurve() {
   $('tab-curve').innerHTML = `
     <div class="cards">
-      <div class="card accent"><div class="k">curve price · base</div><div class="v" id="cvPx">…</div><div class="n" id="cvState"></div></div>
-      <div class="card"><div class="k">tokens still on the curve</div><div class="v" id="cvHeld">…</div><div class="n">held by the pad contract</div></div>
+      <div class="card accent"><div class="k">curve price · <span id="cvChainName">…</span></div><div class="v" id="cvPx">…</div><div class="n" id="cvState"></div></div>
+      <div class="card"><div class="k">tokens still on the curve</div><div class="v" id="cvHeld">…</div><div class="n">held by that chain’s pad</div></div>
       <div class="card"><div class="k">pad vs pools · this size</div><div class="v" id="cvEdge">…</div><div class="n" id="cvEdgeNote">quote a size to compare</div></div>
-      <div class="card"><div class="k">pad</div><div class="n" style="font-size:12px;margin-top:8px;color:#a8b0bb">
-        <a href="https://basescan.org/address/${C.PAD}" target="_blank" rel="noreferrer">${h(C.short(C.PAD))}</a> · base only</div></div>
+      <div class="card"><div class="k">curves open</div><div class="v" id="cvOpen">…</div><div class="n" id="cvPad">…</div></div>
+    </div>
+    <div class="table t-curve" style="margin:0 0 12px">
+      <div class="th" style="grid-template-columns:90px minmax(0,1fr) minmax(0,1fr) 110px">
+        <div>chain</div><div class="r">price</div><div class="r">still on the curve</div><div>quote it</div>
+      </div>
+      <div id="cvChains"></div>
+      <div class="note">a launch opens a Hookr curve on every chain that has a launchpad, and the pads are not one price:
+        the same token can be cheap on one chain’s curve and dear on another’s, with the pools in between.</div>
     </div>
     <div class="panel" style="margin-bottom:12px">
       <div class="row" style="align-items:flex-end">
-        <div style="flex:1;min-width:150px"><label class="f">buy size (ETH)</label>
+        <div style="min-width:150px"><label class="f">chain</label>
+          <select id="cvChain" style="width:100%"></select></div>
+        <div style="flex:1;min-width:150px"><label class="f">buy size (native)</label>
           <input type="text" id="cvEth" value="0.01" style="width:100%" /></div>
         <div style="flex:1;min-width:150px"><label class="f">sell size (tokens)</label>
           <input type="text" id="cvTok" placeholder="0" style="width:100%" /></div>
@@ -1646,25 +1656,36 @@ function mountCurve() {
       </div>
       <div class="table t-curve" style="margin-top:14px">
         <div class="th" style="grid-template-columns:130px minmax(0,1fr) minmax(0,1fr) 170px">
-          <div>venue</div><div class="r">tokens for the buy</div><div class="r">eth for the sell</div><div>act</div>
+          <div>venue</div><div class="r">tokens for the buy</div><div class="r">native for the sell</div><div>act</div>
         </div>
         <div id="cvRows"></div>
-        <div class="note" id="cvNote">the pad is a fixed curve; the pools move. when the pad hands you more tokens than the hooked pool for the same ETH, that is the "buy the pad, sell the dex" trade — same wallet, same chain, two transactions, no bridge.</div>
+        <div class="note" id="cvNote">the pad is a fixed curve; the pools move. when the pad hands you more tokens than the hooked pool for the same native, that is the "buy the pad, sell the dex" trade — same wallet, same chain, two transactions, no bridge.</div>
       </div>
     </div>
     <div id="cvLog"></div>`;
+  $('cvChain').innerHTML = C.CHAINS.map((c) =>
+    `<option value="${c.id}"${c.id === C.HOME_CHAIN ? ' selected' : ''}>${h(c.short)} · ${h(c.name)}</option>`).join('');
+  $('cvChain').onchange = () => { S.curveChain = Number($('cvChain').value); loadCurve(); };
   $('cvQuote').onclick = loadCurve;
+  $('cvChains').addEventListener('click', (e) => {
+    const b = e.target.closest('[data-curve]');
+    if (!b) return;
+    S.curveChain = Number(b.dataset.curve);
+    $('cvChain').value = String(S.curveChain);
+    loadCurve();
+  });
   $('cvRows').addEventListener('click', (e) => {
     const b = e.target.closest('[data-trade]');
     if (!b) return;
     const [venue, side] = b.dataset.trade.split(':');
     const amount = side === 'buy' ? $('cvEth').value.trim() : $('cvTok').value.trim();
     if (!amount || Number(amount) <= 0) { $('cvNote').textContent = 'set a size first.'; return; }
+    const chain = S.curveChain ?? C.HOME_CHAIN;
     guard(async () => {
       if (!W.address) { await connect(); if (!W.address) return; }
-      const tx = await C.apiPost('/api/tx/trade', { ca: S.sel.address, chain: C.HOME_CHAIN,
+      const tx = await C.apiPost('/api/tx/trade', { ca: S.sel.address, chain,
         venue, side, amount, from: W.address, slippageBps: Number($('cvSlip').value) || undefined });
-      log(`${side} ${amount} on Base ${venue}: quoted ${C.fmtNum(tx.quoted, 6)}, floor ${C.fmtNum(tx.minOut, 6)} at ${tx.slippageBps}bps`);
+      log(`${side} ${amount} on ${C.byId[chain]?.short} ${venue}: quoted ${C.fmtNum(tx.quoted, 6)}, floor ${C.fmtNum(tx.minOut, 6)} at ${tx.slippageBps}bps`);
       await runSteps(tx.steps);
       loadCurve(); loadBag();
     });
@@ -1675,8 +1696,20 @@ async function loadCurve() {
   if (!S.sel) return;
   const eth = $('cvEth')?.value.trim() || '';
   const tok = $('cvTok')?.value.trim() || '';
+  // All nine first: which chains carry a curve at all decides which one is
+  // worth quoting, and on a fresh launch that is not Base by default.
+  const all = await C.api('/api/curves', { ca: S.sel.address }).catch(() => null);
+  if (all) {
+    S.curves = all;
+    if (S.curveChain == null) {
+      S.curveChain = (all.chains.find((c) => c.id === C.HOME_CHAIN && c.onCurve)
+        ?? all.chains.find((c) => c.onCurve) ?? all.chains.find((c) => c.pad))?.id ?? C.HOME_CHAIN;
+      if ($('cvChain')) $('cvChain').value = String(S.curveChain);
+    }
+  }
+  const chain = S.curveChain ?? C.HOME_CHAIN;
   try {
-    S.curve = await C.api('/api/curve', { ca: S.sel.address, eth: eth || null, tok: tok || null });
+    S.curve = await C.api('/api/curve', { ca: S.sel.address, chain, eth: eth || null, tok: tok || null });
   } catch (e) {
     S.curve = null;
     $('cvNote').textContent = 'curve read failed: ' + e.message;
@@ -1685,12 +1718,31 @@ async function loadCurve() {
 }
 
 function paintCurve() {
+  const all = S.curves;
+  if (all && $('cvChains')) {
+    $('cvOpen').textContent = `${all.open}/${all.pads}`;
+    $('cvChains').innerHTML = all.chains.map((c) => `
+      <div class="tr" style="grid-template-columns:90px minmax(0,1fr) minmax(0,1fr) 110px${c.id === (S.curveChain ?? C.HOME_CHAIN) ? ';background:#111620' : ''}">
+        <div style="font-weight:700">${h(c.short)}</div>
+        <div class="r ${c.onCurve ? 'acc' : 'dim'}">${c.onCurve ? `${C.fmtNum(c.priceNative, 6)} ${h(c.nativeSymbol ?? '')}` : c.pad ? 'no curve' : 'no pad'}</div>
+        <div class="r dim">${c.padHolds != null ? C.fmtNum(c.padHolds, 4) : '—'}</div>
+        <div>${c.pad ? `<button class="btn small" data-curve="${c.id}">quote</button>` : ''}</div>
+      </div>`).join('');
+  }
   const d = S.curve;
   if (!d) return;
-  $('cvPx').textContent = d.onCurve ? `${C.fmtNum(d.priceNative, 6)} ETH` : 'graduated';
+  const on = C.byId[d.chainId] ?? C.byId[C.HOME_CHAIN];
+  if ($('cvChainName')) $('cvChainName').textContent = on?.short ?? '';
+  if ($('cvPad')) {
+    $('cvPad').innerHTML = d.pad
+      ? `<a href="${h(on?.explorer ?? '')}/address/${h(d.pad)}" target="_blank" rel="noreferrer">${h(C.short(d.pad))}</a> · ${h(on?.name ?? '')}`
+      : `no launchpad on ${h(on?.name ?? 'this chain')} yet`;
+  }
+  $('cvPx').textContent = d.onCurve ? `${C.fmtNum(d.priceNative, 6)} ${on?.nativeSymbol ?? ''}` : d.pad ? 'no curve here' : 'no pad here';
   $('cvState').textContent = d.onCurve
     ? 'still on the pad — buys mint from the curve'
-    : 'off the pad: currentCurvePrice() is zero, so the pools are the only venue';
+    : d.pad ? 'currentCurvePrice() is zero here, so the pools are this chain’s only venue'
+      : 'this chain has no launchpad, so it has pools and no curve';
   $('cvHeld').textContent = d.padHolds != null ? C.fmtNum(d.padHolds, 5) : '—';
 
   const padBuy = d.buy?.tokensOut ?? null;
@@ -1721,7 +1773,8 @@ function paintCurve() {
       <div class="r">${q.nativeOut != null ? C.fmtNum(q.nativeOut, 6) : '—'}</div>
       <div>${act(venue)}</div></div>`);
   }
-  $('cvRows').innerHTML = rows.join('') || '<div class="note">no venue on Base yet.</div>';
+  $('cvRows').innerHTML = rows.join('')
+    || `<div class="note">no venue on ${h(on?.name ?? 'this chain')} yet.</div>`;
 }
 
 /* ================================================================ launch */
@@ -1813,8 +1866,8 @@ function mountLaunch() {
     // stop: every chain still gets its CA, its curve and its native pools.
     S.requiredOnly = tx.requiredOnly === true;
     if (S.requiredOnly) {
-      log(`the relayer is short of OMNI on ${tx.blocked?.join(' ') || 'some chains'} — opening the required pools ` +
-        'everywhere and leaving the OMNI, stable and memecoin extras for a later pass', 'warn');
+      log(`the relayer is short of OMNI on ${tx.blocked?.join(' ') || 'some chains'} — every pool it can stock ` +
+        'still opens, and the rest fill in on a later pass', 'warn');
     }
     const done = await runSteps(tx.steps);
     if (!done.length) return;
@@ -2063,8 +2116,14 @@ async function seedChain(chainId, ca, { donate = false } = {}) {
     // is deploy, allocation, curve and pools in one call — the same call is the
     // resume. Nobody signs anything here.
     log(`${c.short}: asking the relayer to initialize — allocation, curve, pools…`);
+    // Never requiredOnly. A launch is meant to open, per chain and per hook,
+    // native, OMNI, whichever of USDC/USDT/USDG that chain has, and the ten
+    // trending memecoins — and the relay already reports a pool it cannot
+    // stock as skipped rather than as a failure. Asking for the required set
+    // because the relayer was short somewhere is how a launch that should have
+    // had a hundred pools ended up with twenty-four.
     const ask = () => C.apiPost('/api/relay', { action: 'initialize', token: ca, chainId,
-      launchHash: d.launchHash ?? undefined, requiredOnly: S.requiredOnly === true });
+      launchHash: d.launchHash ?? undefined });
     let r = await ask();
     // The site takes one initialize a minute per token. That is a wait, not a
     // failure: sleep out the remainder it names and ask once more.
@@ -2270,6 +2329,7 @@ async function runSeed(ca) {
   S.seedStop = false;
   S.seedRunning = true;
   S.seedNoInit = false;
+  S.extrasDone = false;
   S.fundedThisRun = new Map();
   S.deployTries = new Map();
   paintSeed();
@@ -2319,6 +2379,31 @@ async function runSeed(ca) {
       }
 
       const state = await loadSeedState(ca);
+      if (state?.complete && !S.extrasDone) {
+        // Native and the curve are the floor, not the finish. Every chain gets
+        // another initialize to open the OMNI, stable and memecoin pools that
+        // the relay could not stock the first time round.
+        S.extrasDone = true;
+        log('every chain has its curve and native pools — going back round for the OMNI, stable and memecoin pools', 'acc');
+        for (const c of C.CHAINS) {
+          if (S.seedStop) break;
+          const row = state.chains.find((x) => x.id === c.id);
+          if (row?.queueStuck) continue;
+          try {
+            const r = await C.apiPost('/api/relay', { action: 'initialize', token: ca, chainId: c.id,
+              launchHash: state.launchHash ?? undefined });
+            const pools = (r.pools ?? []);
+            const open = pools.filter((p) => p.seeded).length;
+            log(`${c.short}: ${open} more pool${open === 1 ? '' : 's'} opened` +
+              (pools.length ? ` of ${pools.length} tried` : '') +
+              (r.error ? ` · ${String(r.error).split('\n')[0]}` : ''));
+          } catch (e) { log(`${c.short}: ${String(e.message).split('\n')[0]}`, 'warn'); }
+          await sleep(3000);
+        }
+        const census = await C.api('/api/poolcensus', { ca }).catch(() => null);
+        if (census) log(`${ca}: ${census.total} pools across ${census.live} chains`, 'up');
+        continue;
+      }
       if (state?.complete) {
         log(state.v3 ? `all nine chains done — eighteen pools, ${state.curves?.open ?? 0} curve${state.curves?.open === 1 ? '' : 's'}`
           : 'all nine chains seeded — eighteen pools open', 'up');

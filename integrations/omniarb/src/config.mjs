@@ -220,6 +220,19 @@ function deployments() {
   return _deployments;
 }
 
+/**
+ * The Hookr launchpad on a chain, if it has one.
+ *
+ * A launch now opens a curve on every chain that has a pad, not only on Base,
+ * so nothing may assume the Base pad any more. The site deploys pads as it goes
+ * and names the live one per chain in its relayerFunding quote, so that answer
+ * is recorded here and wins over the address in the table.
+ */
+const _pads = new Map();
+export const setPad = (chainId, address) => _pads.set(Number(chainId), address);
+export const padFor = (c) =>
+  process.env[`PAD_${c.id}`] || _pads.get(c.id) || c.pad || null;
+
 export const arbHelperFor = (c) =>
   process.env[`ARB_${c.id}`] || deployments()[String(c.id)] || null;
 

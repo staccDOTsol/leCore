@@ -24,7 +24,8 @@ import { formatUnits, parseUnits, parseEther, getAddress, encodeFunctionData, de
   encodeAbiParameters, keccak256 } from 'viem';
 
 import { CHAINS, chainById, HOME_CHAIN, PORTAL, PORTAL_ABI, ERC20_ABI, PAD, PAD_ABI, ROUTER_ABI,
-  NATIVE, POOL_FEE, POOL_TICK_SPACING, rpcsFor, arbHelperFor, recordDeployment, FACTORY } from '../src/config.mjs';
+  NATIVE, POOL_FEE, POOL_TICK_SPACING, rpcsFor, arbHelperFor, recordDeployment, FACTORY,
+  setPad, padFor as padOf } from '../src/config.mjs';
 import { publicClient } from '../src/chain.mjs';
 import { queueOf as readQueue } from '../src/unstick.mjs';
 import { fetchIndexedTokens, fetchLaunchedTokens, discoverCurve, getLogsChunked, poolId,
@@ -475,9 +476,9 @@ async function apiCurve(ca, sizeEth, sizeTok, chain) {
     inTok > 0n ? read('quoteSell', [token, inTok]) : null,
   ]);
 
-  // What the same size does on the Base pools, so the pad can be compared with
-  // the thing it is supposed to be cheaper than.
-  const baseChain = chainById(HOME_CHAIN);
+  // What the same size does on this chain's pools, so the pad is compared with
+  // the thing it is supposed to be cheaper than — on the chain it lives on.
+  const baseChain = on;
   const pools = await fastPools(baseChain, token).catch(() => []);
   // Sequentially: both of these are eth_call simulations carrying a full state
   // override, and firing them at the same public endpoint together is how one
@@ -509,7 +510,7 @@ async function apiCurve(ca, sizeEth, sizeTok, chain) {
 
 /** The venue shape the quoter and executor expect, built from a kind string. */
 function venueOf(c, kind) {
-  if (kind === 'curve') return { kind: 'curve', chainId: HOME_CHAIN };
+  if (kind === 'curve') return { kind: 'curve', chainId: c.id, pad: padFor(c) };
   const hooks = kind === 'v4-hooked' || kind === 'hooked' ? c.hook : NATIVE;
   const key = {
     currency0: NATIVE, currency1: null, fee: POOL_FEE, tickSpacing: POOL_TICK_SPACING,
@@ -578,7 +579,10 @@ async function txTrade({ ca, chain, venue, side, amount, from, slippageBps }) {
   const c = chainById(chain);
   if (!c) throw new Error(`unknown chain ${chain}`);
   const kind = String(venue ?? 'hooked');
-  if (kind === 'curve' && c.id !== HOME_CHAIN) throw new Error('the curve only exists on Base');
+  // A launch opens a Hookr curve on every chain that has a launchpad, so the
+  // curve is no longer a Base-only venue and must be traded where it is.
+  const curvePad = kind === 'curve' ? padFor(c) : null;
+  if (kind === 'curve' && !curvePad) throw new Error(`${c.name} has no launchpad, so there is no curve to trade there`);
   const who = getAddress(from);
   const v = venueFor(c, kind, token);
   const wei = parseUnits(String(amount), 18);
@@ -598,7 +602,7 @@ async function txTrade({ ca, chain, venue, side, amount, from, slippageBps }) {
   if (helper !== null && !helper) {
     throw new Error(`the hookless pool on ${c.name} has no OmniArb helper deployed — nothing on chain can reach it`);
   }
-  const spender = kind === 'curve' ? PAD : (helper || c.router);
+  const spender = kind === 'curve' ? curvePad : (helper || c.router);
 
   const steps = [];
   if (side === 'sell') {
@@ -612,9 +616,9 @@ async function txTrade({ ca, chain, venue, side, amount, from, slippageBps }) {
 
   if (kind === 'curve') {
     steps.push(side === 'buy'
-      ? step('buy on the curve', c, PAD,
+      ? step(`buy on the ${c.short} curve`, c, curvePad,
         encodeFunctionData({ abi: PAD_ABI, functionName: 'buy', args: [token, minOut] }), wei)
-      : step('sell into the curve', c, PAD,
+      : step(`sell into the ${c.short} curve`, c, curvePad,
         encodeFunctionData({ abi: PAD_ABI, functionName: 'sell', args: [token, wei, minOut] })));
   } else if (helper) {
     // Native is currency0 on every omnichain pool, so a buy is zeroForOne.
@@ -1163,14 +1167,13 @@ async function apiRelay(body) {
 // Launchpads per chain, as the relay last reported them. The site deploys pads
 // as it goes and its relayerFunding quote names the live one for each chain, so
 // that answer wins over the address baked into the chain table.
-const PADS = new Map();
 function notePads(funding) {
   for (const row of funding?.chains ?? []) {
     const pad = row?.curve?.pad;
-    if (row?.chainId && /^0x[0-9a-fA-F]{40}$/.test(pad ?? '')) PADS.set(Number(row.chainId), getAddress(pad));
+    if (row?.chainId && /^0x[0-9a-fA-F]{40}$/.test(pad ?? '')) setPad(Number(row.chainId), getAddress(pad));
   }
 }
-const padFor = (c) => PADS.get(c.id) ?? (c.pad ? getAddress(c.pad) : null);
+const padFor = (c) => { const a = padOf(c); return a ? getAddress(a) : null; };
 
 // The pool allocation every launch mints to the relayer on Base, and one chain's
 // share of it. What the relayer holds on Base above this is eight other chains'.
@@ -1786,6 +1789,32 @@ async function poolsOfToken(c, token) {
 }
 
 /**
+ * Every chain's curve for one token.
+ *
+ * The curve tab was written when Base was the only chain with a launchpad and
+ * said so in its copy. There are now pads on all nine, a launch opens a curve
+ * on each of them, and a page that only ever reads Base hides eight venues and
+ * the arbitrage between them.
+ */
+async function apiCurves(ca) {
+  const token = getAddress(ca);
+  const rows = await Promise.all(CHAINS.map(async (c) => {
+    const pad = padFor(c);
+    if (!pad) return { id: c.id, short: c.short, name: c.name, explorer: c.explorer, pad: null, onCurve: false };
+    const pc = publicClient(c);
+    const [price, held] = await Promise.all([
+      pc.readContract({ address: pad, abi: PAD_ABI, functionName: 'currentCurvePrice', args: [token] }).catch(() => null),
+      pc.readContract({ address: token, abi: ERC20_ABI, functionName: 'balanceOf', args: [pad] }).catch(() => null),
+    ]);
+    return { id: c.id, short: c.short, name: c.name, explorer: c.explorer, pad,
+      onCurve: price != null && price > 0n, priceNative: num(price), padHolds: num(held),
+      nativeSymbol: c.nativeSymbol };
+  }));
+  return jsonSafe({ token, chains: rows, open: rows.filter((r) => r.onCurve).length,
+    pads: rows.filter((r) => r.pad).length });
+}
+
+/**
  * The same census across all nine chains, which is what the board counts with.
  */
 async function apiPoolCensus(ca) {
@@ -2136,6 +2165,7 @@ const routes = {
   '/api/chart': (q) => apiChart(q.get('ca'), q.get('chain') ?? HOME_CHAIN, q.get('type') ?? '15m', q.get('hours') ?? 24),
   '/api/charts': (q) => apiCharts(q.get('ca'), q.get('type') ?? '15m', q.get('hours') ?? 24),
   '/api/curve': (q) => apiCurve(q.get('ca'), q.get('eth'), q.get('tok'), q.get('chain')),
+  '/api/curves': (q) => apiCurves(q.get('ca')),
   '/api/quote': (q) => apiQuote(q.get('ca'), q.get('chain'), q.get('venue') ?? 'hooked',
     q.get('side') ?? 'buy', q.get('amount') ?? '0'),
   '/api/bag': (q) => apiBag(q.get('address'), q.get('ca')),

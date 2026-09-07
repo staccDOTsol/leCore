@@ -72,18 +72,29 @@ def board_markdown(store: Store, limit: int = 60) -> str:
     delivery = sum(r["delivery"] or 0 for r in ready)
     margins = sorted(r["margin"] for r in ready if r.get("margin") is not None)
     med = margins[len(margins) // 2] if margins else None
+    prices = sorted(r["price"] for r in ready if r.get("price"))
+    med_price = prices[len(prices) // 2] if prices else 0.0
 
     # THE PERMATWEET. One line, quotable, its numbers replaced in place every ninety seconds.
     # The claim has to survive a hostile reader, so it says only what the database can show and
     # says the unflattering half out loud: nothing has been submitted.
-    out = ["# I pointed an army of openzoo bots at every public contract in North America.", "",
-           f"> **{opps:,} solicitations indexed. {verdicts:,} read clause by clause by frontier models. "
-           f"{pct} of them do not forbid delegating the work to anyone I choose. "
-           f"{len(ready)} finished bid{'' if len(ready) == 1 else 's'} "
-           f"worth **${value:,.0f}**, drafted end to end, sitting ready to send.**",
+    out = ["# Everyone else points a bot swarm at running a company. I pointed one at every public "
+           "contract I am legally entitled to bid.", "",
+           "> Same idea, narrower question. Not *what can an agent swarm build* — **which of these "
+           "contracts am I actually allowed to win, and what is the work worth?**",
+           ">",
+           f"> **{opps:,} solicitations indexed** across American and Canadian federal, state, "
+           f"provincial and municipal procurement. **{verdicts:,} read clause by clause** by frontier "
+           f"models. **{pct} carry no prohibition** on delegating the work to whatever resources I "
+           f"choose. **{len(ready)} finished bid{'' if len(ready) == 1 else 's'} worth "
+           f"${value:,.0f}**, drafted end to end.",
            ">",
            f"> Delivery on those bids costs **${delivery:,.0f}**."
-           + (f" Median margin **{med:.0%}**." if med is not None else ""),
+           + (f" Median margin **{med:.0%}**." if med is not None else "")
+           + " A clause read is about three cents."
+           + (f" A public buyer prices the median one of these at **${med_price:,.0f}**. That ratio is"
+              f" the whole argument: a swarm of cheap models aimed at a narrow, checkable question"
+              f" produces work somebody pays real money for." if med_price else ""),
            ">",
            "> Nobody has sent one. That is the only step still done by a human, and it is on purpose.",
            "",
@@ -105,7 +116,11 @@ def board_markdown(store: Store, limit: int = 60) -> str:
            "USAspending and SEAO in public, priced. Nobody arbitrages it because the hard part is",
            f"reading {opps:,} solicitations to find the ones you are actually allowed to bid.",
            "",
-           "That is what the bots do.", "",
+           "That is what the bots do. What comes out the far end is signed by whatever entity is",
+           "configured — a corporation where one is wanted for liability or eligibility, an individual",
+           "where the buyer will take one. The pipeline does not care which; it refuses to assert any",
+           "registration or credential that entity does not actually hold, which is the part that",
+           "matters.", "",
            "## Why this is allowed, and how that is checked", "",
            "A public contract is a promise to deliver a defined outcome against defined acceptance",
            "criteria. Almost none of them constrain how you produce it. But *almost* is doing real work",

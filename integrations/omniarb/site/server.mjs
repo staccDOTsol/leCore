@@ -448,17 +448,22 @@ async function apiCharts(ca, type = '15m', hours = 24) {
 // The bonding curve exists on Base only. Before graduation it is the cheapest
 // venue there is — which is the whole point of "buy on the pad, sell on a dex".
 
-async function apiCurve(ca, sizeEth, sizeTok) {
+async function apiCurve(ca, sizeEth, sizeTok, chain) {
   const token = getAddress(ca);
-  const pc = publicClient(chainById(HOME_CHAIN));
-  const read = (fn, args = []) => pc.readContract({ address: PAD, abi: PAD_ABI, functionName: fn, args })
-    .catch(() => null);
+  const on = (chain && chainById(Number(chain))) || chainById(HOME_CHAIN);
+  const pc = publicClient(on);
+  // Each chain's own launchpad, where it has one. Reading Base's pad for a
+  // Robinhood curve answered every chain with Base's numbers.
+  const pad = on.pad ? getAddress(on.pad) : null;
+  const read = (fn, args = []) => (pad
+    ? pc.readContract({ address: pad, abi: PAD_ABI, functionName: fn, args }).catch(() => null)
+    : Promise.resolve(null));
 
   const price = await read('currentCurvePrice', [token]);
   const onCurve = price !== null && price > 0n;
   const [curveSupply, held] = await Promise.all([
     read('CURVE_SUPPLY'),
-    pc.readContract({ address: token, abi: ERC20_ABI, functionName: 'balanceOf', args: [PAD] }).catch(() => null),
+    pad ? pc.readContract({ address: token, abi: ERC20_ABI, functionName: 'balanceOf', args: [pad] }).catch(() => null) : null,
   ]);
 
   const inEth = sizeEth ? parseEther(String(sizeEth)) : 0n;
@@ -486,7 +491,7 @@ async function apiCurve(ca, sizeEth, sizeTok) {
   }
 
   return jsonSafe({
-    address: token, onCurve, graduated: !onCurve,
+    address: token, onCurve, graduated: Boolean(pad) && !onCurve, pad, chainId: on.id,
     priceNative: num(price),
     curveSupply: num(curveSupply),
     padHolds: num(held),
@@ -1130,6 +1135,12 @@ async function apiSeedState(ca, address, hash) {
     // emptied one v3 launch's eight destination curves into Base. One ninth of
     // what is left after the curve supplies is the share Base is meant to keep.
     const relayerHeld = deployed ? await balanceOf(c, RELAYER).catch(() => 0n) : 0n;
+    // A v3 launch is also a curve on every chain that has a launchpad. Only
+    // Base and Robinhood have one today; the rest read as "no pad", not "no curve".
+    const curve = !c.pad ? null
+      : !deployed ? false
+        : await publicClient(c).readContract({ address: getAddress(c.pad), abi: PAD_ABI,
+            functionName: 'currentCurvePrice', args: [token] }).then((p) => p > 0n).catch(() => false);
     const funded = relayerHeld > 0n && (share > 0n ? relayerHeld >= share / 2n : true);
     // Base is safe to wall from here only when what the relayer holds there is
     // already one chain's share — its own wallet splitting, or a site that has
@@ -1142,7 +1153,7 @@ async function apiSeedState(ca, address, hash) {
     const wallBudget = c.id !== HOME_CHAIN ? relayerHeld
       : operator && share > 0n ? share
         : split ? relayerHeld : BASE_SHARE;
-    const done = deployed && hooked && hookless;
+    const done = deployed && hooked && hookless && !(v3 && curve === false);
     const next = !deployed ? 'deploy'
       : done ? null
         : v3 ? 'initialize'
@@ -1170,13 +1181,14 @@ async function apiSeedState(ca, address, hash) {
       shortfallSource: quoted.has(c.id) ? 'site' : 'estimated',
       relayerShortWei: short > 0n ? short.toString() : null,
       relayerHeld: num(relayerHeld), wallBudgetWei: wallBudget > 0n ? wallBudget.toString() : null, wallSafe,
-      deployed, hooked, hookless, funded, done, next };
+      deployed, hooked, hookless, curve, pad: c.pad ?? null, funded, done, next };
   }));
 
   return jsonSafe({
     token, relayer: RELAYER, needsWallet: !who, operator, v3, launchHash,
     curveAllocation: num(curveAlloc), relayerBase: num(relayerBase),
     held: num(held), share: num(share), shareWei: share.toString(),
+    curves: { open: rows.filter((r) => r.curve === true).length, pads: rows.filter((r) => r.pad).length },
     chains: rows, complete: rows.every((r) => r.done),
     remaining: rows.filter((r) => !r.done).map((r) => r.short),
   });
@@ -1660,7 +1672,7 @@ const routes = {
   '/api/stuck': (q) => apiStuck(q.get('ca')),
   '/api/chart': (q) => apiChart(q.get('ca'), q.get('chain') ?? HOME_CHAIN, q.get('type') ?? '15m', q.get('hours') ?? 24),
   '/api/charts': (q) => apiCharts(q.get('ca'), q.get('type') ?? '15m', q.get('hours') ?? 24),
-  '/api/curve': (q) => apiCurve(q.get('ca'), q.get('eth'), q.get('tok')),
+  '/api/curve': (q) => apiCurve(q.get('ca'), q.get('eth'), q.get('tok'), q.get('chain')),
   '/api/quote': (q) => apiQuote(q.get('ca'), q.get('chain'), q.get('venue') ?? 'hooked',
     q.get('side') ?? 'buy', q.get('amount') ?? '0'),
   '/api/bag': (q) => apiBag(q.get('address'), q.get('ca')),

@@ -1906,8 +1906,18 @@ async function seedChain(chainId, ca, { donate = false } = {}) {
     // is deploy, allocation, curve and pools in one call — the same call is the
     // resume. Nobody signs anything here.
     log(`${c.short}: asking the relayer to initialize — allocation, curve, pools…`);
-    const r = await C.apiPost('/api/relay', { action: 'initialize', token: ca, chainId,
+    const ask = () => C.apiPost('/api/relay', { action: 'initialize', token: ca, chainId,
       launchHash: d.launchHash ?? undefined });
+    let r = await ask();
+    // The site takes one initialize a minute per token. That is a wait, not a
+    // failure: sleep out the remainder it names and ask once more.
+    const limited = /rate limited: last \w+ (\d+)s ago/i.exec(String(r.error ?? ''));
+    if (limited) {
+      const wait = Math.max(5, 62 - Number(limited[1]));
+      log(`${c.short}: relay is pacing itself — waiting ${wait}s`);
+      await sleep(wait * 1000);
+      r = await ask();
+    }
     if (/bad action/i.test(String(r.error ?? ''))) {
       // The site's code has it; its deployment does not yet. Until it does, the
       // only pools that can open are the ones the relayer already holds float for.
@@ -1987,10 +1997,12 @@ async function seedChain(chainId, ca, { donate = false } = {}) {
 function brief(v) {
   if (v == null) return '—';
   if (typeof v === 'string') return v;
-  if (v.error) return String(v.error).split('\n')[0];
+  if (v.ok === true) return v.skipped ? 'already' : 'ok';
+  if (v.error) return String(v.error).split('\n')[0].slice(0, 140);
+  if (v.available === false) return 'no pad on this chain';
   if (v.skipped) return 'skipped';
   if (v.status) return String(v.status);
-  return v.ok === false ? 'failed' : 'ok';
+  return v.ok === false ? (v.reason ?? 'failed') : 'ok';
 }
 
 /**
@@ -2144,7 +2156,11 @@ async function runSeed(ca) {
       }
 
       const state = await loadSeedState(ca);
-      if (state?.complete) { log('all nine chains seeded — eighteen pools open', 'up'); return; }
+      if (state?.complete) {
+        log(state.v3 ? `all nine chains done — eighteen pools, ${state.curves?.open ?? 0} curve${state.curves?.open === 1 ? '' : 's'}`
+          : 'all nine chains seeded — eighteen pools open', 'up');
+        return;
+      }
       if (!moved) {
         log(state?.remaining?.length
           ? `nothing more to do from here — ${state.remaining.join(' ')} wait on the relayer’s allocation`
@@ -2169,7 +2185,8 @@ function paintSeed() {
   // tick, long before the first read comes back.
   const d = S.seed?.chains ? S.seed : null;
   const who = !d ? ''
-    : d.v3 ? ` · one signature: the relayer holds ${C.fmtNum(d.curveAllocation, 3)} of curve supply + the pool allocation on Base — nothing here asks your wallet`
+    : d.v3 ? ` · one-signature launch · curves ${d.curves?.open ?? 0}/${d.curves?.pads ?? 0} where a pad exists · ` +
+        `${C.fmtNum(d.relayerBase, 4)} of the ${C.fmtNum(d.curveAllocation, 3)} curve supply still with the relayer on Base — nothing here asks your wallet`
       : d.operator ? ` · ${C.fmtNum(d.share, 6)} per chain from the relayer’s ${C.fmtNum(d.relayerBase, 6)} on Base`
         : ` · the relayer holds ${C.fmtNum(d.relayerBase, 6)} on Base for these pools; only it or omnichain.family bridges that out — your tokens stay yours`;
   const head = `<div class="tr" style="grid-template-columns:minmax(0,1fr) auto;border-bottom:1px solid #1a1f27">
@@ -2189,6 +2206,7 @@ function paintSeed() {
     const state = !st ? '…'
       : `${mark(st.deployed, 'deployed')} ${mark(st.funded || (st.hooked && st.hookless), 'funded')} ` +
         `${mark(st.hooked, 'hooked')} ${mark(st.hookless, 'hookless')}` +
+        (st.curve === null ? '' : ` ${mark(st.curve, 'curve')}`) +
         (st.relayerHeld > 0 && !st.done ? ` <span class="dim">· relayer holds ${C.fmtNum(st.relayerHeld, 4)}</span>` : '') +
         (dry ? ` <span class="warn" title="the relayer pays for the deploy and the wall itself">· relayer has ${C.fmtNum(st.relayerGas, 3)} of ${C.fmtNum(st.relayerNeeds, 3)} ${h(st.nativeSymbol)}</span>` : '');
     const acts = [];

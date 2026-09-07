@@ -50,6 +50,8 @@ export const CHAINS = [
     hook: '0x816b4043fe55b9a982c2baefb746c9f541c380cc',
     router: '0x514f4489af1f1f8e5646a79063703eb9681baf8e',
     launcher: '0x62b0bc3ae794fc6a4d7a3809063bf777a9947345',
+    // Hookr launchpad on this chain: a v3 launch gets a curve here.
+    pad: '0xaAed6fab06D53311220F35421Dda5cc6D6e9d6C3',
     factoryFromBlock: 55377450n,
   },
   {
@@ -60,6 +62,7 @@ export const CHAINS = [
     hook: '0xce5d52c0c2345260502872b6108d0ce2559280cc',
     router: '0xe80335474e278fbb84155daaad6042e659fd86d8',
     launcher: '0xe3dcd4b6fe0b7b86234036e6d37bf5d2f2bdb857',
+    pad: '0xd21cff13e2d2d9a39e450e97e29dd930108a327c',
     factoryFromBlock: 50927698n,
   },
   {

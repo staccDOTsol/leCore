@@ -76,7 +76,33 @@ function onHashChange() {
 
 /* -------------------------------------------------------------- boot */
 
+/**
+ * The desk's own failures, on the page.
+ *
+ * The console is not ours: wallet extensions and analytics injectors throw
+ * there constantly — web-vitals reading startTime off nothing, for one — and a
+ * real bug in this code reads exactly like that noise. So anything thrown from
+ * these two files goes into the transcript that is already on screen, and
+ * anything from an injected script is left where it belongs.
+ */
+function ownError(filename) {
+  return typeof filename === 'string' && /\/(desk|omniarb-core)\.js/.test(filename);
+}
+
+function watchOwnErrors() {
+  addEventListener('error', (e) => {
+    if (!ownError(e.filename)) return;
+    log(`bug: ${e.message} (${e.filename.split('/').pop()}:${e.lineno})`, 'down');
+  });
+  addEventListener('unhandledrejection', (e) => {
+    const stack = String(e.reason?.stack ?? '');
+    if (stack && !ownError(stack)) return;      // somebody else's promise
+    log(`bug: ${String(e.reason?.message ?? e.reason)}`, 'down');
+  });
+}
+
 async function boot() {
+  watchOwnErrors();
   S.deeplink = parseHash();
   if (S.deeplink.ca) S.picked = true;   // a link beats the board's own default
   wireShell();

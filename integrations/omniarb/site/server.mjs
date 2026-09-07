@@ -20,7 +20,8 @@ import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { dirname, join, extname } from 'node:path';
-import { formatUnits, parseUnits, parseEther, getAddress, encodeFunctionData, decodeEventLog } from 'viem';
+import { formatUnits, parseUnits, parseEther, getAddress, encodeFunctionData, decodeEventLog,
+  encodeAbiParameters, keccak256 } from 'viem';
 
 import { CHAINS, chainById, HOME_CHAIN, PORTAL, PORTAL_ABI, ERC20_ABI, PAD, PAD_ABI, ROUTER_ABI,
   NATIVE, POOL_FEE, POOL_TICK_SPACING, rpcsFor, arbHelperFor, FACTORY } from '../src/config.mjs';
@@ -32,6 +33,7 @@ import { quoteBuy, quoteSell, ARTIFACT } from '../src/quote.mjs';
 import { requestMint } from '../src/bridge.mjs';
 import { quoteNative, supportedChains } from '../src/relay.mjs';
 import * as alchemy from '../src/alchemy.mjs';
+import { API } from '../src/config.mjs';
 import { FACTORY_DEPLOY_TOPIC } from '../src/discovery.mjs';
 import { uploadMetadata, curveSqrtPrice, deployRemote, wallChain, tokenFromReceipt,
   saltFor, LAUNCH_ABI, LAUNCH_FEE_WEI, DEFAULT_HOOK_PARAMS, RELAYER,
@@ -787,30 +789,138 @@ async function preflight(c, { to, data, value, from, what }) {
   }
 }
 
+/** The factory predicts the CA before anything is signed; the salt is creator-bound. */
+const FACTORY_PREDICT_ABI = [{
+  type: 'function', name: 'predict', stateMutability: 'view',
+  inputs: [{ name: 'name', type: 'string' }, { name: 'symbol', type: 'string' },
+    { name: 'tagline', type: 'string' }, { name: 'logoURI', type: 'string' },
+    { name: 'salt', type: 'bytes32' }],
+  outputs: [{ type: 'address' }],
+}];
+
+const LAUNCH_AND_FUND_ABI = LAUNCH_ABI.map((f) => (f.name === 'launch'
+  ? { ...f, name: 'launchAndFund', inputs: [...f.inputs, { name: 'relayerFeeWei', type: 'uint256' }] }
+  : f));
+
+const effectiveSalt = (creator, userSalt) => keccak256(encodeAbiParameters(
+  [{ type: 'address' }, { type: 'bytes32' }], [getAddress(creator), userSalt]));
+
+/**
+ * Build the launch.
+ *
+ * The site rotates its launcher through a gate, so the address is asked for
+ * rather than remembered — a stale one reverts with an unnamed custom error and
+ * looks like a bad parameter, which cost an hour earlier today.
+ *
+ * On the v3 launcher this is ONE signature: the creation fee, the creator's ape
+ * and the relayer's whole cross-chain bill in a single transaction. That bill is
+ * what the relayer then spends deploying the token on eight more chains, opening
+ * the curves and paying every pool bid — the work that was failing here for want
+ * of relayer gas, now paid for by the launch itself. On v2 it is two: the
+ * token-bound funding payment first, so a launcher who changes their mind before
+ * the second signature has bought nothing.
+ */
 async function txLaunch(body) {
   const c = chainById(HOME_CHAIN);
   const name = String(body.name ?? '').trim();
   const symbol = String(body.symbol ?? '').trim();
   if (!name || !symbol) throw new Error('name and symbol are required');
   if (!body.logoURI) throw new Error('upload the metadata first — the launcher records the logo on chain');
+  const tagline = body.tagline ?? '';
+
+  const caps = await apiLauncher().catch(() => null);
+  const launcher = caps?.launcher?.address ? getAddress(caps.launcher.address) : getAddress(c.launcher);
+  const oneSignature = caps?.launcher?.oneSignature === true;
 
   const perChain = parseEther(String(body.creatorBuyEth ?? '0')) / BigInt(CHAINS.length);
-  const value = LAUNCH_FEE_WEI + perChain;
+  const userSalt = saltFor(symbol);
   const params = {
-    name, symbol, tagline: body.tagline ?? '', logoURI: body.logoURI,
-    salt: saltFor(symbol), intentId: ZERO32, quoteToken: NATIVE,
+    name, symbol, tagline, logoURI: body.logoURI,
+    salt: userSalt, intentId: ZERO32, quoteToken: NATIVE,
     targetRaiseWei: parseEther(String(body.targetRaiseEth ?? '0.06')),
     creatorBuyWei: perChain, minTokensOut: 0n, blueprintId: 0,
     custom: DEFAULT_HOOK_PARAMS, creatorFeeBps: 0,
   };
-  const data = encodeFunctionData({ abi: LAUNCH_ABI, functionName: 'launch', args: [params] });
-  if (body.from) await preflight(c, { to: c.launcher, data, value, from: body.from, what: 'the launch' });
+
+  // What the CA will be, before a signature exists — the relayer quotes against
+  // this exact address, and every destination chain deploys to it.
+  let predicted = null;
+  if (body.from) {
+    predicted = await publicClient(c).readContract({
+      address: FACTORY, abi: FACTORY_PREDICT_ABI, functionName: 'predict',
+      args: [name, symbol, tagline, body.logoURI, effectiveSalt(body.from, userSalt)],
+    }).catch(() => null);
+  }
+
+  // What the relayer will charge to carry this across nine chains, and whether it
+  // can. Refusing here is the point: the alternative is a launch that lands on
+  // Base and then cannot be finished anywhere.
+  let owed = 0n; let funding = null;
+  if (predicted) {
+    funding = await apiRelay({ action: 'relayerFunding', token: predicted }).catch(() => null);
+    // The site answers this in two shapes. The new one quotes a complete launch
+    // and is worth refusing on; the old one only reports what the relayer is
+    // missing, and refusing on that would block every launch today.
+    if (funding?.launchCostWei != null || funding?.quoteReady != null) {
+      const fail = fundingFailureOf(funding, oneSignature);
+      if (fail) throw new Error(`${fail} — nothing signed`);
+      owed = BigInt(funding.launchCostWei ?? '0');
+    }
+  }
+
+  const steps = [];
+  if (oneSignature) {
+    const value = LAUNCH_FEE_WEI + perChain + owed;
+    const data = encodeFunctionData({ abi: LAUNCH_AND_FUND_ABI, functionName: 'launchAndFund',
+      args: [params, owed] });
+    if (body.from) await preflight(c, { to: launcher, data, value, from: body.from, what: 'the launch' });
+    steps.push(step('launch on Base', c, launcher, data, value,
+      `0.0002 ETH fee${perChain > 0n ? ` + ${formatUnits(perChain, 18)} ETH ape` : ''}` +
+      `${owed > 0n ? ` + ${formatUnits(owed, 18)} ETH for the relayer's nine-chain work` : ''}`));
+  } else {
+    if (owed > 0n) {
+      if (!funding?.fundingData) throw new Error('the relayer did not return a funding authorization — retry before paying');
+      steps.push(step('pay the cross-chain cost', c, RELAYER, funding.fundingData, owed,
+        'token-bound, and settled first so nothing is spent if you stop here'));
+    }
+    const value = LAUNCH_FEE_WEI + perChain;
+    const data = encodeFunctionData({ abi: LAUNCH_ABI, functionName: 'launch', args: [params] });
+    steps.push(step('launch on Base', c, launcher, data, value,
+      `0.0002 ETH fee${perChain > 0n ? ` + ${formatUnits(perChain, 18)} ETH ape` : ''}`));
+  }
 
   return jsonSafe({
-    steps: [step('launch on Base', c, c.launcher, data, value,
-      `0.0002 ETH launch fee${perChain > 0n ? ` + ${formatUnits(perChain, 18)} ETH creator buy` : ''}`)],
-    salt: params.salt, launcher: c.launcher, value: num(value),
+    steps, launcher, oneSignature,
+    destCurveChains: caps?.launcher?.destCurveChains ?? null,
+    launcherNote: caps?.unavailable
+      ? `the site has not shipped the one-signature launcher yet (${caps.unavailable}) — launching the two-step way`
+      : null,
+    predicted, salt: userSalt,
+    // What the relayer is short of right now, whether or not the launch pays it.
+    relayerShortWei: funding?.totalToFundWei ?? null,
+    relayerShortChains: funding?.shortChains ?? null,
+    relayerCost: num(owed), value: num(LAUNCH_FEE_WEI + perChain + (oneSignature ? owed : 0n)),
   });
+}
+
+/** The site's own refusal rules, so a launch is not signed into a hole. */
+function fundingFailureOf(d, oneSignature) {
+  if (!d || d.httpOk === false) return d?.error ?? 'pool funding quote unavailable';
+  if (!Array.isArray(d.unreadable) || d.unreadable.length) {
+    return 'cannot verify funding on every chain; retry before paying';
+  }
+  if (d.quoteReady !== true) {
+    const where = Array.isArray(d.quoteBlockedChains) ? d.quoteBlockedChains.join(', ') : '';
+    return `OMNI quote funding or price unavailable${where ? ` on ${where}` : ''}; retry before paying`;
+  }
+  if (typeof d.launchCostWei !== 'string' || !/^[1-9][0-9]*$/.test(d.launchCostWei)) {
+    return 'complete launch cost unavailable; retry before paying';
+  }
+  // Only the two-signature path needs the token-bound authorization blob.
+  if (!oneSignature && (typeof d.fundingData !== 'string' || !/^0x(?:[0-9a-fA-F]{2})+$/.test(d.fundingData))) {
+    return 'token-bound funding authorization unavailable; retry before paying';
+  }
+  return null;
 }
 
 /** Read the new CA out of a launch receipt, the same way the bot does. */
@@ -834,8 +944,55 @@ async function apiLaunched({ hash }) {
  * nothing opened — so the page is told to verify against pool state, and
  * /api/pools is what it verifies with.
  */
+/**
+ * The launcher, as the site reports it right now.
+ *
+ * omnichain.family rotates the launcher through a gate, and every time it does,
+ * an address baked in here becomes a dead contract that reverts every launch
+ * with an unnamed custom error. Asking costs one request and cannot go stale.
+ */
+async function apiLauncher() {
+  const r = await relayPost({ action: 'launcher' });
+  // "bad action" is the honest answer from a site that has not shipped the
+  // one-signature launcher yet. That is a capability report, not a failure —
+  // the older two-step path still works and is what runs until it lands.
+  if (!r.ok) return { launcher: null, unavailable: r.data?.error ?? `http ${r.status}` };
+  return r.data;
+}
+
+/** POST to the site's relay, with the shape the rest of this file expects back. */
+async function relayPost(payload) {
+  const r = await fetch(`${API}/api/relay`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(payload), signal: AbortSignal.timeout(180_000),
+  });
+  let data = {};
+  try { data = await r.json(); } catch { /* empty body */ }
+  return { ok: r.ok, status: r.status, data };
+}
+
 async function apiRelay(body) {
   const action = String(body.action ?? '');
+
+  // Actions the site added with the one-signature launcher. `initialize` is the
+  // whole per-chain seed in one call — deploy, allocation, curve, every pool —
+  // and replaces the deploy/bridge/wall sequence this used to drive by hand.
+  if (action === 'launcher') return apiLauncher();
+  if (action === 'relayerFunding') {
+    const r = await relayPost({ action, token: body.token ? getAddress(body.token) : undefined });
+    return { ...r.data, httpOk: r.ok, status: r.status };
+  }
+  if (action === 'initialize') {
+    const r = await relayPost({
+      action, token: getAddress(body.token), chainId: Number(body.chainId),
+      launchHash: body.launchHash, fundingTxHash: body.fundingTxHash,
+      requiredOnly: body.requiredOnly === true,
+    });
+    // 422 means "not complete yet", which is a state, not a failure: the same
+    // call is the resume, so the page needs the body either way.
+    return { ...r.data, httpOk: r.ok, status: r.status };
+  }
+
   if (action === 'deploy') {
     const r = await deployRemote({ chainId: body.chainId, name: body.name, symbol: body.symbol,
       tagline: body.tagline ?? '', logoURI: body.logoURI, creator: getAddress(body.creator) });
@@ -863,6 +1020,15 @@ async function apiRelay(body) {
 async function apiSeedState(ca, address) {
   const token = getAddress(ca);
   const home = chainById(HOME_CHAIN);
+
+  // The site prices the relayer's own shortfall per chain — pool bids, curve fee
+  // and gas, from the actual pool count. That is a better number than anything
+  // derivable from a gas price here, so use it where the answer arrives.
+  const quoted = new Map();
+  const funding = await apiRelay({ action: 'relayerFunding', token }).catch(() => null);
+  for (const row of funding?.chains ?? []) {
+    if (row?.shortfall && row.shortfall !== '0') quoted.set(Number(row.chainId), BigInt(row.shortfall));
+  }
 
   const held = address
     ? await publicClient(home).readContract({ address: token, abi: ERC20_ABI,
@@ -899,11 +1065,15 @@ async function apiSeedState(ca, address) {
       publicClient(c).getGasPrice().catch(() => null),
     ]);
     const need = price != null ? price * 2_500_000n : null;   // a deploy plus a wall
-    const short = gas != null && need != null && gas < need ? need - gas : 0n;
+    const mine = gas != null && need != null && gas < need ? need - gas : 0n;
+    // Theirs wins when they answered: it counts the pool bids and the curve fee,
+    // which a gas-price estimate here cannot see.
+    const short = quoted.has(c.id) ? quoted.get(c.id) : mine;
 
     return { id: c.id, short: c.short, name: c.name, explorer: c.explorer,
       nativeSymbol: c.nativeSymbol,
-      relayerGas: num(gas), relayerNeeds: num(need),
+      relayerGas: num(gas), relayerNeeds: num(need != null && quoted.has(c.id) ? (gas ?? 0n) + short : need),
+      shortfallSource: quoted.has(c.id) ? 'site' : 'estimated',
       relayerShortWei: short > 0n ? short.toString() : null,
       deployed, hooked, hookless, funded,
       done: deployed && hooked && hookless, next };

@@ -670,14 +670,58 @@ async function cmdBag() {
   if (!all.length) { console.log('no venue will take any of these bags for more than gas.'); return; }
 
   all.sort((a, b) => b.netUsd - a.netUsd);
-  const total = all.length;
-  console.log(`best exits (${total} priced, ranked across every token):\n`);
+  console.log(`best exits (${all.length} priced, ranked across every token):\n`);
   for (const r of all.slice(0, Number(flag('top', '10')))) {
     console.log(`  [${r.type}] ${symbolOf(r.token)} ${chainById(r.from).short} -> ${r.dst.short} · ${r.sell.kind}`);
     console.log(`     ${Number(formatUnits(r.amount, 18)).toLocaleString()} tok -> ${eth(r.back)} ${r.dst.nativeSymbol}` +
       `  gross ${usdStr(r.grossUsd)}  gas ${usdStr(r.gasUsd)}  NET ${usdStr(r.netUsd)}`);
     console.log(`     ${r.note}\n`);
   }
+
+  // ------------------------------------------------------------- liquidate
+  //
+  // One exit per (token, chain) position: the best venue for that specific bag.
+  // Bridged exits are excluded unless asked for — they depend on the relayer
+  // minting, and a bulk liquidation should not hand a dozen positions to a
+  // third party that might be out of gas.
+  const allowBridged = has('bridged');
+  const best = new Map();
+  for (const r of all) {
+    if (!allowBridged && r.type !== 'liquidate-local') continue;
+    const key = `${r.token.toLowerCase()}:${r.from}`;
+    if (!best.has(key) || best.get(key).netUsd < r.netUsd) best.set(key, r);
+  }
+  const plan = [...best.values()]
+    .filter((r) => r.netUsd >= Number(flag('min-usd', '0.01')))
+    .sort((a, b) => b.netUsd - a.netUsd);
+
+  if (!plan.length) { console.log('nothing clears the floor to liquidate.'); return; }
+
+  const totalUsd = plan.reduce((a, r) => a + r.netUsd, 0);
+  console.log(`\nliquidation plan: ${plan.length} position(s), ${usdStr(totalUsd)} total\n`);
+  for (const r of plan) {
+    console.log(`  ${symbolOf(r.token).padEnd(11)} ${chainById(r.from).short.padEnd(5)} ${r.sell.kind.padEnd(12)}` +
+      ` ${Number(formatUnits(r.amount, 18)).toLocaleString().padStart(16)} tok -> ${usdStr(r.netUsd)}`);
+  }
+
+  if (!has('live')) { console.log('\ndry run — re-run with --live to sell'); return; }
+
+  // Biggest first: each sell tops the wallet's gas back up for the next one,
+  // which matters when the balance is too thin to cover them all up front.
+  console.log('');
+  let done = 0; let got = 0;
+  for (const r of plan) {
+    const c = chainById(r.from);
+    const tag = `${symbolOf(r.token)} on ${c.short}`;
+    try {
+      const x = await sellOnVenue(c, account, r.token, r.sell, r.amount);
+      done += 1; got += r.netUsd;
+      console.log(`  sold ${tag}: ${eth(x.received)} ${c.nativeSymbol} — ${x.explorer}`);
+    } catch (e) {
+      console.log(`  skipped ${tag}: ${e.message.split('\n')[0].slice(0, 130)}`);
+    }
+  }
+  console.log(`\n${done}/${plan.length} liquidated · ~${usdStr(got)} expected`);
 }
 
 // -------------------------------------------------------------------- main

@@ -97,20 +97,44 @@ async function prices() {
 
 /* ------------------------------------------------------------ discovery */
 
-async function discover() {
-  let d = null;
-  try { d = await C.api('/api/discover'); } catch { /* fall through to empty */ }
-  S.tokens = (d?.tokens ?? []).map((t) => ({ ...t, ts: t.createdAt ? Math.floor(new Date(t.createdAt).getTime() / 1000) : 0 }));
-  S.hidden = d?.hiddenBeforeEpoch ?? 0;
-  S.scan = d ? `${d.indexed} indexed · ${d.fromEvents} from launcher events${S.hidden ? ` · ${S.hidden} pre-OMNI hidden` : ''}` : 'discovery failed';
+function absorb(d) {
+  if (!d) return false;
+  S.tokens = (d.tokens ?? []).map((t) => ({ ...t, ts: t.createdAt ? Math.floor(new Date(t.createdAt).getTime() / 1000) : 0 }));
+  S.hidden = d.hiddenBeforeEpoch ?? 0;
+  S.scan = `${d.indexed} indexed · ${d.deep ? `${d.fromEvents} from launcher events` : 'scanning launcher events…'}` +
+    `${S.hidden ? ` · ${S.hidden} pre-OMNI hidden` : ''}`;
   S.boot = S.tokens.length ? 'ready' : 'empty';
   paintBoard();
-  if (!S.tokens.length) return;
-  liveness(S.tokens);
-  supplies(S.tokens);
-  beBoard(S.tokens);
-  const hero = S.tokens.find((t) => t.address.toLowerCase() === HERO.toLowerCase());
-  select(hero ?? S.tokens[0]);
+  return S.tokens.length > 0;
+}
+
+/**
+ * The index first, the launcher's own event log after.
+ *
+ * The index answers in one call; walking the launcher's events is dozens of
+ * sequential log ranges. Waiting for the second to show the first is how a board
+ * sits empty for half a minute — so this paints what it has and folds the
+ * unindexed launches in when they arrive.
+ */
+async function discover() {
+  const fast = await C.api('/api/discover').catch(() => null);
+  if (absorb(fast)) {
+    liveness(S.tokens); supplies(S.tokens); beBoard(S.tokens);
+    const hero = S.tokens.find((t) => t.address.toLowerCase() === HERO.toLowerCase());
+    select(hero ?? S.tokens[0]);
+  } else if (!fast) {
+    S.scan = 'discovery failed';
+    paintBoard();
+  }
+
+  const deep = await C.api('/api/discover', { deep: 1 }).catch(() => null);
+  if (deep && deep.tokens.length !== (fast?.tokens.length ?? -1)) {
+    const known = new Set(S.tokens.map((t) => t.address.toLowerCase()));
+    if (absorb(deep)) {
+      const fresh = S.tokens.filter((t) => !known.has(t.address.toLowerCase()));
+      if (fresh.length) { liveness(fresh); supplies(fresh); beBoard(S.tokens); }
+    }
+  } else if (deep) { absorb(deep); }
 }
 
 async function liveness(tokens) {
@@ -1451,11 +1475,28 @@ async function loadBridgeBag() {
   paintBridge();
 }
 
-async function loadPending() {
+/**
+ * Unminted burns, fanned out one request per chain.
+ *
+ * Nine chunked log walks in one request is one slow chain deciding the whole
+ * answer. Fanned out, each chain draws the moment it lands and a chain that
+ * times out costs only its own row.
+ */
+async function loadPending(lookback = 20000) {
   if (!W.address) return;
-  try { S.pending = await C.api('/api/pending', { address: W.address }); }
-  catch { S.pending = null; }
+  S.pending = { stuck: [], scannedBlocks: lookback, total: 0, pendingChains: C.CHAINS.length };
   paintBridge();
+  await Promise.all(C.CHAINS.map(async (c) => {
+    const r = await C.api('/api/pending', { address: W.address, chain: c.id, lookback })
+      .catch(() => null);
+    if (!S.pending) return;
+    S.pending.pendingChains -= 1;
+    if (r?.stuck?.length) {
+      S.pending.stuck = [...S.pending.stuck, ...r.stuck].sort((a, b) => b.amount - a.amount);
+      S.pending.total = S.pending.stuck.reduce((a, x) => a + (x.amount ?? 0), 0);
+    }
+    paintBridge();
+  }));
 }
 
 function paintBridge() {
@@ -1484,10 +1525,16 @@ function paintBridge() {
     <div class="dim ell" style="font-size:10.5px">${h(C.short(s.messageId))}${s.txUrl ? ` · <a href="${h(s.txUrl)}" target="_blank" rel="noreferrer">burn</a>` : ''}</div>
     <div>${s.txHash ? `<button class="btn small" data-mint="${s.fromId}:${h(s.txHash)}">request mint</button>` : ''}</div>
   </div>`).join('');
-  $('brPendNote').textContent = !W.address ? 'connect a wallet to scan for unminted burns.'
-    : !S.pending ? 'scanning BridgeOut logs on all nine chains…'
-    : stuck.length ? `${stuck.length} burn${stuck.length === 1 ? '' : 's'} owed a mint, ${C.fmtNum(S.pending.total, 6)} tokens, over the last ${S.pending.scannedBlocks.toLocaleString()} blocks per chain`
-    : `nothing owed: every burn in the last ${S.pending.scannedBlocks.toLocaleString()} blocks per chain has been minted.`;
+  const left = S.pending?.pendingChains ?? 0;
+  $('brPendNote').innerHTML = !W.address ? 'connect a wallet to scan for unminted burns.'
+    : !S.pending ? 'scanning…'
+    : (left ? `<span class="warn">scanning ${left} more chain${left === 1 ? '' : 's'}…</span> ` : '') +
+      (stuck.length
+        ? `${stuck.length} burn${stuck.length === 1 ? '' : 's'} owed a mint, ${C.fmtNum(S.pending.total, 6)} tokens, over the last ${S.pending.scannedBlocks.toLocaleString()} blocks per chain.`
+        : left ? '' : `nothing owed in the last ${S.pending.scannedBlocks.toLocaleString()} blocks per chain.`) +
+      (left ? '' : ` <button class="btn small" id="brDeeper">scan deeper</button>`);
+  const deeper = $('brDeeper');
+  if (deeper) deeper.onclick = () => loadPending(S.pending.scannedBlocks * 5);
 }
 
 /* =================================================================== bag */

@@ -276,13 +276,21 @@ async function apiChart(ca, chainId, type, hours) {
 /** The launch the index starts at: anything older is pre-launcher test noise. */
 const EPOCH_TOKEN = '0x9a5baA12664c89cFbF5cFcD9d0D4805bDcAB29E8';
 
-let _discovered = { at: 0, value: null };
+let _discovered = new Map();
 
-async function apiDiscover(lookback) {
-  if (_discovered.value && Date.now() - _discovered.at < 60_000) return _discovered.value;
+/**
+ * `deep` walks the launcher's own event log, which is dozens of sequential
+ * getLogs ranges and can outlast a serverless request budget. So the board asks
+ * for the index first — one HTTP call, instant — and folds the event scan in
+ * afterwards. A launch missing from the index still appears, just a moment later.
+ */
+async function apiDiscover(lookback, deep) {
+  const key = deep ? 'deep' : 'fast';
+  const hit = _discovered.get(key);
+  if (hit && Date.now() - hit.at < 60_000) return hit.value;
   const [indexed, launched] = await Promise.all([
     fetchIndexedTokens().catch(() => []),
-    fetchLaunchedTokens({ lookbackBlocks: BigInt(lookback ?? 200_000) }).catch(() => []),
+    deep ? fetchLaunchedTokens({ lookbackBlocks: BigInt(lookback ?? 200_000) }).catch(() => []) : [],
   ]);
 
   const rows = new Map();
@@ -323,11 +331,11 @@ async function apiDiscover(lookback) {
   });
 
   const value = {
-    tokens: keep,
+    tokens: keep, deep: Boolean(deep),
     indexed: indexed.length, fromEvents: extra.length,
     hiddenBeforeEpoch: all.length - keep.length, epoch: EPOCH_TOKEN,
   };
-  _discovered = { at: Date.now(), value };
+  _discovered.set(key, { at: Date.now(), value });
   return value;
 }
 
@@ -733,7 +741,7 @@ async function apiLaunched({ hash }) {
   if (rec.status !== 'success') throw new Error(`launch ${hash} reverted`);
   const token = await tokenFromReceipt(rec, c.launcher, rec.from);
   if (!token) throw new Error(`${hash} succeeded but no token address could be read from its logs`);
-  _discovered = { at: 0, value: null };   // the board should show it immediately
+  _discovered.clear();   // the board should show it immediately
   return { token, explorer: `${c.explorer}/tx/${hash}` };
 }
 
@@ -850,14 +858,18 @@ async function apiBag(address, ca) {
  * the destination Portal. The chain is the index. Filtering by the indexed
  * `sender` topic keeps the scan cheap enough to answer inside a request.
  */
-async function apiPending(address, lookback) {
+async function apiPending(address, lookback, chain) {
   const who = getAddress(address);
-  const span = BigInt(lookback ?? 50_000);
+  const span = BigInt(lookback ?? 20_000);
   const evOut = PORTAL_ABI.find((x) => x.type === 'event' && x.name === 'BridgeOut');
 
-  // One scan per source chain, not one per source/destination pair: the logs
-  // are the same either way, and the destination is a field on the event.
-  const burns = await Promise.all(CHAINS.map(async (src) => {
+  // One chain per request. A nine-chain scan is nine chunked log walks and the
+  // slowest one decides the whole answer — which on a 60s serverless budget
+  // means no answer at all. The page fans these out and draws each as it lands.
+  const sources = chain ? [chainById(chain)].filter(Boolean) : CHAINS;
+  if (chain && !sources.length) throw new Error(`unknown chain ${chain}`);
+
+  const burns = await Promise.all(sources.map(async (src) => {
     const pc = publicClient(src);
     try {
       const latest = await pc.getBlockNumber();
@@ -886,8 +898,8 @@ async function apiPending(address, lookback) {
   }));
 
   const stuck = checked.filter(Boolean).sort((a, b) => b.amount - a.amount);
-  return jsonSafe({ address: who, stuck, scannedBlocks: Number(span),
-    total: stuck.reduce((a, x) => a + (x.amount ?? 0), 0) });
+  return jsonSafe({ address: who, chain: chain ? sources[0].short : null,
+    stuck, scannedBlocks: Number(span), total: stuck.reduce((a, x) => a + (x.amount ?? 0), 0) });
 }
 
 // ------------------------------------------------------------- rpc proxy
@@ -932,7 +944,7 @@ const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; cha
 
 const routes = {
   '/api/tokens': () => apiTokens(),
-  '/api/discover': (q) => apiDiscover(q.get('lookback')),
+  '/api/discover': (q) => apiDiscover(q.get('lookback'), q.get('deep') === '1'),
   '/api/token': (q) => apiToken(q.get('ca')),
   '/api/supply': (q) => apiSupply(q.get('ca')),
   '/api/stuck': (q) => apiStuck(q.get('ca')),
@@ -960,7 +972,7 @@ const routes = {
     for (const [k, v] of q) if (!['path', 'chain'].includes(k)) params[k] = v;
     return be.passthrough(path, params, chain);
   },
-  '/api/pending': (q) => apiPending(q.get('address'), q.get('lookback')),
+  '/api/pending': (q) => apiPending(q.get('address'), q.get('lookback'), q.get('chain')),
   '/api/pools': (q) => apiPools(q.get('ca'), q.get('chain')),
   '/api/minted': (q) => apiMinted({ chain: q.get('chain'), messageId: q.get('messageId') }),
 };

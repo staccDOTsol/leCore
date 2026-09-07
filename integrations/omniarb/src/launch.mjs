@@ -300,6 +300,23 @@ export async function recoverMeta(token) {
   return { name, symbol, tagline, logoURI };
 }
 
+/**
+ * Is the relayer already sitting on a seeding float here?
+ *
+ * The float moves to the relayer and stays there until it opens the pools, so
+ * its balance is the record of whether the move already happened. Checking it
+ * is what makes a resumed seed idempotent instead of a repeat donation.
+ */
+export async function relayerHoldsFloat(chain, token, amount) {
+  try {
+    const held = await publicClient(chain).readContract({
+      address: token, abi: ERC20_ABI, functionName: 'balanceOf', args: [RELAYER] });
+    // Compare against a fraction of the intended slice: the relayer spends part
+    // of it opening pools, so an exact match is the wrong test.
+    return held >= amount / 2n && held > 0n;
+  } catch { return false; }
+}
+
 /** Does the token exist on this chain yet? */
 export async function isDeployedOn(chain, token) {
   try {
@@ -317,6 +334,16 @@ export async function seedChain({ account, token, chain, amount, sqrtPriceX96,
   const home = chainById(HOME_CHAIN);
   const pc = publicClient(home);
   const wc = walletClient(home, account);
+
+  // If the relayer is already holding a float here, the move half of this is
+  // done — only the wall is outstanding. Bridging again would hand it another
+  // slice for nothing, and since each run takes a fresh balance/9 that is a
+  // compounding giveaway: four resumed runs took a 303M position down to 1.6M
+  // while every wall was still failing for an unrelated reason.
+  if (await relayerHoldsFloat(chain, token, amount)) {
+    onStep(`${chain.short} already funded with float — walling only`);
+    return wallChain({ chainId: chain.id, token, sqrtPriceX96 });
+  }
 
   if (chain.id !== HOME_CHAIN) {
     // Deploy first, and refuse to bridge until the token is actually there.

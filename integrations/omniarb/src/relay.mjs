@@ -37,7 +37,8 @@ export async function supportedChains() {
  * Quote a native -> native transfer. Returns the amount that lands, the total
  * cost in USD, and the transaction steps needed to execute it.
  */
-export async function quoteNative({ from, to, amount, address, recipient = null }) {
+export async function quoteNative({ from, to, amount, address, recipient = null,
+  tradeType = 'EXACT_INPUT' }) {
   const body = {
     user: address,
     recipient: recipient ?? address,
@@ -46,7 +47,10 @@ export async function quoteNative({ from, to, amount, address, recipient = null 
     originCurrency: NATIVE_CURRENCY,
     destinationCurrency: NATIVE_CURRENCY,
     amount: amount.toString(),
-    tradeType: 'EXACT_INPUT',
+    // EXACT_OUTPUT when the point is what lands rather than what leaves: topping
+    // a relayer up needs a specific amount on the far side, and paying "about
+    // enough" leaves the pool closed for the sake of a rounding error.
+    tradeType,
   };
   const r = await fetch(`${RELAY}/quote`, {
     method: 'POST', headers: { 'content-type': 'application/json' },

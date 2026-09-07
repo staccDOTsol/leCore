@@ -1704,11 +1704,25 @@ function shortfallOf(text) {
 async function fundRelayer(chainId, wei) {
   const c = C.byId[chainId];
   const amount = Number(wei) / 1e18;
-  log(`${c.short}: relayer cannot pay for the wall — sending it ${amount.toPrecision(4)} ${c.gas}`, 'warn');
-  const tx = await C.apiPost('/api/tx/fundrelayer', { chain: chainId, amountWei: wei.toString() });
+  log(`${c.short}: relayer cannot pay for the wall — it needs ${amount.toPrecision(4)} ${c.gas}`, 'warn');
+  const tx = await C.apiPost('/api/tx/fundrelayer', {
+    chain: chainId, amountWei: wei.toString(), from: W.address });
+  // Gas for a chain you have never used has to come from one you have. The
+  // server picks the source by what you actually hold, so say which.
+  log(tx.route === 'relay'
+    ? `${c.short}: bridging from ${tx.via} via Relay — ${C.fmtNum(tx.spend, 5)} in, ` +
+      `${C.fmtUsd(tx.costUsd)} cost, ~${Math.round(tx.seconds || 0)}s`
+    : `${c.short}: sending directly`);
   const done = await runSteps(tx.steps);
-  if (done.length) { log(`${c.short}: relayer funded`, 'up'); return true; }
-  return false;
+  if (!done.length) return false;
+  if (tx.route === 'relay') {
+    // Relay settles on the far side after the origin transaction confirms, so
+    // walling immediately would just fail again on the same empty wallet.
+    log(`${c.short}: waiting for Relay to land…`);
+    await sleep(Math.min(90000, Math.max(15000, (tx.seconds || 30) * 1500)));
+  }
+  log(`${c.short}: relayer funded`, 'up');
+  return true;
 }
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));

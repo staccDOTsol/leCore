@@ -30,6 +30,7 @@ import { fetchIndexedTokens, fetchLaunchedTokens, discoverCurve, getLogsChunked,
 import { nativePrices, toUsd } from '../src/prices.mjs';
 import { quoteBuy, quoteSell, ARTIFACT } from '../src/quote.mjs';
 import { requestMint } from '../src/bridge.mjs';
+import { quoteNative, supportedChains } from '../src/relay.mjs';
 import { uploadMetadata, curveSqrtPrice, deployRemote, wallChain, tokenFromReceipt,
   saltFor, LAUNCH_ABI, LAUNCH_FEE_WEI, DEFAULT_HOOK_PARAMS, RELAYER,
   relayerHoldsFloat, isDeployedOn, recoverMeta } from '../src/launch.mjs';
@@ -919,7 +920,7 @@ async function txSeed({ ca, chain, from, amountWei, amount }) {
  * in words: "relayer short on Arbitrum: has …, needs …, send … more". Nothing
  * else in the flow can proceed, and it is a plain native transfer to fix.
  */
-function txFundRelayer({ chain, amountWei }) {
+async function txFundRelayer({ chain, amountWei, from }) {
   const c = chainById(chain);
   if (!c) throw new Error(`unknown chain ${chain}`);
   const wei = BigInt(amountWei);
@@ -930,11 +931,68 @@ function txFundRelayer({ chain, amountWei }) {
   if (wei > CAP && c.nativeSymbol !== 'POL' && c.nativeSymbol !== 'MON') {
     throw new Error(`refusing to send ${formatUnits(wei, 18)} ${c.nativeSymbol} — gas top-ups are cents, this is not one`);
   }
-  return jsonSafe({
+
+  const direct = () => jsonSafe({
+    route: 'direct', chainId: c.id,
     steps: [step(`send gas to the relayer on ${c.short}`, c, RELAYER, '0x', wei,
       `${formatUnits(wei, 18)} ${c.nativeSymbol} so it can open the pools`)],
     amount: num(wei), to: RELAYER,
   });
+  if (!from) return direct();
+
+  const who = getAddress(from);
+  const pc = publicClient(c);
+
+  // Enough on the destination already? Then it is one transfer, and the reserve
+  // is for the transfer's own gas.
+  const here = await pc.getBalance({ address: who }).catch(() => 0n);
+  const gasHere = await pc.getGasPrice().catch(() => 0n);
+  if (here > wei + gasHere * 120_000n) return direct();
+
+  // Otherwise it has to come from a chain where there IS money. Assuming a
+  // balance sits on the chain that needs it is how a top-up becomes an
+  // insufficient-funds revert on a chain the user has never used.
+  const [prices, supported] = await Promise.all([
+    nativePrices().catch(() => null),
+    supportedChains().catch(() => new Set()),
+  ]);
+  const balances = await Promise.all(CHAINS.map(async (src) => {
+    if (src.id === c.id || !supported.has(src.id)) return null;
+    const bal = await publicClient(src).getBalance({ address: who }).catch(() => 0n);
+    const usd = prices?.byChain.get(src.id)?.usd ?? null;
+    return { src, bal, usd: usd ? num(bal) * usd : 0 };
+  }));
+  const ranked = balances.filter(Boolean).filter((b) => b.bal > 0n).sort((a, b) => b.usd - a.usd);
+  if (!ranked.length) {
+    throw new Error(`no native balance anywhere Relay can route from — ${who} holds nothing to bridge`);
+  }
+
+  const tried = [];
+  for (const { src } of ranked.slice(0, 4)) {
+    try {
+      // EXACT_OUTPUT: the relayer needs this much on the far side, not "about
+      // this much minus the bridge fee".
+      const q = await quoteNative({ from: src, to: c, amount: wei, address: who,
+        recipient: getAddress(RELAYER), tradeType: 'EXACT_OUTPUT' });
+      const steps = [];
+      for (const st of q.steps ?? []) {
+        for (const item of st.items ?? []) {
+          if (item.status === 'complete' || !item.data?.to) continue;
+          steps.push(step(`${st.action ?? 'relay'} on ${src.short}`, src, item.data.to,
+            item.data.data ?? '0x', BigInt(item.data.value ?? '0'),
+            `bridges ${formatUnits(wei, 18)} ${c.nativeSymbol} to the relayer on ${c.name}`));
+        }
+      }
+      if (!steps.length) throw new Error('relay returned no transaction to send');
+      return jsonSafe({
+        route: 'relay', chainId: src.id, via: src.short, to: RELAYER, amount: num(wei),
+        spend: num(q.amountIn), costUsd: q.costUsd, seconds: q.timeEstimate, steps,
+      });
+    } catch (e) {
+      tried.push(`${src.short}: ${String(e.message).split('\n')[0].slice(0, 90)}`);
+    }
+  }
+  throw new Error(`no route to fund the relayer on ${c.name} — ${tried.join(' · ')}`);
 }
 
 /** Which of a chain's two pools are actually open — the check the relay's answer needs. */

@@ -732,8 +732,34 @@ async function apiMetadata(body) {
  * how old our address for that contract is.
  */
 async function preflight(c, { to, data, value, from, what }) {
+  const pc = publicClient(c);
+  const who = getAddress(from);
+  const wei = BigInt(value);
+
+  // Check the balance first. A node asked to simulate a call carrying more value
+  // than the sender has does not say "insufficient funds" — Base says
+  // "Transaction creation failed", which reads like a bug in the transaction
+  // rather than an empty wallet, and sent me looking at contract addresses.
+  if (wei > 0n) {
+    const [bal, gasPrice] = await Promise.all([
+      pc.getBalance({ address: who }).catch(() => null),
+      pc.getGasPrice().catch(() => 0n),
+    ]);
+    if (bal != null && bal < wei) {
+      throw new Error(
+        `not enough ${c.nativeSymbol} on ${c.name}: ${formatUnits(bal, 18)} held, ` +
+        `${formatUnits(wei, 18)} needed${gasPrice ? ' plus gas' : ''}`);
+    }
+    const reserve = gasPrice * 300_000n;
+    if (bal != null && bal < wei + reserve) {
+      throw new Error(
+        `${formatUnits(bal, 18)} ${c.nativeSymbol} on ${c.name} covers the ${formatUnits(wei, 18)} ` +
+        `but leaves nothing for gas — about ${formatUnits(reserve, 18)} more is needed`);
+    }
+  }
+
   try {
-    await publicClient(c).call({ to, data, value: BigInt(value), account: getAddress(from) });
+    await pc.call({ to, data, value: wei, account: who });
   } catch (e) {
     const raw = String(e.shortMessage ?? e.message ?? e);
     const sel = /(0x[0-9a-fA-F]{8})\b/.exec(raw.replace(/\s/g, ' '))?.[1];

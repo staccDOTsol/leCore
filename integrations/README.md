@@ -12,7 +12,9 @@ by the leCore engine.
 `omniarb/` is an isolated Node 22+ integration, not a dependency of the NumPy
 engine. It monitors omnichain token venues and provides **paper/simulation-only**
 atomic and non-atomic route analysis. It has no funded-trading or automatic
-bridging command. Here, “curve” means **HookrLaunchpad**, not Curve Finance.
+bridging command. Here, “curve” means launchpad/Sewn bonding curves, not Curve
+Finance. Curve registrations are supported on **every configured chain**;
+there is no Base/Robinhood-only assumption.
 
 Commands from `/home/runner/work/leCore/leCore/integrations/omniarb`:
 
@@ -50,9 +52,16 @@ The monitor's evidence file maps decimal chain IDs to records containing:
   and hook addresses are preserved; discovery is not limited to the original
   hooked/hookless pair. Without a start block, historical coverage is explicitly
   partial. Discovery budgets fail closed rather than silently truncating data.
-- Optional `curve: { address, codeHash, units: "wei-per-whole-token" }` permits
-  a curve spot read. Curve execution remains disabled until sellability,
-  reserves, graduation behavior and atomic composition are verified.
+- Optional `curves` lists any chain's registrations with `id`, `protocol`
+  (including `"sewn"`), `address`, `codeHash`, `priceMethod:
+  "currentCurvePrice"`, `units: "wei-per-whole-token"`, and `quoteChainId`.
+  The latter explicitly identifies whose 18-decimal native currency the formula
+  uses, independently of the deployment chain; new chains never imply ETH
+  denomination. This permits verified spot reads with the supported ABI only.
+  Unknown Sewn ABIs stay blocked rather than being guessed. Legacy single
+  `curve` records remain accepted but also require explicit `quoteChainId`.
+  Curve execution remains disabled until sellability, reserves, graduation
+  behavior and composition are verified.
 
 Every pool's slot0/liquidity is batched at one block. Native-target USD prices
 respect raw token/native orientation and token decimals; intermediate-token

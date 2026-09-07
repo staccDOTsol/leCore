@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { keccak256, toHex } from 'viem';
-import { ChainMonitor, PoolRegistry, keyId, backfill, decodeState, readPools, stateSlots, poolId } from '../src/monitor.mjs';
+import { ChainMonitor, PoolRegistry, keyId, backfill, decodeState, readPools, readCurves,
+  curveRegistrations, stateSlots, poolId } from '../src/monitor.mjs';
 import { CHAINS, DEFAULT_TOKEN, endpoints } from '../src/chains.mjs';
 import { FxBook, usd } from '../src/pricing.mjs';
 
@@ -180,4 +181,40 @@ test('registry preserves intermediate assets but rejects fake Initialize ids', (
   assert.throws(() => registry.add({ ...key, tickSpacing: -1 }, null));
   registry.apply([{ eventName: 'Initialize', removed: true, args: { id: keyId(key) } }]);
   assert.equal(registry.values().length, 0);
+});
+
+test('Sewn curve registrations are supported on all chains, not just Base and Robinhood', async () => {
+  const f = fixture();
+  const curve = { id: 'sewn-1', protocol: 'sewn', quoteChainId: 143,
+    units: 'wei-per-whole-token', priceMethod: 'currentCurvePrice',
+    address: '0x' + '1'.repeat(40), codeHash: keccak256('0x6000') };
+  f.fx.set(143, usd('0.02'), now, now);
+  f.client.readContract = async params => {
+    assert.equal(params.functionName, 'currentCurvePrice');
+    assert.equal(params.blockNumber, 50n);
+    return 10n ** 18n;
+  };
+  for (const deployment of CHAINS) {
+    const result = await readCurves(f.client, deployment, DEFAULT_TOKEN, { curves: [curve] },
+      50n, f.fx, now);
+    assert.equal(result[0].chainId, deployment.id);
+    assert.equal(result[0].priceUsd, usd('0.02'));
+    assert.equal(result[0].coverage, 'fresh');
+    assert.equal(result[0].executable, false);
+  }
+});
+
+test('curve quote denomination and ABI must be explicit; new deployments never imply ETH FX', async () => {
+  const f = fixture();
+  const curve = { id: 'sewn-1', protocol: 'sewn', units: 'wei-per-whole-token',
+    priceMethod: 'currentCurvePrice', address: '0x' + '1'.repeat(40), codeHash: keccak256('0x6000') };
+  let result = await readCurves(f.client, chain, DEFAULT_TOKEN, { curves: [curve] }, 50n, f.fx, now);
+  assert.equal(result[0].coverage, 'unverified');
+  result = await readCurves(f.client, chain, DEFAULT_TOKEN, {
+    curves: [{ ...curve, quoteChainId: 8453, priceMethod: 'unknownSewnAbi' }],
+  }, 50n, f.fx, now);
+  assert.equal(result[0].coverage, 'unverified');
+  assert.equal(f.calls.length, 0);
+  assert.throws(() => curveRegistrations(chain, { curves: [curve, curve] }));
+  assert.ok(curveRegistrations(CHAINS.find(c => c.id === 143), null).some(c => c.protocol === 'sewn'));
 });

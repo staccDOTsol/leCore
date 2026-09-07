@@ -5,7 +5,7 @@ import { fresh, profitability, uint } from './pricing.mjs';
 export async function optimiseSizes(sizes, simulate, {
   chainId, token, blockHash, now = Date.now(), maxAgeMs = 30_000,
   nativeBalance, reservedNative, gasReserve, maxNotional, safetyReserve,
-  maxPriceImpactBps = 100n,
+  maxPriceImpactBps = 100n, clock = Date.now,
 }) {
   for (const value of [nativeBalance, reservedNative, gasReserve, maxNotional,
     safetyReserve, maxPriceImpactBps]) uint(value);
@@ -18,10 +18,12 @@ export async function optimiseSizes(sizes, simulate, {
     if (!size || size > maxNotional || size > available) continue;
     try {
       const quote = await simulate(size);
+      const observedNow = clock();
       if (quote.chainId !== chainId || quote.token.toLowerCase() !== token.toLowerCase()
           || quote.blockHash !== blockHash || quote.amountIn !== size
           || quote.atomic !== true || quote.feesIncluded !== true
-          || !fresh(quote.observedAt, now, maxAgeMs)) throw new Error('simulation identity/freshness mismatch');
+          || observedNow < now
+          || !fresh(quote.observedAt, observedNow, maxAgeMs)) throw new Error('simulation identity/freshness mismatch');
       uint(quote.priceImpactBps);
       if (quote.priceImpactBps > maxPriceImpactBps) throw new Error('price impact limit');
       if (size + quote.gas > available) throw new Error('inventory/gas reserve limit');
@@ -34,6 +36,15 @@ export async function optimiseSizes(sizes, simulate, {
       results.push({ size, eligible: false, reason: 'simulation unavailable or policy rejected' });
     }
   }
+  const finishedAt = clock();
+  for (const result of results) {
+    if (result.quote && (finishedAt < now || !fresh(result.quote.observedAt, finishedAt, maxAgeMs))) {
+      result.eligible = false;
+      result.reason = 'simulation expired during size search';
+    }
+  }
+  best = results.filter(result => result.eligible)
+    .reduce((winner, result) => !winner || result.net > winner.net ? result : winner, null);
   return { best, results, fundedExecution: false };
 }
 

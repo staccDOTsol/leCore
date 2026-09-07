@@ -4,7 +4,7 @@ import {
 } from 'viem';
 import { CHAINS, endpoints } from './chains.mjs';
 import { NATIVE, SCALE, FxBook, relayUnitPrice, fresh, poolPriceUsd,
-  curvePriceUsd, compareMarkets } from './pricing.mjs';
+  curvePriceUsd, marketComparisons } from './pricing.mjs';
 
 const POOL_ABI = parseAbi(['function extsload(bytes32[] slots) view returns (bytes32[])']);
 const TOKEN_ABI = parseAbi(['function decimals() view returns (uint8)']);
@@ -15,6 +15,53 @@ const EVENTS = parseAbi([
   'event ModifyLiquidity(bytes32 indexed id,address indexed sender,int24 tickLower,int24 tickUpper,int256 liquidityDelta,bytes32 salt)',
 ]);
 const HASH = /^0x[0-9a-fA-F]{64}$/;
+
+export function curveRegistrations(chain, evidence) {
+  // Sewn/launchpad listings are chain-neutral. No Base/Robinhood allowlist:
+  // deployment identity, quote currency and pricing ABI are per registration.
+  const records = evidence?.curves ?? (evidence?.curve
+    ? [{ id: 'legacy', protocol: 'hookrlaunchpad',
+      priceMethod: 'currentCurvePrice', ...evidence.curve }]
+    : [{ id: 'hookrlaunchpad', protocol: 'hookrlaunchpad' }, { id: 'sewn', protocol: 'sewn' }]);
+  if (!Array.isArray(records) || records.length > 256) throw new Error('invalid curve registration budget');
+  const ids = new Set();
+  for (const record of records) {
+    if (typeof record?.id !== 'string' || !/^[a-zA-Z0-9_-]{1,80}$/.test(record.id)
+        || ids.has(record.id) || typeof record.protocol !== 'string') {
+      throw new Error('invalid or duplicate curve registration');
+    }
+    ids.add(record.id);
+  }
+  return records;
+}
+
+export async function readCurves(client, chain, token, evidence, blockNumber, fx, now) {
+  const markets = [];
+  for (const curve of curveRegistrations(chain, evidence)) {
+    const nativeUsd = fx.get(curve.quoteChainId, now);
+    const market = { chainId: chain.id, token, venue: `curve:${curve.protocol}:${curve.id}`,
+      protocol: curve.protocol, address: curve.address ?? null,
+      observedAt: now, fxObservedAt: fx.entries.get(curve.quoteChainId)?.observedAt ?? null,
+      quoteChainId: curve.quoteChainId ?? null, priceUsd: null, coverage: 'unverified', executable: false };
+    // No inference that a new Sewn ABI or a non-ETH curve uses ETH wei.
+    if (curve.units === 'wei-per-whole-token' && curve.priceMethod === 'currentCurvePrice'
+        && CHAINS.some(c => c.id === curve.quoteChainId) && HASH.test(curve.codeHash ?? '')
+        && /^0x[0-9a-fA-F]{40}$/.test(curve.address ?? '')) {
+      try {
+        const code = await client.getCode({ address: curve.address, blockNumber });
+        if (!code || code === '0x' || keccak256(code) !== curve.codeHash.toLowerCase()) {
+          throw new Error('curve identity mismatch');
+        }
+        const value = await client.readContract({ address: curve.address, abi: CURVE_ABI,
+          functionName: 'currentCurvePrice', args: [token], blockNumber });
+        market.priceUsd = nativeUsd ? curvePriceUsd(value, nativeUsd) : null;
+        market.coverage = nativeUsd ? 'fresh' : 'missing-fx';
+      } catch { market.coverage = 'unknown'; }
+    }
+    markets.push(market);
+  }
+  return markets;
+}
 
 export function poolId(token, hook) {
   return keyId({ currency0: NATIVE, currency1: token, fee: 3000, tickSpacing: 60, hooks: hook });
@@ -258,27 +305,8 @@ export class ChainMonitor {
           coverage: !pool.initialised ? 'no-market' : !nativeUsd ? 'missing-fx'
             : pool.liquidity === 0n ? 'no-active-liquidity' : 'fresh' });
       }
-      if (this.chain.hasCurve) {
-        const curve = this.evidence?.curve;
-        const market = { chainId: this.chain.id, token: this.token, venue: 'curve',
-          observedAt: now, fxObservedAt, priceUsd: null, coverage: 'unverified',
-          executable: false };
-        // Formula units and runtime identity must be independently established.
-        if (curve?.units === 'wei-per-whole-token' && HASH.test(curve.codeHash ?? '')
-            && /^0x[0-9a-fA-F]{40}$/.test(curve.address ?? '')) {
-          try {
-            const code = await this.client.getCode({ address: curve.address, blockNumber: head.number });
-            if (!code || code === '0x' || keccak256(code) !== curve.codeHash.toLowerCase()) {
-              throw new Error('curve identity mismatch');
-            }
-            const value = await this.client.readContract({ address: curve.address, abi: CURVE_ABI,
-              functionName: 'currentCurvePrice', args: [this.token], blockNumber: head.number });
-            market.priceUsd = nativeUsd ? curvePriceUsd(value, nativeUsd) : null;
-            market.coverage = nativeUsd ? 'fresh' : 'missing-fx';
-          } catch { market.coverage = 'unknown'; }
-        }
-        base.markets.push(market);
-      }
+      base.markets.push(...await readCurves(this.client, this.chain, this.token, this.evidence,
+        head.number, this.fx, now));
       const canonical = await this.client.getBlock({ blockNumber: head.number });
       if (canonical.hash !== head.hash) throw new Error('reorg during snapshot');
       base.blockNumber = head.number; base.blockHash = head.hash; base.stateRoot = head.stateRoot;
@@ -315,6 +343,7 @@ export async function scan(monitors) {
     catch { monitor.fx.entries.delete(monitor.chain.id); }
   }
   const chains = await Promise.all(monitors.map(monitor => monitor.snapshot()));
+  const comparisons = marketComparisons(chains.flatMap(chain => chain.markets), Date.now());
   return { mode: 'read-only', fundedTrading: false, automaticBridging: false,
-    chains, signals: compareMarkets(chains.flatMap(chain => chain.markets), Date.now()) };
+    chains, signals: comparisons.signals, signalSearchTruncated: comparisons.truncated };
 }

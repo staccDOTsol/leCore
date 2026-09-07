@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { assetId, poolId, buildRouteGraph, searchRoutes } from '../src/routes.mjs';
+import { assetId, poolId, buildRouteGraph, searchRoutes,
+  snapshotPoolId, graphFromPoolSnapshots, ROUTE_VALUE_SCALE } from '../src/routes.mjs';
+import { keyId } from '../src/monitor.mjs';
 
 const NOW = 1_000_000;
 const address = n => `0x${n.toString(16).padStart(40, '0')}`;
@@ -41,11 +43,12 @@ function simulator(rate = (_edge, amount) => amount, gas = () => 1n) {
   };
 }
 const evaluate = ({ amountIn, simulation }) => ({
-  eligible: true,
+  eligible: true, numeraire: 'USD', scale: ROUTE_VALUE_SCALE,
   net: simulation.amountOut - amountIn - simulation.gasCosts.reduce((sum, cost) => sum + cost.nativeCost, 0n),
 });
 const search = (graph, overrides = {}) => searchRoutes({
-  graph, start: A, sizes: [100n], pins, now: NOW, maxHops: 3, ...overrides,
+  graph, start: A, sizes: [100n], pins, now: NOW, clock: () => overrides.now ?? NOW,
+  maxHops: 3, ...overrides,
 });
 const graphOf = (pools, rate) => buildRouteGraph({ pools, adapters: { test: adapter(rate) }, now: NOW });
 const pairGraph = rate => graphOf([pool(A, B, 100), pool(A, B, 200)], rate);
@@ -61,6 +64,7 @@ test('asset and PoolKey identity includes chain, fee, tick spacing and hooks, ne
   assert.equal(poolId(base), poolId({ ...base, adapterId: 'alias' }));
   assert.throws(() => assetId({ ...A, chainId: '1' }), /identity/);
   assert.throws(() => poolId({ ...base, poolKey: { ...base.poolKey, tickSpacing: 0 } }), /PoolKey/);
+  assert.throws(() => poolId({ ...base, poolKey: { ...base.poolKey, tickSpacing: 32768 } }), /PoolKey/);
 });
 
 test('dozens of pools are retained per pair per chain and a three-hop cycle beats all two-hop cycles', async () => {
@@ -185,6 +189,7 @@ test('simulation must bind whole sequence, amounts, current block/state, fees an
     s => { s.amountOut++; }, s => { s.pins[1].blockHash = hash(19); },
     s => { s.steps[1].pins[1].stateRoot = hash(19); },
     s => { s.outputHookFeesIncluded = false; }, s => { s.gasCosts = []; },
+    s => { s.gasCosts[0].nativeCost = 0n; },
     s => { s.gasCosts[0].nativeCost = 1; }, s => { s.atomic = false; },
   ]) {
     const report = await search(pairGraph(), {
@@ -276,4 +281,153 @@ test('missing/stale pins, mixed numeric sizes, expired equivalence and malformed
   const malformed = pairGraph(); malformed.edges[0].to = { ...malformed.edges[0].to, chainId: 2 };
   await assert.rejects(search(malformed), /malformed pool edge/);
   await assert.rejects(search(crossGraph('inventory'), { now: NOW + 10_001 }), /equivalence/);
+});
+
+function snapshots() {
+  return { chains: [1, 2].map(chainId => ({
+    ...pins[chainId], blockNumber: 100n, discovery: 'partial-recent-blocks',
+    warnings: ['historical pool discovery incomplete'],
+    pools: Array.from({ length: 36 }, (_, i) => {
+      const p = pool(asset(2, chainId), asset(3, chainId), i + 1);
+      const id = keyId(p.poolKey);
+      return { id, key: p.poolKey, chainId, poolManager: p.manager,
+        venue: `hookless:${id}`, blockHash: pins[chainId].blockHash, blockNumber: 100n,
+        liquidity: 1000n, sqrtPriceX96: 2n ** 96n, quoteAdapter: 'unverified', executable: false };
+    }),
+  })) };
+}
+
+test('monitor snapshot helper binds chain/manager/hash and retains dozens of intermediate pools', () => {
+  const report = snapshots();
+  const adapterBindings = Object.fromEntries(report.chains.flatMap(chain =>
+    chain.pools.map(p => [snapshotPoolId(p), 'test'])));
+  const graph = graphFromPoolSnapshots(report, { adapters: { test: adapter() }, adapterBindings, now: NOW });
+  assert.equal(graph.edges.length, 144);
+  assert.deepEqual(graph.rejected, []);
+  assert.deepEqual(graph.diagnostics, []);
+  assert.equal(graph.discovery[0].coverage, 'partial-recent-blocks');
+  assert.ok(graph.edges.every(edge => edge.deploymentId === snapshotPoolId(edge.snapshot)));
+  assert.equal(graph.pins[2].stateRoot, pins[2].stateRoot);
+  assert.equal(graph.executable, false);
+  assert.notEqual(snapshotPoolId(report.chains[0].pools[0]), snapshotPoolId(report.chains[1].pools[0]));
+});
+
+test('snapshot adapter labels never grant support; fallback pools, wrong IDs and stale blocks remain diagnostics', () => {
+  const report = snapshots();
+  const unbound = graphFromPoolSnapshots(report, { adapters: { test: adapter() }, now: NOW });
+  assert.equal(unbound.edges.length, 0);
+  assert.equal(unbound.diagnostics.length, 72);
+  const p = report.chains[0].pools[0];
+  const binding = { [snapshotPoolId(p)]: 'test' };
+  report.chains = [{ ...report.chains[0], pools: [p] }];
+  for (const mutate of [
+    row => { row.venue = 'hookless'; },
+    row => { row.discoverySource = 'baseline'; },
+    row => { row.id = hash(999); },
+    row => { row.blockHash = hash(999); },
+    row => { row.chainId = 2; },
+    row => { row.blockNumber = 101n; },
+    row => { row.liquidity = 0n; },
+  ]) {
+    const copy = structuredClone(report); mutate(copy.chains[0].pools[0]);
+    const graph = graphFromPoolSnapshots(copy, { adapters: { test: adapter() }, adapterBindings: binding, now: NOW });
+    assert.equal(graph.edges.length, 0);
+    assert.equal(graph.diagnostics.length, 1);
+  }
+  const blocked = graphFromPoolSnapshots(report, { adapters: {
+    test: { ...adapter(), supports: () => false },
+  }, adapterBindings: binding, now: NOW });
+  assert.equal(blocked.edges.length, 0);
+  assert.match(blocked.rejected[0].reason, /unsupported adapter or hook/);
+});
+
+test('clock rechecks pinned state after quote, simulation and evaluator awaits', async () => {
+  for (const stage of ['quote', 'simulation', 'evaluation']) {
+    let time = NOW;
+    const graph = pairGraph((_edge, amount) => amount + 10n);
+    const original = graph.adapters.test.quote;
+    graph.adapters.test.quote = async args => {
+      const value = await original(args);
+      if (stage === 'quote') time += 30_001;
+      return value;
+    };
+    const report = await search(graph, { clock: () => time,
+      simulateRoute: async args => {
+        const value = await simulator((_edge, amount) => amount + 10n)(args);
+        if (stage === 'simulation') time += 30_001;
+        return value;
+      },
+      evaluate: async args => {
+        if (stage === 'evaluation') time += 30_001;
+        return evaluate(args);
+      },
+    });
+    assert.equal(report.best, null, stage);
+    assert.ok(report.failures.some(row => /stale pinned/.test(row.reason)), stage);
+    assert.ok(report.candidates.every(row => !row.paperCandidate && !row.executable), stage);
+  }
+});
+
+test('a previously best self-cycle expires while later branches run, and fresh alternative wins', async () => {
+  let time = NOW, calls = 0, simulations = 0;
+  const graph = pairGraph();
+  const original = graph.adapters.test.quote;
+  graph.adapters.test.quote = async args => {
+    if (++calls === 3) time += 15_000;
+    return original(args);
+  };
+  const report = await search(graph, { clock: () => time, evaluate,
+    simulateRoute: async args => {
+      const first = ++simulations === 1;
+      const value = await simulator((_edge, amount) => amount + (first ? 100n : 10n))(args);
+      if (first) {
+        value.observedAt = NOW - 20_000;
+        value.steps.forEach(step => { step.observedAt = NOW - 20_000; });
+      }
+      return value;
+    },
+  });
+  assert.equal(report.candidates[0].status, 'expired');
+  assert.equal(report.candidates[0].paperCandidate, false);
+  assert.equal(report.best.assessment.net, 19n);
+  assert.equal(assetId(report.best.route.from), assetId(report.best.route.to));
+  assert.equal(report.best.route.kind, 'local-cycle');
+});
+
+test('final selection clears earlier eligible candidates once pinned state expires', async () => {
+  let time = NOW, calls = 0;
+  const graph = pairGraph();
+  const original = graph.adapters.test.quote;
+  graph.adapters.test.quote = async args => {
+    if (++calls === 3) time += 30_001;
+    return original(args);
+  };
+  const report = await search(graph, { clock: () => time, evaluate,
+    simulateRoute: simulator((_edge, amount) => amount + 10n) });
+  assert.equal(report.best, null);
+  assert.equal(report.candidates[0].status, 'expired');
+  assert.equal(report.candidates[0].simulationValidated, false);
+  assert.ok(report.failures.some(row => row.stage === 'expiry'));
+});
+
+test('a nonmonotonic injected clock fails closed', async () => {
+  await assert.rejects(search(pairGraph(), { clock: () => NOW - 1 }), /nonmonotonic/);
+});
+
+test('every economic assessment requires the globally fixed USD numeraire and BigInt scale', async () => {
+  assert.equal(ROUTE_VALUE_SCALE, 10n ** 18n);
+  for (const mutate of [
+    assessment => { delete assessment.numeraire; },
+    assessment => { assessment.numeraire = 'ETH'; },
+    assessment => { assessment.numeraire = 'BNB'; },
+    assessment => { delete assessment.scale; },
+    assessment => { assessment.scale = 10n ** 6n; },
+    assessment => { assessment.scale = 1e18; },
+  ]) {
+    const report = await search(pairGraph(), { simulateRoute: simulator((_edge, amount) => amount + 10n),
+      evaluate: args => { const assessment = evaluate(args); mutate(assessment); return assessment; } });
+    assert.equal(report.best, null);
+    assert.ok(report.candidates.every(candidate => candidate.paperCandidate === false));
+    assert.ok(report.failures.some(failure => /economic assessment/.test(failure.reason)));
+  }
 });

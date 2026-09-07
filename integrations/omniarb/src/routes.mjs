@@ -1,6 +1,7 @@
 const ADDRESS = /^0x[0-9a-fA-F]{40}$/;
 const HASH = /^0x[0-9a-fA-F]{64}$/;
 const ZERO = `0x${'0'.repeat(40)}`;
+export const ROUTE_VALUE_SCALE = 10n ** 18n;
 const requireThat = (condition, message) => { if (!condition) throw new Error(message); };
 const positiveInteger = value => Number.isSafeInteger(value) && value > 0;
 const uint = value => typeof value === 'bigint' && value >= 0n;
@@ -24,7 +25,7 @@ export function poolId(pool) {
   requireThat(key && ADDRESS.test(key.currency0) && ADDRESS.test(key.currency1)
     && BigInt(key.currency0) < BigInt(key.currency1), 'PoolKey currencies must be canonical');
   requireThat(Number.isInteger(key.fee) && key.fee >= 0 && key.fee <= 0xffffff
-    && Number.isInteger(key.tickSpacing) && key.tickSpacing > 0 && key.tickSpacing <= 0x7fffff
+    && Number.isInteger(key.tickSpacing) && key.tickSpacing > 0 && key.tickSpacing <= 32767
     && ADDRESS.test(key.hooks), 'invalid PoolKey fee/tickSpacing/hooks');
   return [pool.chainId, pool.manager.toLowerCase(), key.currency0.toLowerCase(),
     key.currency1.toLowerCase(), key.fee, key.tickSpacing, key.hooks.toLowerCase()].join(':');
@@ -76,7 +77,7 @@ export function graphFromPoolSnapshots(report, {
         const state = { chainId: chain.chainId, blockHash: chain.blockHash,
           stateRoot: chain.stateRoot, observedAt: chain.observedAt };
         validatePins({ [chain.chainId]: state }, [chain.chainId], now, maxAgeMs);
-        requireThat(uint(snapshot.liquidity) && snapshot.liquidity > 0n
+        requireThat(snapshot.initialised !== false && uint(snapshot.liquidity) && snapshot.liquidity > 0n
           && uint(snapshot.sqrtPriceX96) && snapshot.sqrtPriceX96 > 0n,
         'snapshot has no active initialized liquidity');
         const adapterId = Object.hasOwn(adapterBindings, deploymentId) && adapterBindings[deploymentId];
@@ -230,7 +231,8 @@ function validateSimulation(simulation, route, amountIn, pins, now, maxAgeMs) {
     && simulation.gasCosts.length === route.chainIds.length, 'per-chain simulated gas required');
   for (const chainId of route.chainIds) {
     const costs = simulation.gasCosts.filter(cost => cost.chainId === chainId);
-    requireThat(costs.length === 1 && uint(costs[0].nativeCost), 'invalid simulated gas');
+    requireThat(costs.length === 1 && uint(costs[0].nativeCost) && costs[0].nativeCost > 0n,
+      'invalid simulated gas');
   }
   if (route.nonAtomic) {
     requireThat(simulation.inventoryVerified === true && simulation.latencyRiskAccepted === true,
@@ -242,15 +244,19 @@ function validateSimulation(simulation, route, amountIn, pins, now, maxAgeMs) {
  * Amount-dependent bounded DFS. Independent edge quotes are exploration only.
  * simulateRoute({route,amountIn,pins}) must execute the actual sequence with evolving
  * reserves, not compose cached quotes. No exploratory quotes are passed to it.
- * evaluate({route,amountIn,simulation,pins}) returns {eligible:boolean,net:bigint};
+ * evaluate({route,amountIn,simulation,pins}) returns
+ * {eligible:boolean,net:bigint,numeraire:'USD',scale:ROUTE_VALUE_SCALE};
  * it must value currencies, per-size gas/slippage and non-atomic capital/latency risk.
  * No default economics are inferred for unlike assets or cross-chain native gas.
  * Results are alternatives, never additive split allocations or live authorization.
+ * clock() is rechecked after asynchronous work and at final selection; inject a
+ * fixed clock alongside now for deterministic tests. RPC deadlines belong to adapters.
  */
 export async function searchRoutes({
   graph, start, targets = [start], sizes, pins, simulateRoute, evaluate,
   maxHops = 4, maxExpansions = 10_000, maxQuotes = 10_000, maxCandidates = 1_000,
-  maxSimulations = 1_000, now = Date.now(), maxAgeMs = 30_000, mode = 'paper',
+  maxSimulations = 1_000, now = Date.now(), clock = () => Date.now(),
+  maxAgeMs = 30_000, mode = 'paper',
 } = {}) {
   requireThat(['paper', 'readonly'].includes(mode), 'route search is readonly/paper only');
   requireThat(positiveInteger(now) && positiveInteger(maxAgeMs), 'invalid freshness policy');
@@ -266,6 +272,16 @@ export async function searchRoutes({
   const chainIds = [...new Set(graph.edges.flatMap(edgeChains))];
   const pinned = clone(pins);
   validatePins(pinned, chainIds, now, maxAgeMs);
+  requireThat(typeof clock === 'function', 'invalid clock');
+  let lastTime = now;
+  const currentTime = () => {
+    const time = clock();
+    requireThat(positiveInteger(time) && time >= lastTime, 'invalid/nonmonotonic clock');
+    lastTime = time;
+    validatePins(pinned, chainIds, time, maxAgeMs);
+    return time;
+  };
+  currentTime();
   const adjacency = new Map();
   const graphEdges = clone(graph.edges), identities = new Set();
   for (const edge of graphEdges) {
@@ -296,6 +312,11 @@ export async function searchRoutes({
     stage, routeId: route?.id, edgeId: edge?.id, amountIn,
     reason: error.message, usable: false, executable: false,
   });
+  const routeFresh = (route, time) => {
+    for (const edge of route.edges) {
+      if (edge.nonAtomic) equivalence(edge.equivalence, edge.from, edge.to, time, maxAgeMs);
+    }
+  };
   async function visit(node, amount, size, path, used) {
     for (const edge of adjacency.get(node) ?? []) {
       if (stopped) return;
@@ -305,10 +326,14 @@ export async function searchRoutes({
       if (budget.quotes >= maxQuotes) { limits.add('maxQuotes'); stopped = true; return; }
       let quote;
       try {
+        const before = currentTime();
+        if (edge.nonAtomic) equivalence(edge.equivalence, edge.from, edge.to, before, maxAgeMs);
         const adapter = supported(graph.adapters, edge);
         budget.quotes++;
         quote = await adapter.quote({ edge: clone(edge), amountIn: amount, pins: clone(pinned) });
-        validateQuote(quote, edge, amount, pinned, now, maxAgeMs);
+        const after = currentTime();
+        validateQuote(quote, edge, amount, pinned, after, maxAgeMs);
+        if (edge.nonAtomic) equivalence(edge.equivalence, edge.from, edge.to, after, maxAgeMs);
       } catch (error) {
         fail('quote', null, amount, error, edge);
         continue;
@@ -339,7 +364,9 @@ export async function searchRoutes({
             budget.simulations++;
             try {
               const simulation = await simulateRoute({ route: clone(route), amountIn: size, pins: clone(pinned) });
-              validateSimulation(simulation, route, size, pinned, now, maxAgeMs);
+              const simulatedAt = currentTime();
+              routeFresh(route, simulatedAt);
+              validateSimulation(simulation, route, size, pinned, simulatedAt, maxAgeMs);
               candidate.simulation = clone(simulation);
               candidate.simulationValidated = true;
               candidate.status = 'simulated-paper-only';
@@ -347,7 +374,11 @@ export async function searchRoutes({
                 const assessment = await evaluate({
                   route: clone(route), amountIn: size, simulation: clone(simulation), pins: clone(pinned),
                 });
-                requireThat(typeof assessment?.eligible === 'boolean' && typeof assessment.net === 'bigint',
+                const evaluatedAt = currentTime();
+                routeFresh(route, evaluatedAt);
+                validateSimulation(simulation, route, size, pinned, evaluatedAt, maxAgeMs);
+                requireThat(typeof assessment?.eligible === 'boolean' && typeof assessment.net === 'bigint'
+                  && assessment.numeraire === 'USD' && assessment.scale === ROUTE_VALUE_SCALE,
                   'invalid per-size economic assessment');
                 candidate.assessment = clone(assessment);
                 candidate.paperCandidate = assessment.eligible && assessment.net > 0n;
@@ -367,6 +398,44 @@ export async function searchRoutes({
   }
   for (const size of [...new Set(sizes)].sort((a, b) => a < b ? -1 : a > b ? 1 : 0)) {
     if (!stopped) await visit(startId, size, size, [], new Set());
+  }
+  // A winner from an early branch can expire while later branches are explored.
+  best = null;
+  let completedAt;
+  try { completedAt = currentTime(); } catch (error) {
+    fail('expiry', null, null, error);
+  }
+  for (const candidate of candidates) {
+    if (!candidate.simulationValidated) continue;
+    try {
+      requireThat(completedAt !== undefined, 'pinned state expired before search completion');
+      routeFresh(candidate.route, completedAt);
+      validateSimulation(candidate.simulation, candidate.route, candidate.amountIn,
+        pinned, completedAt, maxAgeMs);
+      if (candidate.paperCandidate && (!best || candidate.assessment.net > best.assessment.net)) best = candidate;
+    } catch (error) {
+      candidate.status = 'expired';
+      candidate.paperCandidate = false;
+      candidate.simulationValidated = false;
+      fail('expiry', candidate.route, candidate.amountIn, error);
+    }
+  }
+  try {
+    const finalTime = currentTime();
+    if (best) {
+      routeFresh(best.route, finalTime);
+      validateSimulation(best.simulation, best.route, best.amountIn, pinned, finalTime, maxAgeMs);
+    }
+  } catch (error) {
+    for (const candidate of candidates) {
+      if (candidate.simulationValidated) {
+        candidate.status = 'expired';
+        candidate.paperCandidate = false;
+        candidate.simulationValidated = false;
+      }
+    }
+    best = null;
+    fail('expiry', null, null, error);
   }
   return { mode, candidates, best, failures, graphRejections: clone(graph.rejected ?? []), budget,
     truncated: limits.size > 0, truncationReasons: [...limits], globallyOptimal: false,

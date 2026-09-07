@@ -14,7 +14,8 @@ const rows = [
 
 export const CHAINS = rows.map(([id, name, nativeSymbol, rpc, poolManager, hook, router]) =>
   Object.freeze({ id, name, nativeSymbol, rpc, poolManager, hook, router,
-    nativeDecimals: 18, hasCurve: id === 8453 || id === 4663,
+    // Capability, not a claim that a curve is deployed or live on this chain.
+    nativeDecimals: 18, hasCurve: true,
     l1DataFeeRequired: [8453, 42161, 480, 59144, 4663].includes(id),
     verification: 'unverified' }));
 

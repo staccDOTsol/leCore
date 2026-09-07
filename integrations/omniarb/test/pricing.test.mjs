@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { SCALE, NATIVE, usd, poolPriceUsd, curvePriceUsd, relayUnitPrice,
-  FxBook, gasCost, profitability, compareMarkets } from '../src/pricing.mjs';
+  FxBook, gasCost, profitability, compareMarkets, marketComparisons } from '../src/pricing.mjs';
 import { optimiseSizes, BridgeLedger, curveAllowed, allocateInventory } from '../src/policy.mjs';
 import { CHAINS } from '../src/chains.mjs';
 
@@ -73,9 +73,19 @@ test('27-price discovery never authorizes a route and excludes missing FX', () =
   assert.equal(compareMarkets([market, { ...market, priceUsd: 20n }], 1000).length, 0);
 });
 
+test('large price sets report bounded comparison coverage rather than exhausting memory', () => {
+  const markets = Array.from({ length: 200 }, (_, i) => ({
+    token: NATIVE, observedAt: 1000, fxObservedAt: 1000, coverage: 'fresh',
+    venue: `pool:${i}`, chainId: 8453, priceUsd: BigInt(i + 1),
+  }));
+  const result = marketComparisons(markets, 1000, 60_000, { maxSignals: 10, maxComparisons: 100 });
+  assert.equal(result.truncated, true);
+  assert.equal(result.signals.length, 10);
+});
+
 const hash = `0x${'a'.repeat(64)}`;
 const policy = {
-  chainId: 8453, token: NATIVE, blockHash: hash, now: 1000,
+  chainId: 8453, token: NATIVE, blockHash: hash, now: 1000, clock: () => 1000,
   nativeBalance: 1000n, reservedNative: 0n, gasReserve: 100n,
   maxNotional: 800n, safetyReserve: 10n,
 };
@@ -101,6 +111,17 @@ test('size selection rejects mismatched, stale, high-impact or unaffordable simu
     assert.equal(result.best, null);
   }
   assert.equal((await optimiseSizes([100n], async () => { throw Error('RPC'); }, policy)).best, null);
+});
+
+test('long size searches cannot retain a previously profitable expired quote', async () => {
+  let clock = 1000;
+  const result = await optimiseSizes([100n, 200n], async size => {
+    if (size === 200n) clock += 31_000;
+    return quote(size);
+  }, { ...policy, clock: () => clock });
+  assert.equal(result.best, null);
+  assert.equal(result.results[0].eligible, false);
+  assert.match(result.results[0].reason, /expired/);
 });
 
 test('bridge delay keeps funds reserved and never enables another burn', () => {
@@ -134,6 +155,6 @@ test('nine-chain manifest correctly identifies World as ETH native', () => {
   assert.equal(CHAINS.length, 9);
   assert.equal(new Set(CHAINS.map(chain => chain.id)).size, 9);
   assert.equal(CHAINS.find(chain => chain.id === 480).nativeSymbol, 'ETH');
-  assert.deepEqual(CHAINS.filter(chain => chain.hasCurve).map(chain => chain.id), [4663, 8453]);
+  assert.equal(CHAINS.filter(chain => chain.hasCurve).length, 9);
   assert.ok(CHAINS.every(chain => chain.verification === 'unverified'));
 });

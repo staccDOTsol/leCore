@@ -106,11 +106,20 @@ export function classifyPair(buy, sell) {
   return 'same-chain-candidate';
 }
 
-export function compareMarkets(markets, now, maxAgeMs = 60_000) {
+export function marketComparisons(markets, now, maxAgeMs = 60_000, {
+  maxSignals = 2000, maxComparisons = 250_000,
+} = {}) {
+  if (![maxSignals, maxComparisons].every(limit => Number.isSafeInteger(limit) && limit > 0)) {
+    throw new Error('invalid comparison budget');
+  }
   const valid = markets.filter(m => m.coverage === 'fresh' && m.priceUsd > 0n
     && fresh(m.observedAt, now, maxAgeMs) && fresh(m.fxObservedAt, now, maxAgeMs));
   const signals = [];
+  let comparisons = 0;
   for (const buy of valid) for (const sell of valid) {
+    if (comparisons++ >= maxComparisons || signals.length >= maxSignals) {
+      return { signals, truncated: true };
+    }
     if (buy.token.toLowerCase() !== sell.token.toLowerCase() || buy.priceUsd >= sell.priceUsd) continue;
     if (buy.chainId === sell.chainId && buy.venue === sell.venue) continue;
     signals.push({
@@ -120,5 +129,9 @@ export function compareMarkets(markets, now, maxAgeMs = 60_000) {
       token: buy.token, spreadBps: (sell.priceUsd - buy.priceUsd) * 10_000n / buy.priceUsd,
     });
   }
-  return signals;
+  return { signals, truncated: false };
+}
+
+export function compareMarkets(markets, now, maxAgeMs = 60_000) {
+  return marketComparisons(markets, now, maxAgeMs).signals;
 }

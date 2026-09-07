@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { keccak256, toHex } from 'viem';
+import { getAddress, keccak256, toHex } from 'viem';
 import { ChainMonitor, PoolRegistry, keyId, backfill, decodeState, readPools, readCurves,
   curveRegistrations, stateSlots, poolId } from '../src/monitor.mjs';
 import { CHAINS, DEFAULT_TOKEN, endpoints } from '../src/chains.mjs';
@@ -84,6 +84,16 @@ test('snapshot excludes uninitialised pool and labels curve verification gap', a
   assert.equal(result.markets[1].priceUsd, null);
   assert.equal(result.markets[2].coverage, 'unverified');
   assert.equal(result.executionEnabled, false);
+});
+
+test('checksummed CLI token retains fallback prices when Initialize history is unavailable', async () => {
+  const f = fixture();
+  const token = getAddress(DEFAULT_TOKEN);
+  assert.notEqual(token, token.toLowerCase());
+  const result = await new ChainMonitor(chain, token, { ...f, evidence }).snapshot(now);
+  assert.equal(result.markets[0].priceUsd, usd('2000'));
+  assert.equal(result.markets[0].key.currency1, token.toLowerCase());
+  assert.equal(result.markets[1].coverage, 'no-market');
 });
 
 test('RPC failure does not advance cursor or publish retained prices', async () => {

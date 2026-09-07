@@ -1,4 +1,4 @@
-import { graphFromPoolSnapshots, searchRoutes } from './routes.mjs';
+import { graphFromPoolSnapshots, searchRoutes, revalidateRouteResults } from './routes.mjs';
 import { fresh } from './pricing.mjs';
 export { assessNonAtomic, PaperNonAtomicLedger } from './nonatomic.mjs';
 export { verifyDeployment, simulateRoundTrip, assertSupportedAtomicRoute,
@@ -13,7 +13,19 @@ export { updateJournal } from './journal.mjs';
 export async function researchRoutes(report, {
   adapters = {}, assignments = {}, transfers = [], equivalences = [],
   searches = [], simulateRoute, evaluate, now = Date.now(), maxAgeMs = 30_000,
+  clock = () => Date.now(),
 } = {}) {
+  if (typeof clock !== 'function') throw new Error('invalid clock');
+  let lastTime = now;
+  const sharedClock = () => {
+    const time = clock();
+    if (!Number.isSafeInteger(time) || time <= 0 || time < lastTime) {
+      throw new Error('invalid/nonmonotonic clock');
+    }
+    lastTime = time;
+    return time;
+  };
+  sharedClock();
   const chains = [];
   const excludedChains = [];
   for (const chain of report.chains) {
@@ -32,12 +44,17 @@ export async function researchRoutes(report, {
   for (const search of searches) {
     try {
       results.push(await searchRoutes({
-        ...search, graph, pins: graph.pins, simulateRoute, evaluate, now, maxAgeMs, mode: 'paper',
+        ...search, graph, pins: graph.pins, simulateRoute, evaluate, now, maxAgeMs,
+        clock: sharedClock, mode: search.mode ?? 'paper',
       }));
-    } catch {
-      results.push({ mode: 'paper', best: null, executable: false,
-        reason: 'route search blocked by missing/stale pins or invalid policy' });
+    } catch (error) {
+      results.push({ mode: 'paper', best: null, executable: false, liveAuthorized: false,
+        reason: `route search blocked: ${error.message}` });
     }
+  }
+  const completedAt = sharedClock();
+  for (const result of results) {
+    revalidateRouteResults(result, { pins: graph.pins, now: completedAt, maxAgeMs });
   }
   return {
     mode: 'paper', fundedTrading: false, automaticBridging: false,

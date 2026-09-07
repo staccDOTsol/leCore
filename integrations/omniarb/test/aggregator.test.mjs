@@ -56,9 +56,9 @@ const evaluate = ({ amountIn, simulation }) => ({
   net: simulation.amountOut - amountIn - simulation.gasCosts.reduce((sum, cost) => sum + cost.nativeCost, 0n),
 });
 const searches = [1, 2].map(chainId => ({
-  start: asset(1, chainId), sizes: [100n, 200n], maxHops: 3, clock: () => NOW,
+  start: asset(1, chainId), sizes: [100n, 200n], maxHops: 3,
 }));
-const research = (report, options = {}) => researchRoutes(report, { now: NOW, ...options });
+const research = (report, options = {}) => researchRoutes(report, { now: NOW, clock: () => NOW, ...options });
 
 test('default CLI routing coverage is paper-only and never trusts snapshot quoteAdapter labels', async () => {
   const { report } = fixture();
@@ -143,16 +143,21 @@ test('prefunded cross-chain edges require verified equivalence and remain non-at
   assert.equal(verified.results[0].best.executable, false);
 });
 
-test('per-search expired clocks and malformed policy are reported without execution authority', async () => {
+test('shared expired clock, malformed policy and invalid mode retain their actual error diagnostics', async () => {
   const { report, assignments } = fixture();
   const result = await research(report, { adapters, assignments, simulateRoute, evaluate,
+    clock: () => NOW + 30_001,
     searches: [
-      { ...searches[0], clock: () => NOW + 30_001 },
+      searches[0],
       { ...searches[1], sizes: [100] },
+      { ...searches[1], mode: 'live' },
     ] });
-  assert.equal(result.results.length, 2);
+  assert.equal(result.results.length, 3);
   assert.ok(result.results.every(run => run.best === null && run.executable === false
     && /blocked/.test(run.reason)));
+  assert.match(result.results[0].reason, /stale pinned/);
+  assert.match(result.results[1].reason, /BigInt/);
+  assert.match(result.results[2].reason, /readonly\/paper/);
 });
 
 test('snapshot identity, block and fallback diagnostics cannot become assigned routing edges', async () => {
@@ -171,4 +176,94 @@ test('snapshot identity, block and fallback diagnostics cannot become assigned r
     assert.equal(result.rejectedPools.length, 1);
     assert.equal(result.rejectedPools[0].kind, 'snapshot');
   }
+});
+
+test('a later search taking 31 seconds invalidates all earlier retained candidates using the shared clock', async () => {
+  const { report, assignments } = fixture();
+  let time = NOW, firstSimulations = 0;
+  const slow = { test: { ...adapters.test, quote: async args => {
+    if (args.edge.from.chainId === 2) {
+      assert.ok(firstSimulations > 0);
+      time = NOW + 31_000;
+    }
+    return adapters.test.quote(args);
+  } } };
+  const result = await research(report, { assignments, adapters: slow, clock: () => time,
+    searches: searches.map(search => ({ ...search, clock: () => NOW })),
+    simulateRoute: async args => {
+      if (args.route.chainIds.includes(1)) firstSimulations++;
+      return simulateRoute(args);
+    }, evaluate });
+  assert.ok(result.results[0].candidates.length > 0);
+  assert.equal(result.results[0].best, null);
+  assert.ok(result.results[0].candidates.every(candidate => !candidate.paperCandidate
+    && !candidate.simulationValidated && candidate.status === 'expired'));
+  assert.ok(result.results[0].failures.some(row => row.stage === 'expiry' && /stale pinned/.test(row.reason)));
+});
+
+test('final aggregation revalidates simulation and step timestamps even when chain pins remain fresh', async () => {
+  for (const staleField of ['simulation', 'steps']) {
+    const { report, assignments } = fixture();
+    let time = NOW;
+    const slow = { test: { ...adapters.test, quote: async args => {
+      if (args.edge.from.chainId === 2) time = NOW + 15_000;
+      return adapters.test.quote(args);
+    } } };
+    const result = await research(report, { assignments, adapters: slow, searches, clock: () => time,
+      simulateRoute: async args => {
+        const value = await simulateRoute(args);
+        if (args.route.chainIds[0] === 1) {
+          if (staleField === 'simulation') value.observedAt = NOW - 20_000;
+          else value.steps.forEach(step => { step.observedAt = NOW - 20_000; });
+        }
+        return value;
+      }, evaluate });
+    assert.equal(result.results[0].best, null, staleField);
+    assert.ok(result.results[1].best, staleField);
+    assert.ok(result.results[0].candidates.every(candidate => !candidate.paperCandidate
+      && !candidate.simulationValidated), staleField);
+  }
+});
+
+test('expired transfer equivalence clears an earlier cross-chain winner without disabling local routes', async () => {
+  const { report, assignments } = fixture();
+  let time = NOW;
+  const transfer = { id: 'inventory-1-2', kind: 'inventory', adapterId: 'test',
+    from: asset(2, 1), to: asset(2, 2), equivalenceId: 'verified-2', latencyMs: 1000 };
+  const equivalence = { id: 'verified-2', verified: true, verifiedBy: 'registry',
+    evidenceId: 'audit', issuedAt: NOW, expiresAt: NOW + 10_000,
+    deployments: [transfer.from, transfer.to] };
+  let crossCompleted = false;
+  const slow = { test: { ...adapters.test, quote: async args => {
+    if (crossCompleted && args.edge.from.chainId === 1 && args.amountIn === 300n) time = NOW + 15_000;
+    return adapters.test.quote(args);
+  } } };
+  const result = await research(report, { assignments, adapters: slow, clock: () => time,
+    transfers: [transfer], equivalences: [equivalence],
+    searches: [{ ...searches[0], sizes: [100n], targets: [asset(3, 2)] },
+      { ...searches[0], sizes: [300n] }],
+    simulateRoute, evaluate: args => {
+      if (args.route.nonAtomic) crossCompleted = true;
+      return evaluate(args);
+    } });
+  assert.ok(crossCompleted);
+  assert.equal(result.results[0].best, null);
+  assert.ok(result.results[0].failures.some(row => row.stage === 'expiry' && /equivalence/.test(row.reason)));
+  assert.ok(result.results[1].best);
+});
+
+test('an unavailable transfer-only destination chain is diagnostic and leaves local opportunities usable', async () => {
+  const { report, assignments } = fixture();
+  report.chains = [report.chains[0]];
+  const transfer = { id: 'offline-destination', kind: 'inventory', adapterId: 'test',
+    from: asset(2, 1), to: asset(2, 2), equivalenceId: 'verified-2', latencyMs: 1000 };
+  const equivalence = { id: 'verified-2', verified: true, verifiedBy: 'registry',
+    evidenceId: 'audit', issuedAt: NOW, expiresAt: NOW + 10_000,
+    deployments: [transfer.from, transfer.to] };
+  const result = await research(report, { adapters, assignments, transfers: [transfer],
+    equivalences: [equivalence], searches: [searches[0]], simulateRoute, evaluate });
+  assert.ok(result.results[0].best);
+  assert.deepEqual(result.results[0].best.route.chainIds, [1]);
+  assert.ok(result.results[0].graphRejections.some(row =>
+    row.edgeId === 'transfer:offline-destination' && /pinned chain state: 2/.test(row.reason)));
 });

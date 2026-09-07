@@ -123,6 +123,9 @@ export function assessNonAtomic(route, { policy, funding, now = Date.now() } = {
     const sell = validateLeg(route.sell, 'sell', route.amountToken, policy, now);
     requireThat(crossChain || route.buy.blockHash.toLowerCase() === route.sell.blockHash.toLowerCase(),
       'same-chain quotes require a shared pinned block');
+    requireThat(crossChain || (route.buy.fx.priceUsd === route.sell.fx.priceUsd
+      && route.buy.fx.observedAt === route.sell.fx.observedAt),
+    'same-chain legs require a shared native FX observation');
     const identityAssurance = identity(route, now, policy.maxAgeMs);
     const expiresAt = Math.min(route.buy.quote.expiresAt, route.sell.quote.expiresAt,
       crossChain ? route.identityCertificate.expiresAt : Number.MAX_SAFE_INTEGER);

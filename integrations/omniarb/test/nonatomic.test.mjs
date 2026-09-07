@@ -426,3 +426,25 @@ test('distinct arbitrary pool IDs for one coin are valid venue identities', () =
   r.sell.venue = r.sell.quote.venue = `uniswap-v4:pool:${tx(52)}`;
   assert.equal(assess(r).paperCandidate, true);
 });
+
+test('same-chain FX must share price and observation time; differing fresh FX cannot invent native profit', () => {
+  const r = route(false);
+  r.sell.quote.nativeAmount = 999n * SCALE / 1000n;
+  r.sell.fx.priceUsd = usd('102');
+  r.bridgeCostUsd = r.rebalanceCostUsd = 0n;
+  r.adverseMoveReserveUsd = usd('1');
+  const inconsistent = assess(r);
+  assert.equal(inconsistent.paperCandidate, false);
+  assert.match(inconsistent.reason, /shared native FX observation/);
+  r.sell.fx.priceUsd = r.buy.fx.priceUsd;
+  const nativeLoss = assess(r);
+  assert.equal(nativeLoss.paperCandidate, false);
+  assert.ok(nativeLoss.grossUsd < 0n);
+  const differentTime = route(false);
+  differentTime.sell.fx.observedAt += 1;
+  assert.equal(assess(differentTime).paperCandidate, false);
+  const cross = route();
+  cross.sell.fx.priceUsd = usd('102');
+  cross.sell.fx.observedAt += 1;
+  assert.equal(assess(cross).paperCandidate, true);
+});

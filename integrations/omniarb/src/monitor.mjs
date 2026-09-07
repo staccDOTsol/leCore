@@ -161,7 +161,7 @@ export async function verifiedLayout(client, chain, evidence, blockNumber) {
 export async function readPools(client, chain, token, evidence, blockNumber, registered = null) {
   const mappingSlot = await verifiedLayout(client, chain, evidence, blockNumber);
   const pools = registered ?? ['hooked', 'hookless'].map(venue => {
-    const key = { currency0: NATIVE, currency1: token, fee: 3000, tickSpacing: 60,
+    const key = { currency0: NATIVE, currency1: token.toLowerCase(), fee: 3000, tickSpacing: 60,
       hooks: venue === 'hooked' ? chain.hook : NATIVE };
     return { venue, id: keyId(key), key };
   });
@@ -297,7 +297,8 @@ export class ChainMonitor {
         });
         // Keep all intermediate-token pools in the graph, but never assign them
         // a target/native USD price without the required currency observations.
-        if (pool.key.currency0 !== NATIVE || pool.key.currency1 !== this.token.toLowerCase()) continue;
+        if (pool.key.currency0.toLowerCase() !== NATIVE
+            || pool.key.currency1.toLowerCase() !== this.token.toLowerCase()) continue;
         const priceUsd = nativeUsd && pool.initialised
           ? poolPriceUsd(pool.sqrtPriceX96, tokenDecimals, 18, nativeUsd) : null;
         base.markets.push({ ...pool, chainId: this.chain.id, token: this.token,

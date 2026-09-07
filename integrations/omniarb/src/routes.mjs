@@ -240,6 +240,35 @@ function validateSimulation(simulation, route, amountIn, pins, now, maxAgeMs) {
   }
 }
 
+function validateRouteFreshness(route, pins, now, maxAgeMs) {
+  validatePins(pins, route.chainIds, now, maxAgeMs);
+  for (const edge of route.edges) {
+    if (edge.nonAtomic) equivalence(edge.equivalence, edge.from, edge.to, now, maxAgeMs);
+  }
+}
+
+/** Revalidate retained alternatives after other searches finish; never resurrect rejected results. */
+export function revalidateRouteResults(result, { pins, now = Date.now(), maxAgeMs = 30_000 }) {
+  requireThat(positiveInteger(now) && positiveInteger(maxAgeMs), 'invalid freshness policy');
+  result.best = null;
+  for (const candidate of result.candidates ?? []) {
+    if (!candidate.simulationValidated && !candidate.paperCandidate) continue;
+    try {
+      validateRouteFreshness(candidate.route, pins, now, maxAgeMs);
+      validateSimulation(candidate.simulation, candidate.route, candidate.amountIn, pins, now, maxAgeMs);
+      if (candidate.paperCandidate
+        && (!result.best || candidate.assessment.net > result.best.assessment.net)) result.best = candidate;
+    } catch (error) {
+      candidate.status = 'expired';
+      candidate.paperCandidate = false;
+      candidate.simulationValidated = false;
+      (result.failures ??= []).push({ stage: 'expiry', routeId: candidate.route.id,
+        amountIn: candidate.amountIn, reason: error.message, usable: false, executable: false });
+    }
+  }
+  return result;
+}
+
 /**
  * Amount-dependent bounded DFS. Independent edge quotes are exploration only.
  * simulateRoute({route,amountIn,pins}) must execute the actual sequence with evolving
@@ -269,20 +298,20 @@ export async function searchRoutes({
   requireThat(Array.isArray(sizes) && sizes.length > 0
     && sizes.every(size => uint(size) && size > 0n), 'sizes must be positive BigInt amounts');
   requireThat(graph && Array.isArray(graph.edges), 'invalid route graph');
-  const chainIds = [...new Set(graph.edges.flatMap(edgeChains))];
   const pinned = clone(pins);
-  validatePins(pinned, chainIds, now, maxAgeMs);
+  validatePins(pinned, [start.chainId], now, maxAgeMs);
   requireThat(typeof clock === 'function', 'invalid clock');
   let lastTime = now;
   const currentTime = () => {
     const time = clock();
     requireThat(positiveInteger(time) && time >= lastTime, 'invalid/nonmonotonic clock');
     lastTime = time;
-    validatePins(pinned, chainIds, time, maxAgeMs);
     return time;
   };
-  currentTime();
+  const startedAt = currentTime();
+  validatePins(pinned, [start.chainId], startedAt, maxAgeMs);
   const adjacency = new Map();
+  const edgeRejections = [];
   const graphEdges = clone(graph.edges), identities = new Set();
   for (const edge of graphEdges) {
     requireThat(!identities.has(edge.id), 'duplicate directed edge');
@@ -298,10 +327,17 @@ export async function searchRoutes({
         && edge.id.startsWith('transfer:') && edge.poolId === edge.id
         && edge.from.chainId !== edge.to.chainId && positiveInteger(edge.latencyMs),
       'malformed transfer edge');
-      equivalence(edge.equivalence, edge.from, edge.to, now, maxAgeMs);
     }
     const id = assetId(edge.from);
     assetId(edge.to);
+    try {
+      validatePins(pinned, edgeChains(edge), startedAt, maxAgeMs);
+      if (edge.nonAtomic) equivalence(edge.equivalence, edge.from, edge.to, startedAt, maxAgeMs);
+    } catch (error) {
+      edgeRejections.push({ kind: 'edge', edgeId: edge.id, reason: error.message,
+        usable: false, executable: false });
+      continue;
+    }
     if (!adjacency.has(id)) adjacency.set(id, []);
     adjacency.get(id).push(edge);
   }
@@ -313,9 +349,7 @@ export async function searchRoutes({
     reason: error.message, usable: false, executable: false,
   });
   const routeFresh = (route, time) => {
-    for (const edge of route.edges) {
-      if (edge.nonAtomic) equivalence(edge.equivalence, edge.from, edge.to, time, maxAgeMs);
-    }
+    validateRouteFreshness(route, pinned, time, maxAgeMs);
   };
   async function visit(node, amount, size, path, used) {
     for (const edge of adjacency.get(node) ?? []) {
@@ -327,11 +361,13 @@ export async function searchRoutes({
       let quote;
       try {
         const before = currentTime();
+        validatePins(pinned, edgeChains(edge), before, maxAgeMs);
         if (edge.nonAtomic) equivalence(edge.equivalence, edge.from, edge.to, before, maxAgeMs);
         const adapter = supported(graph.adapters, edge);
         budget.quotes++;
         quote = await adapter.quote({ edge: clone(edge), amountIn: amount, pins: clone(pinned) });
         const after = currentTime();
+        validatePins(pinned, edgeChains(edge), after, maxAgeMs);
         validateQuote(quote, edge, amount, pinned, after, maxAgeMs);
         if (edge.nonAtomic) equivalence(edge.equivalence, edge.from, edge.to, after, maxAgeMs);
       } catch (error) {
@@ -400,46 +436,11 @@ export async function searchRoutes({
     if (!stopped) await visit(startId, size, size, [], new Set());
   }
   // A winner from an early branch can expire while later branches are explored.
-  best = null;
-  let completedAt;
-  try { completedAt = currentTime(); } catch (error) {
-    fail('expiry', null, null, error);
-  }
-  for (const candidate of candidates) {
-    if (!candidate.simulationValidated) continue;
-    try {
-      requireThat(completedAt !== undefined, 'pinned state expired before search completion');
-      routeFresh(candidate.route, completedAt);
-      validateSimulation(candidate.simulation, candidate.route, candidate.amountIn,
-        pinned, completedAt, maxAgeMs);
-      if (candidate.paperCandidate && (!best || candidate.assessment.net > best.assessment.net)) best = candidate;
-    } catch (error) {
-      candidate.status = 'expired';
-      candidate.paperCandidate = false;
-      candidate.simulationValidated = false;
-      fail('expiry', candidate.route, candidate.amountIn, error);
-    }
-  }
-  try {
-    const finalTime = currentTime();
-    if (best) {
-      routeFresh(best.route, finalTime);
-      validateSimulation(best.simulation, best.route, best.amountIn, pinned, finalTime, maxAgeMs);
-    }
-  } catch (error) {
-    for (const candidate of candidates) {
-      if (candidate.simulationValidated) {
-        candidate.status = 'expired';
-        candidate.paperCandidate = false;
-        candidate.simulationValidated = false;
-      }
-    }
-    best = null;
-    fail('expiry', null, null, error);
-  }
-  return { mode, candidates, best, failures, graphRejections: clone(graph.rejected ?? []), budget,
+  return revalidateRouteResults({
+    mode, candidates, best, failures, graphRejections: [...clone(graph.rejected ?? []), ...edgeRejections], budget,
     truncated: limits.size > 0, truncationReasons: [...limits], globallyOptimal: false,
     optimality: 'best eligible sampled size among simulated bounded routes only',
-    splitRoutesSupported: false, executable: false, liveAuthorized: false };
+    splitRoutesSupported: false, executable: false, liveAuthorized: false,
+  }, { pins: pinned, now: currentTime(), maxAgeMs });
 }
 import { encodeAbiParameters, keccak256 } from 'viem';

@@ -94,7 +94,9 @@ Programmatic entry points:
   supported directed quotes; a whole-route simulator and economic evaluator
   are required to select a paper candidate. All intermediate pools are retained;
   missing adapters appear in `rejectedPools`. The CLI exposes this coverage but
-  does not install or trust arbitrary adapter code.
+  does not install or trust arbitrary adapter code. Economic evaluations must
+  identify `numeraire: "USD"` and `scale: 10n ** 18n`; native-denominated values
+  cannot be ranked against another chain's native currency.
 - `src/routes.mjs`: `buildRouteGraph` and `searchRoutes` support arbitrary
   PoolKeys, bounded multi-hop cycles, and explicit inventory/rebalancing edges.
   Budgets and truncation are reported. Alternative routes cannot be summed as
@@ -106,8 +108,8 @@ Programmatic entry points:
   prefunded cross-chain matched trades and same-chain two-transaction trades.
   Identity certificates and final receipt observations are explicitly external
   assertions, not automatic proof. Quotes must match per-leg block pins;
-  same-chain legs must share a pin. Venue identifiers may name any discovered
-  pool, while curve execution remains blocked.
+  same-chain legs must share a pin and one FX price/timestamp. Venue identifiers
+  may name any discovered pool, while curve execution remains blocked.
 - `src/journal.mjs`: `updateJournal` persists `serialize()`/`restore()` ledger
   transitions using exclusive locks, file and directory fsync, and atomic
   rename. Reducers are bookkeeping only. A failed or interrupted update leaves

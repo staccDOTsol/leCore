@@ -280,7 +280,8 @@ test('missing/stale pins, mixed numeric sizes, expired equivalence and malformed
   await assert.rejects(search(pairGraph(), { pins: stale }), /pinned/);
   const malformed = pairGraph(); malformed.edges[0].to = { ...malformed.edges[0].to, chainId: 2 };
   await assert.rejects(search(malformed), /malformed pool edge/);
-  await assert.rejects(search(crossGraph('inventory'), { now: NOW + 10_001 }), /equivalence/);
+  const expired = await search(crossGraph('inventory'), { now: NOW + 10_001 });
+  assert.ok(expired.graphRejections.some(row => /equivalence/.test(row.reason)));
 });
 
 function snapshots() {
@@ -430,4 +431,22 @@ test('every economic assessment requires the globally fixed USD numeraire and Bi
     assert.ok(report.candidates.every(candidate => candidate.paperCandidate === false));
     assert.ok(report.failures.some(failure => /economic assessment/.test(failure.reason)));
   }
+});
+
+test('missing or stale transfer destination pins do not disable healthy local self-cycles', async () => {
+  const rate = (_edge, amount) => amount + 10n;
+  const graph = buildRouteGraph({
+    pools: [pool(A, B, 1), pool(A, B, 2)], transfers: [transfer('inventory')],
+    equivalences: [certificate], adapters: { test: adapter(rate) }, now: NOW,
+  });
+  for (const state of [{ 1: pins[1] }, {
+    ...pins, 2: { ...pins[2], observedAt: NOW - 30_001 },
+  }]) {
+    const report = await search(graph, { pins: state, simulateRoute: simulator(rate), evaluate });
+    assert.equal(report.best.paperCandidate, true);
+    assert.deepEqual(report.best.route.chainIds, [1]);
+    assert.ok(report.graphRejections.some(row => row.edgeId === 'transfer:inventory'
+      && /pinned chain state: 2/.test(row.reason) && row.usable === false));
+  }
+  await assert.rejects(search(graph, { pins: { 2: pins[2] } }), /pinned chain state: 1/);
 });

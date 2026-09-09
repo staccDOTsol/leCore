@@ -1,0 +1,431 @@
+{
+  "started_utc": "2026-08-13T05:38:02.508959+00:00",
+  "base_url": "http://198.145.108.57:30739/v1",
+  "model": "deepseek-v4-flash",
+  "temperature": 0.0,
+  "timeout_s": 180,
+  "concurrency": 1,
+  "scale": "full",
+  "n_cap": null,
+  "suites": [
+    "aime25"
+  ],
+  "probe": {
+    "ok": true,
+    "models": [
+      "deepseek-v4-flash"
+    ],
+    "elapsed": 0.08538985252380371
+  },
+  "reachable": true,
+  "stack": "Flash+HRR-spill gateway",
+  "lab_sig_diff": {
+    "host": "lab box Gateway http://127.0.0.1:8765/v1",
+    "overlay": "DeepSeek-V4-Flash-0731-serve",
+    "model_id": "deepseek-v4-flash",
+    "public_vllm": "http://198.145.108.57:30739/v1",
+    "arms": {
+      "t2_nonce_cite": {
+        "off": "0/5",
+        "on": "5/5"
+      },
+      "multi_turn_3cite": {
+        "off": "0/3",
+        "on": "3/3"
+      },
+      "reprompts": {
+        "off": "must re-paste the citations",
+        "on": "1 ask, no paste"
+      }
+    },
+    "openrouter": "NOT RUN",
+    "note": "Gateway auto-sticky on the lab box. Public API is Flash+HRR-spill gateway."
+  },
+  "capability": {
+    "AIME 2025": {
+      "name": "AIME 2025",
+      "n": 30,
+      "split_n": 30,
+      "correct": 16,
+      "accuracy": 0.5333333333333333,
+      "score": "16/30",
+      "source": "math-ai/aime25 test via HuggingFace datasets-server (n=30)",
+      "canonical": "https://huggingface.co/datasets/math-ai/aime25",
+      "split": "test",
+      "offset": 0,
+      "coverage": "full-file",
+      "latency_p50_s": 8.625972867012024,
+      "n_errors": 0,
+      "errors": [],
+      "items": [
+        {
+          "index": 0,
+          "id": "0",
+          "gold": "70",
+          "pred": "70",
+          "correct": true,
+          "elapsed": 2.4392447471618652,
+          "error": null,
+          "finish_reason": "stop",
+          "max_tokens": 4096,
+          "text_head": "We are told \\(17_b\\) divides \\(97_b\\).  \nFirst, convert from base \\(b\\) to decimal:\n\n\\[\n17_b = 1 \\cdot b + 7 = b+7\n\\]\n\\[\n97_b = 9 \\cdot b + 7 = 9b+7\n\\]\n\nWe need \\(b+7\\) to divide \\(9b+7\\).  \nWrite:\n\n\\[\n9b+7 = 9(b+7) - 56\n\\]\n\nSo \\(b+7\\) divi"
+        },
+        {
+          "index": 1,
+          "id": "1",
+          "gold": "588",
+          "pred": "588",
+          "correct": true,
+          "elapsed": 13.021365404129028,
+          "error": null,
+          "finish_reason": "stop",
+          "max_tokens": 4096,
+          "text_head": "We are given:\n\n- On \\(AB\\): \\(AD = 4\\), \\(DE = 16\\), \\(EB = 8\\), so \\(AB = 4+16+8 = 28\\).\n- On \\(AC\\): \\(AF = 13\\), \\(FG = 52\\), \\(GC = 26\\), so \\(AC = 13+52+26 = 91\\).\n\nPoints in order on \\(AB\\): \\(A, D, E, B\\)  \nPoints in order on \\(AC\\):"
+        },
+        {
+          "index": 2,
+          "id": "2",
+          "gold": "16",
+          "pred": "16",
+          "correct": true,
+          "elapsed": 5.119014024734497,
+          "error": null,
+          "finish_reason": "stop",
+          "max_tokens": 4096,
+          "text_head": "We have 9 players, each choosing one of 3 flavors: chocolate (C), vanilla (V), strawberry (S).  \nConditions:\n\n- At least one of each flavor.\n- Counts: \\( C > V > S \\geq 1 \\).\n\nLet counts be \\( c, v, s \\) with  \n\\[\nc + v + s = 9, \\quad c > v"
+        },
+        {
+          "index": 3,
+          "id": "3",
+          "gold": "117",
+          "pred": "117",
+          "correct": true,
+          "elapsed": 5.317370653152466,
+          "error": null,
+          "finish_reason": "stop",
+          "max_tokens": 4096,
+          "text_head": "We have the equation\n\n\\[\n12x^2 - xy - 6y^2 = 0.\n\\]\n\nThis is a homogeneous quadratic, so we can factor it.\n\nTreat it as a quadratic in \\(x\\):\n\n\\[\n12x^2 - yx - 6y^2 = 0.\n\\]\n\nThe discriminant in \\(x\\) is\n\n\\[\n\\Delta = (-y)^2 - 4(12)(-6y^2) = y^"
+        },
+        {
+          "index": 4,
+          "id": "4",
+          "gold": "279",
+          "pred": "279",
+          "correct": true,
+          "elapsed": 9.191622495651245,
+          "error": null,
+          "finish_reason": "stop",
+          "max_tokens": 4096,
+          "text_head": "We need the count of permutations of \\(1,2,\\dots,8\\) that are divisible by \\(22\\).\n\nSince \\(22 = 2 \\times 11\\), the number must be divisible by both 2 and 11.\n\n---\n\n**Step 1: Divisibility by 2**  \nThe last digit must be even: \\(2,4,6,8\\).\n\n"
+        },
+        {
+          "index": 5,
+          "id": "5",
+          "gold": "504",
+          "pred": "504",
+          "correct": true,
+          "elapsed": 5.490972995758057,
+          "error": null,
+          "finish_reason": "stop",
+          "max_tokens": 4096,
+          "text_head": "We have an isosceles trapezoid with an incircle (tangent to all four sides).  \nThe radius is \\(3\\), so the height of the trapezoid is the diameter of the incircle:  \n\\[\nh = 6.\n\\]\n\nThe area is given as \\(72\\).  \nFor a trapezoid,  \n\\[\n\\text{A"
+        },
+        {
+          "index": 6,
+          "id": "6",
+          "gold": "821",
+          "pred": "16",
+          "correct": false,
+          "elapsed": 4.507945775985718,
+          "error": null,
+          "finish_reason": "stop",
+          "max_tokens": 4096,
+          "text_head": "We have 12 distinct letters: A through L.  \nThey are randomly grouped into 6 unordered pairs.  \nEach pair is written in alphabetical order, then the 6 two-letter words are sorted alphabetically.  \nWe want the probability that the last word "
+        },
+        {
+          "index": 7,
+          "id": "7",
+          "gold": "77",
+          "pred": "77",
+          "correct": true,
+          "elapsed": 7.809057950973511,
+          "error": null,
+          "finish_reason": "stop",
+          "max_tokens": 4096,
+          "text_head": "We have the system:\n\n\\[\n|25 + 20i - z| = 5\n\\]\n\\[\n|z - 4 - k| = |z - 3i - k|\n\\]\n\n---\n\n### Step 1: Interpret the first equation\nThe first equation says \\(z\\) lies on a circle centered at \\(25 + 20i\\) with radius \\(5\\).\n\n---\n\n### Step 2: Inter"
+        },
+        {
+          "index": 8,
+          "id": "8",
+          "gold": "62",
+          "pred": "62",
+          "correct": true,
+          "elapsed": 27.537892818450928,
+          "error": null,
+          "finish_reason": "stop",
+          "max_tokens": 8192,
+          "text_head": "We start with the original parabola:\n\n\\[\ny = x^2 - 4.\n\\]\n\nWe rotate it \\(60^\\circ\\) counterclockwise about the origin. A point \\((x, y)\\) on the original curve goes to \\((X, Y)\\) given by the rotation matrix:\n\n\\[\n\\begin{pmatrix}\nX \\\\ Y\n\\end"
+        },
+        {
+          "index": 9,
+          "id": "9",
+          "gold": "81",
+          "pred": "68",
+          "correct": false,
+          "elapsed": 5.944753408432007,
+          "error": null,
+          "finish_reason": "stop",
+          "max_tokens": 4096,
+          "text_head": "We have a \\(3 \\times 9\\) grid, with each row containing 1 through 9, and each of the three \\(3\\times 3\\) blocks also containing 1 through 9.\n\nThis is exactly the top three rows of a standard Sudoku, so the number of ways to fill the first t"
+        },
+        {
+          "index": 10,
+          "id": "10",
+          "gold": "259",
+          "pred": "0",
+          "correct": false,
+          "elapsed": 38.13964247703552,
+          "error": null,
+          "finish_reason": "length",
+          "max_tokens": 8192,
+          "text_head": "We have  \n\\[\nf(x)=\\begin{cases}\nx & -1\\le x<1,\\\\\n2-x & 1\\le x<3,\n\\end{cases}\n\\]\nand \\(f(x+4)=f(x)\\).  \nThe parabola is \\(x=34y^2\\), so \\(x\\ge 0\\).  \nSince \\(f\\) is periodic with period 4, we only need to consider \\(x\\ge 0\\).\n\n---\n\n### Step "
+        },
+        {
+          "index": 11,
+          "id": "11",
+          "gold": "510",
+          "pred": "510",
+          "correct": true,
+          "elapsed": 8.520176649093628,
+          "error": null,
+          "finish_reason": "stop",
+          "max_tokens": 4096,
+          "text_head": "We have the plane  \n\\[\nx+y+z=75\n\\]\nand the inequalities  \n\\[\nx-yz<y-zx<z-xy.\n\\]\n\n---\n\n### Step 1: Simplify the inequalities\nThe first inequality:\n\\[\nx-yz < y - zx\n\\]\nBring terms together:\n\\[\nx - yz - y + zx < 0\n\\]\n\\[\n(x-y) + z(x-y) < 0\n\\]\n\\"
+        },
+        {
+          "index": 12,
+          "id": "12",
+          "gold": "204",
+          "pred": "154",
+          "correct": false,
+          "elapsed": 9.584024429321289,
+          "error": null,
+          "finish_reason": "stop",
+          "max_tokens": 4096,
+          "text_head": "We have a disk initially divided into 4 quadrants by two perpendicular diameters.  \nThen 25 more segments are drawn, each connecting two random points on the perimeter in different quadrants.\n\n---\n\n**Step 1 \u2013 Initial setup**  \nWe start with"
+        },
+        {
+          "index": 13,
+          "id": "13",
+          "gold": "60",
+          "pred": "58",
+          "correct": false,
+          "elapsed": 27.48565101623535,
+          "error": null,
+          "finish_reason": "stop",
+          "max_tokens": 8192,
+          "text_head": "We are given a convex pentagon \\(ABCDE\\) with:\n\n- \\(AB = 14\\)\n- \\(BC = 7\\)\n- \\(CD = 24\\)\n- \\(DE = 13\\)\n- \\(EA = 26\\)\n- \\(\\angle B = \\angle E = 60^\\circ\\)\n\nWe want the minimum of  \n\\[\nf(X) = AX + BX + CX + DX + EX\n\\]\nover all points \\(X\\) in"
+        },
+        {
+          "index": 14,
+          "id": "14",
+          "gold": "735",
+          "pred": "147",
+          "correct": false,
+          "elapsed": 14.4689359664917,
+          "error": null,
+          "finish_reason": "stop",
+          "max_tokens": 4096,
+          "text_head": "We have the condition  \n\\[\na^3+b^3+c^3 \\equiv 0 \\pmod{3^7},\n\\]\nwith \\(1 \\le a,b,c \\le 3^6\\).\n\n---\n\n### Step 1: Work modulo powers of 3\nFirst, note that for any integer \\(x\\),  \n\\[\nx^3 \\equiv x \\pmod{3}\n\\]\nby Fermat\u2019s little theorem.  \nModul"
+        },
+        {
+          "index": 15,
+          "id": "15",
+          "gold": "468",
+          "pred": "468",
+          "correct": true,
+          "elapsed": 7.356438636779785,
+          "error": null,
+          "finish_reason": "stop",
+          "max_tokens": 4096,
+          "text_head": "We have six collinear points in order \\(A, B, C, D, E, F\\).  \nLet\u2019s assign coordinates on a number line: let \\(A=0\\).  \nGiven:\n\n- \\(AC = 26 \\Rightarrow C = 26\\)  \n- \\(BD = 22\\)  \n- \\(CE = 31 \\Rightarrow E = C + 31 = 57\\)  \n- \\(DF = 33\\)  \n-"
+        },
+        {
+          "index": 16,
+          "id": "16",
+          "gold": "49",
+          "pred": "49",
+          "correct": true,
+          "elapsed": 5.573489665985107,
+          "error": null,
+          "finish_reason": "stop",
+          "max_tokens": 4096,
+          "text_head": "We need all positive integers \\( n \\) such that  \n\\[\nn+2 \\mid 3(n+3)(n^2+9).\n\\]\n\nLet \\( d = n+2 \\). Then \\( n = d-2 \\), and \\( d > 2 \\) since \\( n > 0 \\).\n\nSubstitute:\n\\[\nn+3 = d+1, \\quad n^2+9 = (d-2)^2 + 9 = d^2 - 4d + 4 + 9 = d^2 - 4d + "
+        },
+        {
+          "index": 17,
+          "id": "17",
+          "gold": "82",
+          "pred": "82",
+          "correct": true,
+          "elapsed": 8.9078369140625,
+          "error": null,
+          "finish_reason": "stop",
+          "max_tokens": 4096,
+          "text_head": "We have a \\(2\\times 2\\) grid of unit squares, so there are 12 unit segments total:  \n- 4 outer vertical  \n- 4 outer horizontal  \n- 2 internal vertical  \n- 2 internal horizontal  \n\nEach of the 4 unit squares must have exactly 2 red and 2 blu"
+        },
+        {
+          "index": 18,
+          "id": "18",
+          "gold": "106",
+          "pred": "106",
+          "correct": true,
+          "elapsed": 5.216737508773804,
+          "error": null,
+          "finish_reason": "stop",
+          "max_tokens": 4096,
+          "text_head": "We have the product:\n\n\\[\n\\prod_{k=4}^{63} \\frac{\\log_k (5^{k^2 - 1})}{\\log_{k+1} (5^{k^2 - 4})}\n\\]\n\n---\n\n**Step 1: Simplify each logarithm**\n\nUsing \\(\\log_a (b^c) = c \\log_a b\\):\n\n\\[\n\\log_k (5^{k^2 - 1}) = (k^2 - 1) \\log_k 5\n\\]\n\\[\n\\log_{k+1"
+        },
+        {
+          "index": 19,
+          "id": "19",
+          "gold": "336",
+          "pred": "216",
+          "correct": false,
+          "elapsed": 12.308136224746704,
+          "error": null,
+          "finish_reason": "stop",
+          "max_tokens": 4096,
+          "text_head": "We are given triangle \\(ABC\\) with angles:\n\n\\[\n\\angle A = 84^\\circ,\\quad \\angle B = 60^\\circ,\\quad \\angle C = 36^\\circ.\n\\]\n\n\\(D, E, F\\) are midpoints of \\(BC, AC, AB\\) respectively. The circumcircle of \\(\\triangle DEF\\) intersects \\(BD, AE,"
+        },
+        {
+          "index": 20,
+          "id": "20",
+          "gold": "293",
+          "pred": "293",
+          "correct": true,
+          "elapsed": 6.83912205696106,
+          "error": null,
+          "finish_reason": "stop",
+          "max_tokens": 4096,
+          "text_head": "We have two circles:  \n- \\(\\omega_1\\): center \\(A = (9,0)\\), radius \\(6\\).  \n- \\(\\omega_2\\): center \\(O = (0,0)\\), radius \\(15\\).  \n\nThey are internally tangent at \\(B = (15,0)\\).  \n\\(BC\\) is a diameter of \\(\\omega_2\\), so \\(C = (-15,0)\\). "
+        },
+        {
+          "index": 21,
+          "id": "21",
+          "gold": "237",
+          "pred": "71",
+          "correct": false,
+          "elapsed": 7.209536790847778,
+          "error": null,
+          "finish_reason": "stop",
+          "max_tokens": 4096,
+          "text_head": "We have  \n\\[\n2025 = 3^4 \\cdot 5^2.\n\\]  \nSo the divisors of \\(2025\\) are of the form  \n\\[\n3^a 5^b \\quad \\text{where } 0 \\le a \\le 4,\\ 0 \\le b \\le 2.\n\\]  \nThat\u2019s \\(5 \\times 3 = 15\\) divisors.\n\nWe choose a random subset \\(B\\) of these 15 divis"
+        },
+        {
+          "index": 22,
+          "id": "22",
+          "gold": "610",
+          "pred": "599",
+          "correct": false,
+          "elapsed": 12.000120878219604,
+          "error": null,
+          "finish_reason": "stop",
+          "max_tokens": 4096,
+          "text_head": "We want values of \\(N\\) from 1 to 1000 where the greedy algorithm (using 25\u00a2, then 10\u00a2, then 1\u00a2) gives the minimum number of coins.\n\n---\n\n**Step 1: Greedy coin counts**\n\nFor a given \\(N\\), greedy gives:\n\n- \\(q = \\lfloor N/25 \\rfloor\\) quart"
+        },
+        {
+          "index": 23,
+          "id": "23",
+          "gold": "149",
+          "pred": "150",
+          "correct": false,
+          "elapsed": 10.03623342514038,
+          "error": null,
+          "finish_reason": "stop",
+          "max_tokens": 4096,
+          "text_head": "We are solving  \n\\[\nf(x) = \\sin(7\\pi \\sin(5x)) = 0\n\\]\nfor \\(0 < x < 2\\pi\\).\n\n---\n\n### Step 1: When is \\(\\sin(\\theta) = 0\\)?\nWe have  \n\\[\n\\sin(7\\pi \\sin(5x)) = 0 \\quad \\Rightarrow \\quad 7\\pi \\sin(5x) = k\\pi\n\\]\nfor integer \\(k\\).  \nDivide by "
+        },
+        {
+          "index": 24,
+          "id": "24",
+          "gold": "907",
+          "pred": "9",
+          "correct": false,
+          "elapsed": 5.241537570953369,
+          "error": null,
+          "finish_reason": "stop",
+          "max_tokens": 4096,
+          "text_head": "We have 16 chairs in a row, and we choose 8 of them so that no chosen chair is adjacent to two other chosen chairs.  \nThat means in the chosen set, no three chosen chairs are consecutive.\n\nSo we are counting 8-element subsets of \\(\\{1,2,\\do"
+        },
+        {
+          "index": 25,
+          "id": "25",
+          "gold": "113",
+          "pred": "4",
+          "correct": false,
+          "elapsed": 8.315826177597046,
+          "error": null,
+          "finish_reason": "stop",
+          "max_tokens": 4096,
+          "text_head": "We have a regular 24-gon, and we want to draw 12 segments of equal length so that each vertex is used exactly once. That means we are pairing up the 24 vertices into 12 pairs, each pair connected by a segment, and all segments must have the"
+        },
+        {
+          "index": 26,
+          "id": "26",
+          "gold": "19",
+          "pred": "19",
+          "correct": true,
+          "elapsed": 8.73176908493042,
+          "error": null,
+          "finish_reason": "stop",
+          "max_tokens": 4096,
+          "text_head": "We have a non-convex 11-gon \\( A_1A_2\\dots A_{11} \\) with:\n\n- For each \\( 2 \\le i \\le 10 \\), the area of triangle \\( A_i A_1 A_{i+1} \\) is \\( 1 \\).\n- For each such \\( i \\), \\( \\cos(\\angle A_i A_1 A_{i+1}) = \\frac{12}{13} \\).\n- The perimeter"
+        },
+        {
+          "index": 27,
+          "id": "27",
+          "gold": "248",
+          "pred": "375",
+          "correct": false,
+          "elapsed": 29.31414222717285,
+          "error": null,
+          "finish_reason": "stop",
+          "max_tokens": 8192,
+          "text_head": "We have the recurrence:\n\n\\[\nx_{k+1} = \\frac{1}{3}\\left(x_k + \\frac{1}{x_k} - 1\\right).\n\\]\n\nLet\u2019s try to find a transformation that simplifies it. A common trick for such recurrences is to set\n\n\\[\nx_k = \\frac{a_k}{b_k}\n\\]\nor use a substituti"
+        },
+        {
+          "index": 28,
+          "id": "28",
+          "gold": "104",
+          "pred": "104",
+          "correct": true,
+          "elapsed": 12.664820909500122,
+          "error": null,
+          "finish_reason": "stop",
+          "max_tokens": 4096,
+          "text_head": "We are given a right triangle \\(ABC\\) with \\(\\angle A = 90^\\circ\\) and hypotenuse \\(BC = 38\\).  \nPoints \\(K\\) and \\(L\\) are inside such that  \n\\[\nAK = AL = BK = CL = KL = 14.\n\\]\n\nWe need the area of quadrilateral \\(BKLC\\).\n\n---\n\n### Step 1:"
+        },
+        {
+          "index": 29,
+          "id": "29",
+          "gold": "240",
+          "pred": "188",
+          "correct": false,
+          "elapsed": 32.31325435638428,
+          "error": null,
+          "finish_reason": "stop",
+          "max_tokens": 8192,
+          "text_head": "We have  \n\\[\nf(x)=\\frac{(x-18)(x-72)(x-98)(x-k)}{x}.\n\\]\n\nFirst, note that \\(x=0\\) is not in the domain. We want \\(f\\) to have a minimum at exactly two real values of \\(x\\). That means \\(f'(x)=0\\) has exactly two real solutions where the sec"
+        }
+      ],
+      "note": null,
+      "max_tokens": "4096, retry 8192 on length"
+    }
+  },
+  "memory_raw_vllm": null,
+  "client_errors": [],
+  "note": "",
+  "latency_p50_s": 9.191622495651245,
+  "finished_utc": "2026-08-13T05:45:49.050909+00:00"
+}

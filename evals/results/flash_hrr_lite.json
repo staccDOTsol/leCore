@@ -1,0 +1,1101 @@
+{
+  "started_utc": "2026-08-13T03:10:42.223577+00:00",
+  "base_url": "http://198.145.108.57:30739/v1",
+  "model": "/workspace/models/DeepSeek-V4-Flash-0731-serve",
+  "temperature": 0.0,
+  "timeout_s": 180,
+  "suites": [
+    "memory",
+    "gsm8k",
+    "math",
+    "humaneval",
+    "ifeval"
+  ],
+  "probe": {
+    "ok": true,
+    "models": [
+      "/workspace/models/DeepSeek-V4-Flash-0731-serve"
+    ],
+    "elapsed": 0.09601545333862305
+  },
+  "reachable": true,
+  "lab_sig_diff": {
+    "host": "lab box Gateway http://127.0.0.1:8765/v1",
+    "overlay": "DeepSeek-V4-Flash-0731-serve",
+    "model_id": "/workspace/models/DeepSeek-V4-Flash-0731-serve",
+    "public_vllm": "http://198.145.108.57:30739/v1",
+    "arms": {
+      "t2_nonce_cite": {
+        "off": "0/5",
+        "on": "5/5"
+      },
+      "multi_turn_3cite": {
+        "off": "0/3",
+        "on": "3/3"
+      },
+      "reprompts": {
+        "off": "must re-paste the citations",
+        "on": "1 ask, no paste"
+      }
+    },
+    "openrouter": "NOT RUN",
+    "note": "Gateway auto-sticky on the lab box. Same overlay both arms."
+  },
+  "capability": {
+    "GSM8K": {
+      "name": "GSM8K",
+      "n": 20,
+      "correct": 20,
+      "accuracy": 1.0,
+      "score": "20/20",
+      "source": "openai/gsm8k main/test via HuggingFace datasets-server offset=0 length=20",
+      "canonical": "https://huggingface.co/datasets/openai/gsm8k",
+      "split": "test",
+      "offset": 0,
+      "latency_p50_s": 0.3415631055831909,
+      "n_errors": 0,
+      "errors": [],
+      "items": [
+        {
+          "index": 0,
+          "gold": "18",
+          "pred": "18",
+          "correct": true,
+          "elapsed": 0.3174753189086914,
+          "error": null,
+          "finish_reason": "stop",
+          "text_head": "She has 16 eggs per day.  \nShe uses 3 for breakfast and 4 for muffins, so that\u2019s 3 + 4 = 7 eggs used.  \nRemaining eggs = 16 - 7 = 9 eggs.  \nShe sells them at $2 each: 9 \u00d7 2 = $18.  \n\n#### 18"
+        },
+        {
+          "index": 1,
+          "gold": "3",
+          "pred": "3",
+          "correct": true,
+          "elapsed": 0.256075382232666,
+          "error": null,
+          "finish_reason": "stop",
+          "text_head": "Let\u2019s break it down:  \n\n- Blue fiber: 2 bolts  \n- White fiber: half of 2 bolts = 1 bolt  \n\nTotal = 2 + 1 = 3 bolts  \n\n#### 3"
+        },
+        {
+          "index": 2,
+          "gold": "70000",
+          "pred": "70000",
+          "correct": true,
+          "elapsed": 0.35924673080444336,
+          "error": null,
+          "finish_reason": "stop",
+          "text_head": "First, find the total cost:  \n$80,000 + $50,000 = $130,000  \n\nThe repairs increased the value by 150%, meaning the new value is 100% + 150% = 250% of the original purchase price.  \n250% of $80,000 = 2.5 \u00d7 $80,000 = $200,000  \n\nProfit = sell"
+        },
+        {
+          "index": 3,
+          "gold": "540",
+          "pred": "540",
+          "correct": true,
+          "elapsed": 0.20556139945983887,
+          "error": null,
+          "finish_reason": "stop",
+          "text_head": "He runs 3 sprints \u00d7 60 meters = 180 meters per session.  \nHe does this 3 times a week: 180 \u00d7 3 = 540 meters.  \n\n#### 540"
+        },
+        {
+          "index": 4,
+          "gold": "20",
+          "pred": "20",
+          "correct": true,
+          "elapsed": 0.344693660736084,
+          "error": null,
+          "finish_reason": "stop",
+          "text_head": "We know each chicken gets 3 cups per day, and there are 20 chickens.  \nTotal feed needed per day = 20 \u00d7 3 = 60 cups.  \n\nShe has already given:  \nMorning: 15 cups  \nAfternoon: 25 cups  \nTotal so far = 15 + 25 = 40 cups.  \n\nRemaining for fina"
+        },
+        {
+          "index": 5,
+          "gold": "64",
+          "pred": "64",
+          "correct": true,
+          "elapsed": 0.33843255043029785,
+          "error": null,
+          "finish_reason": "stop",
+          "text_head": "We can pair the glasses:  \n- 1st glass: $5  \n- 2nd glass: 60% of $5 = $3  \n\nSo for every pair, the cost is $5 + $3 = $8.  \n\nKylar buys 16 glasses, which is 8 pairs.  \n\nTotal cost = 8 \u00d7 $8 = $64.  \n\n#### $64"
+        },
+        {
+          "index": 6,
+          "gold": "260",
+          "pred": "260",
+          "correct": true,
+          "elapsed": 0.24812078475952148,
+          "error": null,
+          "finish_reason": "stop",
+          "text_head": "Let\u2019s define:\n\n- Seattle = 20 sheep  \n- Charleston = 4 \u00d7 Seattle = 4 \u00d7 20 = 80 sheep  \n- Toulouse = 2 \u00d7 Charleston = 2 \u00d7 80 = 160 sheep  \n\nTotal = 20 + 80 + 160 = 260  \n\n#### 260"
+        },
+        {
+          "index": 7,
+          "gold": "160",
+          "pred": "160",
+          "correct": true,
+          "elapsed": 0.5774593353271484,
+          "error": null,
+          "finish_reason": "stop",
+          "text_head": "Let\u2019s break it down step by step.\n\n- File size: 200 GB  \n- Normal download speed: 2 GB/min  \n- Time to download without interruption: \\( 200 \\div 2 = 100 \\) minutes  \n\nShe gets 40% of the way through before the restart:  \n- 40% of 200 GB = "
+        },
+        {
+          "index": 8,
+          "gold": "45",
+          "pred": "45",
+          "correct": true,
+          "elapsed": 0.576225757598877,
+          "error": null,
+          "finish_reason": "stop",
+          "text_head": "First, John drives away from home for 3 hours at 60 mph:  \nDistance away = 3 \u00d7 60 = 180 miles.\n\nThen he turns around to go home.  \nHe has 4 hours to get back, but:  \n- First 2 hours: standstill \u2192 0 miles covered.  \n- Next 0.5 hours at 30 mp"
+        },
+        {
+          "index": 9,
+          "gold": "460",
+          "pred": "460",
+          "correct": true,
+          "elapsed": 0.3448796272277832,
+          "error": null,
+          "finish_reason": "stop",
+          "text_head": "First, calculate her regular pay for the first 40 hours:  \n40 \u00d7 $10 = $400  \n\nNext, find her overtime rate:  \n1.2 \u00d7 $10 = $12 per hour  \n\nShe worked 5 overtime hours (45 - 40 = 5):  \n5 \u00d7 $12 = $60  \n\nTotal earnings:  \n$400 + $60 = $460  \n\n#"
+        },
+        {
+          "index": 10,
+          "gold": "366",
+          "pred": "366",
+          "correct": true,
+          "elapsed": 0.26784467697143555,
+          "error": null,
+          "finish_reason": "stop",
+          "text_head": "First month: 60 downloads  \nSecond month: 3 \u00d7 60 = 180 downloads  \nThird month: 180 reduced by 30% \u2192 180 \u00d7 0.70 = 126 downloads  \n\nTotal = 60 + 180 + 126 = 366  \n\n#### 366"
+        },
+        {
+          "index": 11,
+          "gold": "694",
+          "pred": "694",
+          "correct": true,
+          "elapsed": 0.27698826789855957,
+          "error": null,
+          "finish_reason": "stop",
+          "text_head": "She bought:\n\n- 3 dozen donuts \u00d7 $68/dozen = $204  \n- 2 dozen mini cupcakes \u00d7 $80/dozen = $160  \n- 6 dozen mini cheesecakes \u00d7 $55/dozen = $330  \n\nTotal cost = $204 + $160 + $330 = $694  \n\n#### 694"
+        },
+        {
+          "index": 12,
+          "gold": "13",
+          "pred": "13",
+          "correct": true,
+          "elapsed": 0.6217563152313232,
+          "error": null,
+          "finish_reason": "stop",
+          "text_head": "We need to find when the profit becomes positive.  \n\n- Cost to plant: $90  \n- Each year:  \n  - Lemons grown: 7  \n  - Price per lemon: $1.5  \n  - Revenue per year: \\( 7 \\times 1.5 = 10.5 \\) dollars  \n  - Cost per year: $3  \n  - Net per year:"
+        },
+        {
+          "index": 13,
+          "gold": "18",
+          "pred": "18",
+          "correct": true,
+          "elapsed": 0.573676347732544,
+          "error": null,
+          "finish_reason": "stop",
+          "text_head": "Let the starting number be \\( x \\).\n\n- Sold a third at the green house:  \n  Remaining = \\( x - \\frac{x}{3} = \\frac{2x}{3} \\)\n\n- Sold 2 more to the red house:  \n  Remaining = \\( \\frac{2x}{3} - 2 \\)\n\n- Sold half of what was left at the orange"
+        },
+        {
+          "index": 14,
+          "gold": "60",
+          "pred": "60",
+          "correct": true,
+          "elapsed": 0.34764814376831055,
+          "error": null,
+          "finish_reason": "stop",
+          "text_head": "Let\u2019s go step-by-step.  \n\n- Total students = 20  \n- Contemporary: 20% of 20 = 4 students  \n- Remaining = 20 \u2212 4 = 16 students  \n- Jazz: 25% of 16 = 4 students  \n- Remaining for hip-hop = 16 \u2212 4 = 12 students  \n\nPercentage of entire class in"
+        },
+        {
+          "index": 15,
+          "gold": "125",
+          "pred": "125",
+          "correct": true,
+          "elapsed": 0.3022892475128174,
+          "error": null,
+          "finish_reason": "stop",
+          "text_head": "We calculate the profit for each option:\n\n- Jewelry: 2.5% of $5,000 = 0.025 \u00d7 5000 = $125  \n- Electronics: 1.2% of $8,000 = 0.012 \u00d7 8000 = $96  \n\nThe larger profit is from jewelry: $125.\n\n#### 125"
+        },
+        {
+          "index": 16,
+          "gold": "230",
+          "pred": "230",
+          "correct": true,
+          "elapsed": 0.3033454418182373,
+          "error": null,
+          "finish_reason": "stop",
+          "text_head": "We can find the total distance each train traveled by adding the two distances.\n\nDay 1: 80 miles  \nDay 2: 150 miles  \n\nTotal = 80 + 150 = 230 miles.\n\nSince both trains travel the same distances, each covers 230 miles.\n\n#### 230"
+        },
+        {
+          "index": 17,
+          "gold": "57500",
+          "pred": "57500",
+          "correct": true,
+          "elapsed": 0.3463771343231201,
+          "error": null,
+          "finish_reason": "stop",
+          "text_head": "First, calculate her weekly pay from teaching:  \n$20 \u00d7 35 hours = $700  \n\nThen, weekly pay from coaching:  \n$30 \u00d7 15 hours = $450  \n\nTotal weekly pay:  \n$700 + $450 = $1,150  \n\nAnnual salary (50 weeks):  \n$1,150 \u00d7 50 = $57,500  \n\n#### 57500"
+        },
+        {
+          "index": 18,
+          "gold": "7",
+          "pred": "7",
+          "correct": true,
+          "elapsed": 0.30053162574768066,
+          "error": null,
+          "finish_reason": "stop",
+          "text_head": "She eats 3 eggs per day.  \n4 weeks = 4 \u00d7 7 = 28 days.  \nTotal eggs = 3 \u00d7 28 = 84 eggs.  \nDozen = 12 eggs, so 84 \u00f7 12 = 7 dozen.\n\n#### 7"
+        },
+        {
+          "index": 19,
+          "gold": "6",
+          "pred": "6",
+          "correct": true,
+          "elapsed": 0.4664297103881836,
+          "error": null,
+          "finish_reason": "stop",
+          "text_head": "First, find the total distance and time so far.  \n- First 4 miles: 1 hour  \n- Next 2 miles: 1 hour  \nTotal so far: 6 miles in 2 hours.\n\nShe wants an average speed of 4 mph for the whole 12-mile trail.  \nTotal time needed for 12 miles at 4 m"
+        }
+      ]
+    },
+    "MATH-500": {
+      "name": "MATH-500",
+      "n": 20,
+      "correct": 16,
+      "accuracy": 0.8,
+      "score": "16/20",
+      "source": "HuggingFaceH4/MATH-500 test via HuggingFace datasets-server offset=0 length=20",
+      "canonical": "https://huggingface.co/datasets/HuggingFaceH4/MATH-500",
+      "split": "test",
+      "offset": 0,
+      "latency_p50_s": 0.9054877758026123,
+      "n_errors": 0,
+      "errors": [],
+      "items": [
+        {
+          "index": 0,
+          "unique_id": "test/precalculus/807.json",
+          "subject": "Precalculus",
+          "level": 2,
+          "gold": "\\left( 3, \\frac{\\pi}{2} \\right)",
+          "pred": "\\left(3, \\frac{\\pi}{2}\\right)",
+          "correct": true,
+          "elapsed": 0.41903233528137207,
+          "error": null,
+          "finish_reason": "stop",
+          "text_head": "We have the rectangular point \\((0, 3)\\).\n\n**Step 1: Find \\(r\\)**  \n\\[\nr = \\sqrt{x^2 + y^2} = \\sqrt{0^2 + 3^2} = \\sqrt{9} = 3\n\\]\n\n**Step 2: Find \\(\\theta\\)**  \nThe point is on the positive \\(y\\)-axis, so  \n\\[\n\\theta = \\frac{\\pi}{2}\n\\]\n\n**St"
+        },
+        {
+          "index": 1,
+          "unique_id": "test/intermediate_algebra/1994.json",
+          "subject": "Intermediate Algebra",
+          "level": 5,
+          "gold": "p - q",
+          "pred": "p - q",
+          "correct": true,
+          "elapsed": 0.9981174468994141,
+          "error": null,
+          "finish_reason": "stop",
+          "text_head": "We start with the given double sum:\n\n\\[\nS = \\sum_{j=1}^\\infty \\sum_{k=1}^\\infty \\frac{1}{(j+k)^3}.\n\\]\n\n**Step 1: Change variables.**  \nLet \\( n = j + k \\). Since \\( j, k \\ge 1 \\), we have \\( n \\ge 2 \\). For a fixed \\( n \\), the possible pai"
+        },
+        {
+          "index": 2,
+          "unique_id": "test/algebra/2584.json",
+          "subject": "Algebra",
+          "level": 3,
+          "gold": "\\frac{14}{3}",
+          "pred": "\\frac{14}{3}",
+          "correct": true,
+          "elapsed": 0.6953248977661133,
+          "error": null,
+          "finish_reason": "stop",
+          "text_head": "We are given  \n\\[\nf(x) = \\frac{3x-2}{x-2}\n\\]  \nand need to compute \\( f(-2) + f(-1) + f(0) \\).\n\n---\n\n**Step 1: Compute \\( f(-2) \\)**  \n\\[\nf(-2) = \\frac{3(-2)-2}{-2-2} = \\frac{-6-2}{-4} = \\frac{-8}{-4} = 2\n\\]\n\n---\n\n**Step 2: Compute \\( f(-1)"
+        },
+        {
+          "index": 3,
+          "unique_id": "test/number_theory/572.json",
+          "subject": "Number Theory",
+          "level": 3,
+          "gold": "9",
+          "pred": "9",
+          "correct": true,
+          "elapsed": 0.4384934902191162,
+          "error": null,
+          "finish_reason": "stop",
+          "text_head": "We need the number of positive divisors of 196.  \nFirst, factor 196:\n\n\\[\n196 = 14^2 = (2 \\cdot 7)^2 = 2^2 \\cdot 7^2\n\\]\n\nThe number of divisors formula: if \\( n = p_1^{a_1} p_2^{a_2} \\cdots \\), then the number of divisors is  \n\\[\n(a_1+1)(a_2"
+        },
+        {
+          "index": 4,
+          "unique_id": "test/algebra/1349.json",
+          "subject": "Algebra",
+          "level": 2,
+          "gold": "\\text{Evelyn}",
+          "pred": "\\text{Evelyn}",
+          "correct": true,
+          "elapsed": 0.574847936630249,
+          "error": null,
+          "finish_reason": "stop",
+          "text_head": "We need to find the greatest average speed, which is distance divided by time.  \nFrom the graph, each point gives (time, distance).  \n\n- Evelyn: (1.25, 4.5) \u2192 speed = 4.5 / 1.25 = 3.6  \n- Briana: (2.5, 2.2) \u2192 speed = 2.2 / 2.5 = 0.88  \n- Ca"
+        },
+        {
+          "index": 5,
+          "unique_id": "test/prealgebra/1622.json",
+          "subject": "Prealgebra",
+          "level": 2,
+          "gold": "42",
+          "pred": "42",
+          "correct": true,
+          "elapsed": 0.39325642585754395,
+          "error": null,
+          "finish_reason": "stop",
+          "text_head": "We have a regular hexagon divided into 6 equilateral triangles.  \nIf the perimeter of one triangle is 21 inches, then each side of that triangle is:\n\n\\[\n\\frac{21}{3} = 7 \\text{ inches}\n\\]\n\nIn a regular hexagon divided this way, each side of"
+        },
+        {
+          "index": 6,
+          "unique_id": "test/number_theory/515.json",
+          "subject": "Number Theory",
+          "level": 3,
+          "gold": "27",
+          "pred": "27",
+          "correct": true,
+          "elapsed": 0.8819572925567627,
+          "error": null,
+          "finish_reason": "stop",
+          "text_head": "We need the smallest positive perfect cube that is the sum of three consecutive integers.\n\n---\n\n**Step 1: Represent the sum of three consecutive integers**  \nLet the three consecutive integers be \\( n-1, n, n+1 \\).  \nTheir sum is:\n\n\\[\n(n-1)"
+        },
+        {
+          "index": 7,
+          "unique_id": "test/precalculus/927.json",
+          "subject": "Precalculus",
+          "level": 4,
+          "gold": "90^\\circ",
+          "pred": "90",
+          "correct": true,
+          "elapsed": 0.9290182590484619,
+          "error": null,
+          "finish_reason": "stop",
+          "text_head": "We have two lines given by symmetric equations.  \n\n**First line:**  \n\\[\n2x = 3y = -z\n\\]  \nLet the common value be \\(t\\). Then:  \n\\[\nx = \\frac{t}{2}, \\quad y = \\frac{t}{3}, \\quad z = -t\n\\]  \nSo a direction vector for the first line is  \n\\[\n\\"
+        },
+        {
+          "index": 8,
+          "unique_id": "test/algebra/2036.json",
+          "subject": "Algebra",
+          "level": 3,
+          "gold": "3\\sqrt{13}",
+          "pred": "3\\sqrt{13}",
+          "correct": true,
+          "elapsed": 0.4245591163635254,
+          "error": null,
+          "finish_reason": "stop",
+          "text_head": "We use the distance formula:\n\n\\[\nd = \\sqrt{(x_2 - x_1)^2 + (y_2 - y_1)^2}\n\\]\n\nHere, \\((x_1, y_1) = (2, -6)\\) and \\((x_2, y_2) = (-4, 3)\\).\n\n\\[\nd = \\sqrt{(-4 - 2)^2 + (3 - (-6))^2}\n\\]\n\\[\n= \\sqrt{(-6)^2 + (9)^2}\n\\]\n\\[\n= \\sqrt{36 + 81}\n\\]\n\\[\n="
+        },
+        {
+          "index": 9,
+          "unique_id": "test/prealgebra/1139.json",
+          "subject": "Prealgebra",
+          "level": 5,
+          "gold": "4",
+          "pred": "**Case 9:** Addition combines \\(2\\cdot 3\\cdot 4\\cdot 5\\)",
+          "correct": false,
+          "elapsed": 3.067464828491211,
+          "error": null,
+          "finish_reason": "length",
+          "text_head": "We start with the expression:\n\n\\[\n2 \\cdot 3 \\cdot 4 \\cdot 5 + 1\n\\]\n\nWe can insert parentheses in any way, but we cannot change the order of the numbers or the operators. The operators are:\n\n- Three multiplications: between 2 and 3, 3 and 4,"
+        },
+        {
+          "index": 10,
+          "unique_id": "test/number_theory/1032.json",
+          "subject": "Number Theory",
+          "level": 3,
+          "gold": "2220",
+          "pred": "2220",
+          "correct": true,
+          "elapsed": 1.4845364093780518,
+          "error": null,
+          "finish_reason": "stop",
+          "text_head": "We need the least positive integer multiple of 30 that uses only digits 0 and 2.\n\n**Step 1: Conditions for multiples of 30**  \nA number is divisible by 30 if it is divisible by 2, 3, and 5.\n\n- Divisible by 2: last digit must be even \u2192 last "
+        },
+        {
+          "index": 11,
+          "unique_id": "test/intermediate_algebra/1197.json",
+          "subject": "Intermediate Algebra",
+          "level": 5,
+          "gold": "\\frac{3}{56}",
+          "pred": "---",
+          "correct": false,
+          "elapsed": 2.3691563606262207,
+          "error": null,
+          "finish_reason": "length",
+          "text_head": "We are told \\( p(x) \\) is a degree 5 polynomial and  \n\\[\np(n) = \\frac{n}{n^2 - 1}\n\\]\nfor \\( n = 2, 3, 4, 5, 6, 7 \\).\n\nThat means we know \\( p(n) \\) at 6 points, which is enough to determine a degree 5 polynomial uniquely.\n\n---\n\n**Step 1: De"
+        },
+        {
+          "index": 12,
+          "unique_id": "test/number_theory/737.json",
+          "subject": "Number Theory",
+          "level": 5,
+          "gold": "284",
+          "pred": "284",
+          "correct": true,
+          "elapsed": 1.0046722888946533,
+          "error": null,
+          "finish_reason": "stop",
+          "text_head": "We are asked for the sum of the proper divisors of the sum of the proper divisors of 284.\n\n**Step 1: Find the proper divisors of 284.**  \nFirst, factor 284:\n\n\\[\n284 = 4 \\times 71 = 2^2 \\times 71\n\\]\n\nThe divisors of 284 are:\n\n\\[\n1, 2, 4, 71,"
+        },
+        {
+          "index": 13,
+          "unique_id": "test/geometry/248.json",
+          "subject": "Geometry",
+          "level": 2,
+          "gold": "5",
+          "pred": "5",
+          "correct": true,
+          "elapsed": 0.3772554397583008,
+          "error": null,
+          "finish_reason": "stop",
+          "text_head": "We know the volume of a cylinder is given by:\n\n\\[\nV = \\pi r^2 h\n\\]\n\nFrom the problem, \\( V = 45\\pi \\) and \\( r = 3 \\).\n\nSubstitute:\n\n\\[\n45\\pi = \\pi (3^2) h\n\\]\n\n\\[\n45\\pi = 9\\pi h\n\\]\n\nDivide both sides by \\( 9\\pi \\):\n\n\\[\nh = \\frac{45\\pi}{9\\pi"
+        },
+        {
+          "index": 14,
+          "unique_id": "test/precalculus/1303.json",
+          "subject": "Precalculus",
+          "level": 1,
+          "gold": "\\sqrt{51}",
+          "pred": "\\sqrt{51}",
+          "correct": true,
+          "elapsed": 0.589818000793457,
+          "error": null,
+          "finish_reason": "stop",
+          "text_head": "We have a right triangle \\( DEF \\) with the right angle at \\( E \\).  \nThe side \\( EF = 7 \\) is given, and \\( \\sin D = 0.7 \\).\n\nIn a right triangle,  \n\\[\n\\sin D = \\frac{\\text{opposite}}{\\text{hypotenuse}} = \\frac{EF}{DF}.\n\\]\n\nSo:\n\\[\n0.7 = \\f"
+        },
+        {
+          "index": 15,
+          "unique_id": "test/precalculus/990.json",
+          "subject": "Precalculus",
+          "level": 5,
+          "gold": "6 - 5i",
+          "pred": "6 - 5i",
+          "correct": true,
+          "elapsed": 1.2167108058929443,
+          "error": null,
+          "finish_reason": "stop",
+          "text_head": "We are given  \n\\[\nz = 2 + \\sqrt{2} - (3 + 3\\sqrt{2})i\n\\]\nand  \n\\[\nc = 2 - 3i.\n\\]\n\nWe want to rotate \\( z \\) around \\( c \\) by \\(\\frac{\\pi}{4}\\) counterclockwise.\n\n---\n\n**Step 1: Translate so that \\(c\\) is the origin**  \nLet  \n\\[\nz - c = \\le"
+        },
+        {
+          "index": 16,
+          "unique_id": "test/intermediate_algebra/134.json",
+          "subject": "Intermediate Algebra",
+          "level": 1,
+          "gold": "-50",
+          "pred": "-50",
+          "correct": true,
+          "elapsed": 0.3077993392944336,
+          "error": null,
+          "finish_reason": "stop",
+          "text_head": "We can group the terms in pairs:\n\n\\[\n(1-2) + (3-4) + (5-6) + \\dots + (99-100)\n\\]\n\nEach pair equals \\(-1\\).  \nThere are \\(100 \\div 2 = 50\\) pairs.\n\nSo the sum is:\n\n\\[\n50 \\times (-1) = -50\n\\]\n\n\\[\n\\boxed{-50}\n\\]"
+        },
+        {
+          "index": 17,
+          "unique_id": "test/precalculus/1199.json",
+          "subject": "Precalculus",
+          "level": 4,
+          "gold": "\\pi",
+          "pred": "Wait\u2014maybe the graph",
+          "correct": false,
+          "elapsed": 2.954751491546631,
+          "error": null,
+          "finish_reason": "length",
+          "text_head": "We are given the graph of  \n\\[\ny = a \\sin(bx + c) + d\n\\]\nwith positive constants \\(a, b, c, d\\).\n\nFrom the graph:\n\n- The maximum is \\(3\\) and minimum is \\(-1\\), so amplitude  \n\\[\na = \\frac{3 - (-1)}{2} = 2.\n\\]\n\n- The vertical shift is  \n\\[\n"
+        },
+        {
+          "index": 18,
+          "unique_id": "test/geometry/434.json",
+          "subject": "Geometry",
+          "level": 1,
+          "gold": "28",
+          "pred": "56",
+          "correct": false,
+          "elapsed": 1.395125389099121,
+          "error": null,
+          "finish_reason": "stop",
+          "text_head": "We have two parallel horizontal lines, with \\( A \\) on the top line and \\( B, C \\) on the bottom line.  \nThe segment \\( BC \\) is horizontal, and \\( AB = BC \\).\n\nFrom the diagram:  \n- \\( A \\) is at \\((2,3)\\), \\( B \\) at \\((4,0)\\), \\( C \\) at"
+        },
+        {
+          "index": 19,
+          "unique_id": "test/intermediate_algebra/1000.json",
+          "subject": "Intermediate Algebra",
+          "level": 3,
+          "gold": "3",
+          "pred": "3",
+          "correct": true,
+          "elapsed": 1.2948195934295654,
+          "error": null,
+          "finish_reason": "stop",
+          "text_head": "We have the cubic:\n\n\\[\nx^3 + a x^2 + a x + 1 = 0\n\\]\n\n**Step 1: Observe symmetry**  \nThe coefficients are symmetric: \\(1, a, a, 1\\). This suggests a reciprocal relationship. Indeed, if \\(x\\) is a root, then \\(1/x\\) is also a root, because:\n\n"
+        }
+      ],
+      "max_tokens": 1024,
+      "notes": "this Cursor-cloud run used max_tokens=1024; 3 items finish_reason=length"
+    },
+    "HumanEval": {
+      "name": "HumanEval",
+      "n": 10,
+      "correct": 10,
+      "accuracy": 1.0,
+      "score": "10/10",
+      "source": "openai/openai_humaneval test via HuggingFace datasets-server offset=0 length=10",
+      "canonical": "https://huggingface.co/datasets/openai/openai_humaneval",
+      "split": "test",
+      "offset": 0,
+      "latency_p50_s": 0.3432748317718506,
+      "n_errors": 0,
+      "errors": [],
+      "items": [
+        {
+          "index": 0,
+          "task_id": "HumanEval/0",
+          "entry_point": "has_close_elements",
+          "correct": true,
+          "exec_error": "",
+          "elapsed": 0.3987095355987549,
+          "error": null,
+          "finish_reason": "stop",
+          "text_head": "```python\nfrom typing import List\n\n\ndef has_close_elements(numbers: List[float], threshold: float) -> bool:\n    \"\"\" Check if in given list of numbers, are any two numbers closer to each other than\n    given threshold.\n    >>> has_close_elem"
+        },
+        {
+          "index": 1,
+          "task_id": "HumanEval/1",
+          "entry_point": "separate_paren_groups",
+          "correct": true,
+          "exec_error": "",
+          "elapsed": 0.513545036315918,
+          "error": null,
+          "finish_reason": "stop",
+          "text_head": "```python\nfrom typing import List\n\n\ndef separate_paren_groups(paren_string: str) -> List[str]:\n    \"\"\" Input to this function is a string containing multiple groups of nested parentheses. Your goal is to\n    separate those group into separa"
+        },
+        {
+          "index": 2,
+          "task_id": "HumanEval/2",
+          "entry_point": "truncate_number",
+          "correct": true,
+          "exec_error": "",
+          "elapsed": 0.27530407905578613,
+          "error": null,
+          "finish_reason": "stop",
+          "text_head": "```python\ndef truncate_number(number: float) -> float:\n    \"\"\" Given a positive floating point number, it can be decomposed into\n    and integer part (largest integer smaller than given number) and decimals\n    (leftover part always smaller"
+        },
+        {
+          "index": 3,
+          "task_id": "HumanEval/3",
+          "entry_point": "below_zero",
+          "correct": true,
+          "exec_error": "",
+          "elapsed": 0.22830772399902344,
+          "error": null,
+          "finish_reason": "stop",
+          "text_head": "```python\nfrom typing import List\n\n\ndef below_zero(operations: List[int]) -> bool:\n    balance = 0\n    for op in operations:\n        balance += op\n        if balance < 0:\n            return True\n    return False\n```"
+        },
+        {
+          "index": 4,
+          "task_id": "HumanEval/4",
+          "entry_point": "mean_absolute_deviation",
+          "correct": true,
+          "exec_error": "",
+          "elapsed": 0.37438082695007324,
+          "error": null,
+          "finish_reason": "stop",
+          "text_head": "```python\nfrom typing import List\n\n\ndef mean_absolute_deviation(numbers: List[float]) -> float:\n    \"\"\" For a given list of input numbers, calculate Mean Absolute Deviation\n    around the mean of this dataset.\n    Mean Absolute Deviation is"
+        },
+        {
+          "index": 5,
+          "task_id": "HumanEval/5",
+          "entry_point": "intersperse",
+          "correct": true,
+          "exec_error": "",
+          "elapsed": 0.3461282253265381,
+          "error": null,
+          "finish_reason": "stop",
+          "text_head": "```python\nfrom typing import List\n\n\ndef intersperse(numbers: List[int], delimeter: int) -> List[int]:\n    \"\"\" Insert a number 'delimeter' between every two consecutive elements of input list `numbers'\n    >>> intersperse([], 4)\n    []\n    >"
+        },
+        {
+          "index": 6,
+          "task_id": "HumanEval/6",
+          "entry_point": "parse_nested_parens",
+          "correct": true,
+          "exec_error": "",
+          "elapsed": 0.3316833972930908,
+          "error": null,
+          "finish_reason": "stop",
+          "text_head": "```python\nfrom typing import List\n\n\ndef parse_nested_parens(paren_string: str) -> List[int]:\n    groups = paren_string.split()\n    result = []\n    for group in groups:\n        max_depth = 0\n        current_depth = 0\n        for char in grou"
+        },
+        {
+          "index": 7,
+          "task_id": "HumanEval/7",
+          "entry_point": "filter_by_substring",
+          "correct": true,
+          "exec_error": "",
+          "elapsed": 0.30771851539611816,
+          "error": null,
+          "finish_reason": "stop",
+          "text_head": "```python\nfrom typing import List\n\n\ndef filter_by_substring(strings: List[str], substring: str) -> List[str]:\n    \"\"\" Filter an input list of strings only for ones that contain given substring\n    >>> filter_by_substring([], 'a')\n    []\n   "
+        },
+        {
+          "index": 8,
+          "task_id": "HumanEval/8",
+          "entry_point": "sum_product",
+          "correct": true,
+          "exec_error": "",
+          "elapsed": 0.38498616218566895,
+          "error": null,
+          "finish_reason": "stop",
+          "text_head": "```python\nfrom typing import List, Tuple\n\n\ndef sum_product(numbers: List[int]) -> Tuple[int, int]:\n    \"\"\" For a given list of integers, return a tuple consisting of a sum and a product of all the integers in a list.\n    Empty sum should be"
+        },
+        {
+          "index": 9,
+          "task_id": "HumanEval/9",
+          "entry_point": "rolling_max",
+          "correct": true,
+          "exec_error": "",
+          "elapsed": 0.3404214382171631,
+          "error": null,
+          "finish_reason": "stop",
+          "text_head": "```python\nfrom typing import List, Tuple\n\n\ndef rolling_max(numbers: List[int]) -> List[int]:\n    \"\"\" From a given list of integers, generate a list of rolling maximum element found until given moment\n    in the sequence.\n    >>> rolling_max"
+        }
+      ]
+    },
+    "IFEval": {
+      "name": "IFEval",
+      "n": 20,
+      "correct": 19,
+      "accuracy": 0.95,
+      "score": "19/20",
+      "source": "google/IFEval train via HuggingFace datasets-server offset=0 length=20 (same order as google-research instruction_following_eval/data/input_data.jsonl head)",
+      "canonical": "https://huggingface.co/datasets/google/IFEval",
+      "split": "train",
+      "offset": 0,
+      "latency_p50_s": 2.3942164182662964,
+      "n_errors": 0,
+      "errors": [],
+      "items": [
+        {
+          "index": 0,
+          "key": 1000,
+          "instruction_id_list": [
+            "punctuation:no_comma",
+            "detectable_format:number_highlighted_sections",
+            "length_constraints:number_words"
+          ],
+          "instruction_flags": [
+            true,
+            true,
+            true
+          ],
+          "prompt_level_strict_lite": true,
+          "correct": true,
+          "elapsed": 2.9990856647491455,
+          "error": null,
+          "finish_reason": "stop",
+          "text_head": "*Early Life and Succession*  \nRaymond III of Tripoli (c. 1140\u20131187) was a pivotal noble in the Crusader states. Born to Raymond II of Tripoli and Hodierna of Jerusalem he became count after his father\u2019s assassination by the Assassins in 115"
+        },
+        {
+          "index": 1,
+          "key": 1001,
+          "instruction_id_list": [
+            "punctuation:no_comma"
+          ],
+          "instruction_flags": [
+            true
+          ],
+          "prompt_level_strict_lite": true,
+          "correct": true,
+          "elapsed": 5.284342288970947,
+          "error": null,
+          "finish_reason": "stop",
+          "text_head": "Hark noble traveler attend my words  \nFor I shall craft a journey fit for kings  \nFrom rising sun to setting crimson skies  \nThy days in Nippon shall be rich and strange.\n\n**First Day: The City of a Thousand Gates**  \nThou shalt arrive at T"
+        },
+        {
+          "index": 2,
+          "key": 1005,
+          "instruction_id_list": [
+            "detectable_content:number_placeholders"
+          ],
+          "instruction_flags": [
+            true
+          ],
+          "prompt_level_strict_lite": true,
+          "correct": true,
+          "elapsed": 5.211777925491333,
+          "error": null,
+          "finish_reason": "stop",
+          "text_head": "Here is a professional, entry-level resume template designed specifically for a high school graduate with no prior work experience. It focuses on education, transferable skills, and extracurricular activities.\n\n---\n\n**[YOUR FULL NAME]**\n[Ad"
+        },
+        {
+          "index": 3,
+          "key": 1012,
+          "instruction_id_list": [
+            "combination:repeat_prompt",
+            "detectable_format:title"
+          ],
+          "instruction_flags": [
+            true,
+            true
+          ],
+          "prompt_level_strict_lite": true,
+          "correct": true,
+          "elapsed": 0.9583618640899658,
+          "error": null,
+          "finish_reason": "stop",
+          "text_head": "Write an email to my boss telling him that I am quitting. The email must contain a title wrapped in double angular brackets, i.e. <<title>>.\n\n---\n\n<<Subject: Resignation \u2013 [Your Name] \u2013 [Your Last Working Day]>>\n\nDear [Boss\u2019s Name],\n\nI am w"
+        },
+        {
+          "index": 4,
+          "key": 1019,
+          "instruction_id_list": [
+            "change_case:english_lowercase"
+          ],
+          "instruction_flags": [
+            true
+          ],
+          "prompt_level_strict_lite": true,
+          "correct": true,
+          "elapsed": 0.15262150764465332,
+          "error": null,
+          "finish_reason": "stop",
+          "text_head": "what are the two young boys holding?"
+        },
+        {
+          "index": 5,
+          "key": 102,
+          "instruction_id_list": [
+            "detectable_format:number_bullet_lists"
+          ],
+          "instruction_flags": [
+            true
+          ],
+          "prompt_level_strict_lite": true,
+          "correct": true,
+          "elapsed": 3.9579362869262695,
+          "error": null,
+          "finish_reason": "stop",
+          "text_head": "**Maya** (spinning in her emerald ball gown, sequins catching the hallway light): \u201cOkay, one last check\u2014tiara straight? Lipstick not on my teeth? And most importantly, do I look like I\u2019m about to accept a Nobel Prize for \u2018Most Glamorous Hum"
+        },
+        {
+          "index": 6,
+          "key": 1021,
+          "instruction_id_list": [
+            "change_case:english_capital",
+            "detectable_format:multiple_sections"
+          ],
+          "instruction_flags": [
+            true,
+            true
+          ],
+          "prompt_level_strict_lite": true,
+          "correct": true,
+          "elapsed": 2.4855215549468994,
+          "error": null,
+          "finish_reason": "stop",
+          "text_head": "PARAGRAPH 1  \nTHE SENTENCE \"IF THE LAW IS BAD, YOU SHOULD NOT FOLLOW IT\" IS A DANGEROUSLY SIMPLISTIC MORAL ABSOLUTE. IT ASSUMES A SINGLE, OBJECTIVE STANDARD OF \"BADNESS\" THAT DOES NOT EXIST IN A PLURALISTIC SOCIETY. WHAT ONE PERSON CALLS BA"
+        },
+        {
+          "index": 7,
+          "key": 1040,
+          "instruction_id_list": [
+            "change_case:capital_word_frequency",
+            "change_case:capital_word_frequency",
+            "startend:quotation"
+          ],
+          "instruction_flags": [
+            false,
+            true,
+            true
+          ],
+          "prompt_level_strict_lite": false,
+          "correct": false,
+          "elapsed": 2.3029112815856934,
+          "error": null,
+          "finish_reason": "stop",
+          "text_head": "\"MATTHIAS ALGIERS  \nPortland, OR | matthias.algiers@email.com | (503) 555-0142 | linkedin.com/in/matthiasalgiers  \n\nPROFILE  \nDetail-oriented operations manager with 8+ years in logistics and supply chain coordination. Known for turning cha"
+        },
+        {
+          "index": 8,
+          "key": 1051,
+          "instruction_id_list": [
+            "change_case:english_lowercase"
+          ],
+          "instruction_flags": [
+            true
+          ],
+          "prompt_level_strict_lite": true,
+          "correct": true,
+          "elapsed": 1.3513824939727783,
+          "error": null,
+          "finish_reason": "stop",
+          "text_head": "hey,\n\ni know life gets busy and it\u2019s easy to think one vote doesn\u2019t matter. but it does. it really, really does.\n\ni\u2019m not gonna tell you who to vote for or what to believe. that\u2019s your call. but please, just go do it. it takes like fifteen "
+        },
+        {
+          "index": 9,
+          "key": 1069,
+          "instruction_id_list": [
+            "keywords:existence",
+            "length_constraints:number_words",
+            "punctuation:no_comma"
+          ],
+          "instruction_flags": [
+            true,
+            true,
+            true
+          ],
+          "prompt_level_strict_lite": true,
+          "correct": true,
+          "elapsed": 6.082502365112305,
+          "error": null,
+          "finish_reason": "stop",
+          "text_head": "**Subject: A Strategic Alignment Meeting for Our Next Phase of Growth**\n\nDear Valued Team Members  \n\nI hope this message finds you well and fully engaged in our current initiatives. I am writing to formally invite you to a critical working "
+        },
+        {
+          "index": 10,
+          "key": 1072,
+          "instruction_id_list": [
+            "length_constraints:number_words"
+          ],
+          "instruction_flags": [
+            true
+          ],
+          "prompt_level_strict_lite": true,
+          "correct": true,
+          "elapsed": 4.499622583389282,
+          "error": null,
+          "finish_reason": "stop",
+          "text_head": "**Title: The Art of the Suspended Snooze: Why You Should Ditch Your Mattress for a Hammock**\n\nFor centuries, the hammock has been the universal symbol of leisure\u2014a canvas cocoon strung between two palm trees, swaying gently in a tropical br"
+        },
+        {
+          "index": 11,
+          "key": 1075,
+          "instruction_id_list": [
+            "detectable_format:json_format"
+          ],
+          "instruction_flags": [
+            true
+          ],
+          "prompt_level_strict_lite": true,
+          "correct": true,
+          "elapsed": 2.701559543609619,
+          "error": null,
+          "finish_reason": "stop",
+          "text_head": "{\n  \"advertisement\": {\n    \"headline\": \"Introducing CloudSoft Diapers: Comfort So Real, They\u2019ll Forget They\u2019re Wearing One\",\n    \"subheadline\": \"Engineered for all-day snugness, zero chafing, and happy baby giggles.\",\n    \"target_audience\":"
+        },
+        {
+          "index": 12,
+          "key": 1082,
+          "instruction_id_list": [
+            "length_constraints:number_paragraphs"
+          ],
+          "instruction_flags": [
+            true
+          ],
+          "prompt_level_strict_lite": true,
+          "correct": true,
+          "elapsed": 2.5307860374450684,
+          "error": null,
+          "finish_reason": "stop",
+          "text_head": "The alarm clock blared a digitized fanfare, and Mark\u2019s eyes snapped open to a world that felt subtly wrong. The ceiling was a flat, textureless white, and the morning light through the window cast no shadows. He blinked, and a translucent b"
+        },
+        {
+          "index": 13,
+          "key": 1087,
+          "instruction_id_list": [
+            "change_case:english_lowercase"
+          ],
+          "instruction_flags": [
+            true
+          ],
+          "prompt_level_strict_lite": true,
+          "correct": true,
+          "elapsed": 7.127557754516602,
+          "error": null,
+          "finish_reason": "stop",
+          "text_head": "the social network is not a movie about facebook. it is a movie about the cold, precise architecture of betrayal, and how the most revolutionary idea of a generation was born from a broken heart and a stolen algorithm. david fincher\u2019s film,"
+        },
+        {
+          "index": 14,
+          "key": 1092,
+          "instruction_id_list": [
+            "length_constraints:number_words"
+          ],
+          "instruction_flags": [
+            true
+          ],
+          "prompt_level_strict_lite": true,
+          "correct": true,
+          "elapsed": 1.5225749015808105,
+          "error": null,
+          "finish_reason": "stop",
+          "text_head": "**Title: Four Days in the Neon and the Quiet**\n\nJapan is a country of beautiful contradictions, and my short trip was a masterclass in both.\n\nDay one was Tokyo: a sensory overload of neon signs, the rhythmic chaos of Shibuya Crossing, and t"
+        },
+        {
+          "index": 15,
+          "key": 1094,
+          "instruction_id_list": [
+            "detectable_format:json_format"
+          ],
+          "instruction_flags": [
+            true
+          ],
+          "prompt_level_strict_lite": true,
+          "correct": true,
+          "elapsed": 1.9131712913513184,
+          "error": null,
+          "finish_reason": "stop",
+          "text_head": "{\n  \"famousMoms\": [\n    {\n      \"name\": \"Medea\",\n      \"vibe\": \"The original helicopter mom, but her helicopter had flaming wheels and a body count.\",\n      \"claimToFame\": \"Killed her kids to spite her ex. Talk about 'mommy issues'.\"\n    },"
+        },
+        {
+          "index": 16,
+          "key": 1098,
+          "instruction_id_list": [
+            "combination:two_responses"
+          ],
+          "instruction_flags": [
+            true
+          ],
+          "prompt_level_strict_lite": true,
+          "correct": true,
+          "elapsed": 0.6652865409851074,
+          "error": null,
+          "finish_reason": "stop",
+          "text_head": "**Response 1:**  \nOne common name people call God is **\"Yahweh\"** \u2014 a sacred, personal name revealed in the Hebrew Bible, often translated as \"I AM WHO I AM.\" It emphasizes God's eternal, self-existent nature and is used in Jewish and Chris"
+        },
+        {
+          "index": 17,
+          "key": 1107,
+          "instruction_id_list": [
+            "punctuation:no_comma",
+            "combination:two_responses"
+          ],
+          "instruction_flags": [
+            true,
+            true
+          ],
+          "prompt_level_strict_lite": true,
+          "correct": true,
+          "elapsed": 0.2777376174926758,
+          "error": null,
+          "finish_reason": "stop",
+          "text_head": "Why did the rocket break up with the satellite? It needed more space.\n\n******\nWhy do rockets never get lost? They always follow the launch trajectory."
+        },
+        {
+          "index": 18,
+          "key": 1108,
+          "instruction_id_list": [
+            "language:response_language"
+          ],
+          "instruction_flags": [
+            true
+          ],
+          "prompt_level_strict_lite": true,
+          "correct": true,
+          "elapsed": 0.6223759651184082,
+          "error": null,
+          "finish_reason": "stop",
+          "text_head": "\u0cb9\u0ccd\u0caf\u0cbe\u0c82\u0cac\u0cb0\u0ccd\u0c97\u0cb0\u0ccd \u0cb8\u0cbe\u0cae\u0cbe\u0ca8\u0ccd\u0caf\u0cb5\u0cbe\u0c97\u0cbf \u0cb8\u0ccd\u0caf\u0cbe\u0c82\u0ca1\u0ccd\u0cb5\u0cbf\u0c9a\u0ccd \u0c8e\u0c82\u0ca6\u0cc1 \u0caa\u0cb0\u0cbf\u0c97\u0ca3\u0cbf\u0cb8\u0cb2\u0cbe\u0c97\u0cc1\u0ca4\u0ccd\u0ca4\u0ca6\u0cc6, \u0c8f\u0c95\u0cc6\u0c82\u0ca6\u0cb0\u0cc6 \u0c85\u0ca6\u0cc1 \u0c8e\u0cb0\u0ca1\u0cc1 \u0cac\u0ccd\u0cb0\u0cc6\u0ca1\u0ccd \u0ca4\u0cc1\u0c82\u0ca1\u0cc1\u0c97\u0cb3 \u0ca8\u0ca1\u0cc1\u0cb5\u0cc6 \u0ca4\u0cc1\u0c82\u0cac\u0cc1\u0cb5\u0cbf\u0c95\u0cc6\u0caf\u0ca8\u0ccd\u0ca8\u0cc1 \u0cb9\u0cca\u0c82\u0ca6\u0cbf\u0cb0\u0cc1\u0ca4\u0ccd\u0ca4\u0ca6\u0cc6. \u0c86\u0ca6\u0cb0\u0cc6 \u0c95\u0cc6\u0cb2\u0cb5\u0cb0\u0cc1 \u0c87\u0ca6\u0ca8\u0ccd\u0ca8\u0cc1 \u0caa\u0ccd\u0cb0\u0ca4\u0ccd\u0caf\u0cc7\u0c95 \u0cad\u0c95\u0ccd\u0cb7\u0ccd\u0caf\u0cb5\u0cc6\u0c82\u0ca6\u0cc1 \u0cb5\u0cbe\u0ca6\u0cbf\u0cb8\u0cc1\u0ca4\u0ccd\u0ca4\u0cbe\u0cb0\u0cc6."
+        },
+        {
+          "index": 19,
+          "key": 1122,
+          "instruction_id_list": [
+            "change_case:english_lowercase",
+            "keywords:letter_frequency"
+          ],
+          "instruction_flags": [
+            true,
+            true
+          ],
+          "prompt_level_strict_lite": true,
+          "correct": true,
+          "elapsed": 0.3586587905883789,
+          "error": null,
+          "finish_reason": "stop",
+          "text_head": "the midnight scroll is a ritual. what\u2019s on your nightstand says more than your profile ever will. #playboyphilosophy #afterdarkreads #slowburn #theartofdesire"
+        }
+      ],
+      "instruction_level_strict_lite": "29/30",
+      "grader": "lite IFEval checkers in evals/flash_hrr_api_eval.py (strict-ish; json allows a single markdown fence; Kannada via Unicode block U+0C80\u2013U+0CFF; not the official google-research package)"
+    }
+  },
+  "memory_raw_vllm": {
+    "n": 5,
+    "hits": 0,
+    "score": "0/5",
+    "trials": [
+      {
+        "i": 0,
+        "nonce": "HRR-SIG-61ae93b85888-0",
+        "remember_ok": true,
+        "remember_text": "HRR-SIG-61ae93b85888-0",
+        "recall_ok": true,
+        "recall_text": "0",
+        "cited": false,
+        "remember_s": 0.14435029029846191,
+        "recall_s": 0.12361693382263184,
+        "remember_error": null,
+        "recall_error": null
+      },
+      {
+        "i": 1,
+        "nonce": "HRR-SIG-5ba4df1dd387-1",
+        "remember_ok": true,
+        "remember_text": "HRR-SIG-5ba4df1dd387-1",
+        "recall_ok": true,
+        "recall_text": "I don\u2019t have any record of a nonce you asked me to remember in this thread.",
+        "cited": false,
+        "remember_s": 0.14004087448120117,
+        "recall_s": 0.1709001064300537,
+        "remember_error": null,
+        "recall_error": null
+      },
+      {
+        "i": 2,
+        "nonce": "HRR-SIG-ce20ad610e0c-2",
+        "remember_ok": true,
+        "remember_text": "HRR-SIG-ce20ad610e0c-2",
+        "recall_ok": true,
+        "recall_text": "0",
+        "cited": false,
+        "remember_s": 0.13534927368164062,
+        "recall_s": 0.12847423553466797,
+        "remember_error": null,
+        "recall_error": null
+      },
+      {
+        "i": 3,
+        "nonce": "HRR-SIG-d7e4651232e5-3",
+        "remember_ok": true,
+        "remember_text": "HRR-SIG-d7e4651232e5-3",
+        "recall_ok": true,
+        "recall_text": "0",
+        "cited": false,
+        "remember_s": 0.13583064079284668,
+        "recall_s": 0.1295926570892334,
+        "remember_error": null,
+        "recall_error": null
+      },
+      {
+        "i": 4,
+        "nonce": "HRR-SIG-784794d059b3-4",
+        "remember_ok": true,
+        "remember_text": "HRR-SIG-784794d059b3-4",
+        "recall_ok": true,
+        "recall_text": "I don\u2019t have any record of a nonce you asked me to remember in this thread.",
+        "cited": false,
+        "remember_s": 0.14003777503967285,
+        "recall_s": 0.17260193824768066,
+        "remember_error": null,
+        "recall_error": null
+      }
+    ],
+    "note": "raw vLLM has no Gateway auto-sticky; SIG DIFF is Gateway+overlay. This probe used a fresh request (no client-side history, no extra headers)."
+  },
+  "client_errors": [],
+  "note": "",
+  "latency_p50_s": 0.4088709354400635,
+  "finished_utc": "2026-08-13T03:12:22.090395+00:00"
+}

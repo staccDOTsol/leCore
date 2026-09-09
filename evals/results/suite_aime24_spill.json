@@ -1,0 +1,431 @@
+{
+  "started_utc": "2026-08-13T05:38:03.256968+00:00",
+  "base_url": "http://198.145.108.57:30739/v1",
+  "model": "deepseek-v4-flash",
+  "temperature": 0.0,
+  "timeout_s": 180,
+  "concurrency": 1,
+  "scale": "full",
+  "n_cap": null,
+  "suites": [
+    "aime24"
+  ],
+  "probe": {
+    "ok": true,
+    "models": [
+      "deepseek-v4-flash"
+    ],
+    "elapsed": 0.08083820343017578
+  },
+  "reachable": true,
+  "stack": "Flash+HRR-spill gateway",
+  "lab_sig_diff": {
+    "host": "lab box Gateway http://127.0.0.1:8765/v1",
+    "overlay": "DeepSeek-V4-Flash-0731-serve",
+    "model_id": "deepseek-v4-flash",
+    "public_vllm": "http://198.145.108.57:30739/v1",
+    "arms": {
+      "t2_nonce_cite": {
+        "off": "0/5",
+        "on": "5/5"
+      },
+      "multi_turn_3cite": {
+        "off": "0/3",
+        "on": "3/3"
+      },
+      "reprompts": {
+        "off": "must re-paste the citations",
+        "on": "1 ask, no paste"
+      }
+    },
+    "openrouter": "NOT RUN",
+    "note": "Gateway auto-sticky on the lab box. Public API is Flash+HRR-spill gateway."
+  },
+  "capability": {
+    "AIME 2024": {
+      "name": "AIME 2024",
+      "n": 30,
+      "split_n": 30,
+      "correct": 22,
+      "accuracy": 0.7333333333333333,
+      "score": "22/30",
+      "source": "HuggingFaceH4/aime_2024 train via HuggingFace datasets-server (n=30; AIME 2024 I)",
+      "canonical": "https://huggingface.co/datasets/HuggingFaceH4/aime_2024",
+      "split": "train",
+      "offset": 0,
+      "coverage": "full-file",
+      "latency_p50_s": 9.823407292366028,
+      "n_errors": 0,
+      "errors": [],
+      "items": [
+        {
+          "index": 0,
+          "id": 60,
+          "gold": "204",
+          "pred": "204",
+          "correct": true,
+          "elapsed": 5.219888210296631,
+          "error": null,
+          "finish_reason": "stop",
+          "max_tokens": 4096,
+          "text_head": "We are told:\n\n- Distance = 9 km.\n- At speed \\( s \\) km/h, total time = 4 hours = 240 minutes, including \\( t \\) minutes in the coffee shop.\n- At speed \\( s+2 \\) km/h, total time = 2 hours 24 minutes = 144 minutes, including the same \\( t \\)"
+        },
+        {
+          "index": 1,
+          "id": 61,
+          "gold": "113",
+          "pred": "138",
+          "correct": false,
+          "elapsed": 10.23928427696228,
+          "error": null,
+          "finish_reason": "stop",
+          "max_tokens": 4096,
+          "text_head": "We have triangle \\(ABC\\) with sides:\n\\[\nAB = 5,\\quad BC = 9,\\quad AC = 10.\n\\]\n\nWe need \\(AP\\) where \\(P\\) is the second intersection of \\(AD\\) with the circumcircle, \\(D\\) being the intersection of tangents at \\(B\\) and \\(C\\).\n\n---\n\n### Ste"
+        },
+        {
+          "index": 2,
+          "id": 62,
+          "gold": "371",
+          "pred": "2",
+          "correct": false,
+          "elapsed": 12.153724670410156,
+          "error": null,
+          "finish_reason": "stop",
+          "max_tokens": 4096,
+          "text_head": "We have a regular octagon, vertices labeled \\(0,1,\\dots,7\\) in order.  \nEach vertex is independently red or blue with probability \\(1/2\\).\n\nWe want the probability that there exists a rotation of the octagon such that every blue vertex move"
+        },
+        {
+          "index": 3,
+          "id": 63,
+          "gold": "385",
+          "pred": "144",
+          "correct": false,
+          "elapsed": 13.344144344329834,
+          "error": null,
+          "finish_reason": "stop",
+          "max_tokens": 4096,
+          "text_head": "We are solving for intersections of:\n\n\\[\ny = 4g(f(\\sin(2\\pi x)))\n\\]\nand\n\\[\nx = 4g(f(\\cos(3\\pi y))).\n\\]\n\n---\n\n### Step 1: Understand the functions\n\nWe have:\n\n\\[\nf(t) = \\left| |t| - \\frac12 \\right|,\n\\]\n\\[\ng(t) = \\left| |t| - \\frac14 \\right|.\n"
+        },
+        {
+          "index": 4,
+          "id": 64,
+          "gold": "110",
+          "pred": "110",
+          "correct": true,
+          "elapsed": 11.794591188430786,
+          "error": null,
+          "finish_reason": "stop",
+          "max_tokens": 4096,
+          "text_head": "We want the smallest prime \\( p \\) such that there exists \\( n \\) with  \n\\[\nn^4 + 1 \\equiv 0 \\pmod{p^2}.\n\\]\n\n---\n\n**Step 1: Find primes \\( p \\) for which \\( n^4 \\equiv -1 \\pmod{p} \\) has a solution.**\n\nIf \\( n^4 \\equiv -1 \\pmod{p} \\), then "
+        },
+        {
+          "index": 5,
+          "id": 65,
+          "gold": "104",
+          "pred": "104",
+          "correct": true,
+          "elapsed": 9.407530307769775,
+          "error": null,
+          "finish_reason": "stop",
+          "max_tokens": 4096,
+          "text_head": "We have a tetrahedron with opposite edges equal:\n\n\\[\nAB = CD = \\sqrt{41}, \\quad AC = BD = \\sqrt{80}, \\quad BC = AD = \\sqrt{89}.\n\\]\n\nThis is a *disphenoid* (isosceles tetrahedron), meaning all faces are congruent triangles.\n\n---\n\n**Step 1: F"
+        },
+        {
+          "index": 6,
+          "id": 66,
+          "gold": "721",
+          "pred": "721",
+          "correct": true,
+          "elapsed": 8.409491300582886,
+          "error": null,
+          "finish_reason": "stop",
+          "max_tokens": 4096,
+          "text_head": "We have a rectangular box with side lengths \\( x, y, z \\).  \nGiven:\n\n\\[\n2(xy + yz + zx) = 54 \\quad \\Rightarrow \\quad xy + yz + zx = 27\n\\]\n\\[\nxyz = 23\n\\]\n\nWe want the smallest sphere that can contain the box.  \nThe smallest such sphere has d"
+        },
+        {
+          "index": 7,
+          "id": 67,
+          "gold": "025",
+          "pred": "25",
+          "correct": true,
+          "elapsed": 2.0579676628112793,
+          "error": null,
+          "finish_reason": "stop",
+          "max_tokens": 4096,
+          "text_head": "We are given:\n\n\\[\n\\log_x(y^x) = 10\n\\]\nand\n\\[\n\\log_y(x^{4y}) = 10\n\\]\nwith \\(x>1\\), \\(y>1\\).\n\n---\n\n**Step 1: Simplify the first equation**\n\n\\[\n\\log_x(y^x) = x \\log_x y = 10\n\\]\nSo\n\\[\n\\log_x y = \\frac{10}{x}.\n\\]\n\n---\n\n**Step 2: Simplify the sec"
+        },
+        {
+          "index": 8,
+          "id": 68,
+          "gold": "809",
+          "pred": "809",
+          "correct": true,
+          "elapsed": 6.83124303817749,
+          "error": null,
+          "finish_reason": "stop",
+          "max_tokens": 4096,
+          "text_head": "We have a take-away game where each player can remove 1 or 4 tokens, and the player who takes the last token wins.  \nAlice goes first.\n\n---\n\n**Step 1: Determine losing positions for the player to move**  \nLet\u2019s define a position as losing i"
+        },
+        {
+          "index": 9,
+          "id": 69,
+          "gold": "116",
+          "pred": "116",
+          "correct": true,
+          "elapsed": 3.4766476154327393,
+          "error": null,
+          "finish_reason": "stop",
+          "max_tokens": 4096,
+          "text_head": "We have \\( S = \\{1,2,\\dots,10\\} \\).  \nJen picks 4 distinct numbers. Then 4 numbers are randomly chosen from \\( S \\).\n\n---\n\n**Step 1: Total ways to choose the 4 random numbers**  \n\\[\n\\binom{10}{4} = 210\n\\]\n\n---\n\n**Step 2: Define events**  \nL"
+        },
+        {
+          "index": 10,
+          "id": 70,
+          "gold": "104",
+          "pred": "100",
+          "correct": false,
+          "elapsed": 11.711910486221313,
+          "error": null,
+          "finish_reason": "stop",
+          "max_tokens": 4096,
+          "text_head": "We have two rectangles \\(ABCD\\) and \\(EFGH\\) with \\(D, E, C, F\\) collinear.  \nLet\u2019s set coordinates to make this easier.\n\n---\n\n**Step 1: Place rectangle \\(ABCD\\)**  \nLet  \n\\[\nD = (0,0), \\quad C = (107,0)\n\\]  \nsince \\(AB = 107\\) and \\(BC = 1"
+        },
+        {
+          "index": 11,
+          "id": 71,
+          "gold": "294",
+          "pred": "294",
+          "correct": true,
+          "elapsed": 4.805145502090454,
+          "error": null,
+          "finish_reason": "stop",
+          "max_tokens": 4096,
+          "text_head": "We have an \\(8 \\times 8\\) grid, so to go from lower left to upper right, we need 8 right moves (R) and 8 up moves (U), total 16 moves.\n\nA path is a sequence of 8 R's and 8 U's.  \n\"Change direction\" means switching between R and U in the seq"
+        },
+        {
+          "index": 12,
+          "id": 72,
+          "gold": "540",
+          "pred": "540",
+          "correct": true,
+          "elapsed": 3.109863758087158,
+          "error": null,
+          "finish_reason": "stop",
+          "max_tokens": 4096,
+          "text_head": "We want the largest possible real part of  \n\\[\n(75+117i)z+\\frac{96+144i}{z}\n\\]\ngiven \\(|z|=4\\).\n\n---\n\n**Step 1: Write \\(z\\) in polar form**  \nLet  \n\\[\nz = 4(\\cos\\theta + i\\sin\\theta).\n\\]\n\nThen  \n\\[\n\\frac{1}{z} = \\frac{1}{4}(\\cos\\theta - i\\s"
+        },
+        {
+          "index": 13,
+          "id": 73,
+          "gold": "197",
+          "pred": "197",
+          "correct": true,
+          "elapsed": 11.36233401298523,
+          "error": null,
+          "finish_reason": "stop",
+          "max_tokens": 4096,
+          "text_head": "We have a triangle \\(ABC\\) with an incircle arrangement problem.  \nThe setup: eight circles of radius \\(34\\) are sequentially tangent, and two of them are tangent to sides \\(AB\\) and \\(BC\\).  \nThen \\(2024\\) circles of radius \\(1\\) can be ar"
+        },
+        {
+          "index": 14,
+          "id": 74,
+          "gold": "480",
+          "pred": "480",
+          "correct": true,
+          "elapsed": 10.259119510650635,
+          "error": null,
+          "finish_reason": "stop",
+          "max_tokens": 4096,
+          "text_head": "We have the hyperbola  \n\\[\n\\frac{x^2}{20} - \\frac{y^2}{24} = 1.\n\\]  \nThe rhombus has diagonals intersecting at the origin, so its vertices come in opposite pairs:  \nIf \\(A = (x_1, y_1)\\), then \\(C = (-x_1, -y_1)\\).  \nSimilarly, \\(B = (x_2, "
+        },
+        {
+          "index": 15,
+          "id": 75,
+          "gold": "073",
+          "pred": "73",
+          "correct": true,
+          "elapsed": 5.6664135456085205,
+          "error": null,
+          "finish_reason": "stop",
+          "max_tokens": 4096,
+          "text_head": "We are told:\n\n- Total residents: 900\n- Own diamond ring: 195\n- Own golf clubs: 367\n- Own garden spade: 562\n- Everyone owns a bag of candy hearts (so 900 own candy hearts).\n- Exactly two of these things: 437\n- Exactly three of these things: "
+        },
+        {
+          "index": 16,
+          "id": 76,
+          "gold": "468",
+          "pred": "468",
+          "correct": true,
+          "elapsed": 8.58470606803894,
+          "error": null,
+          "finish_reason": "stop",
+          "max_tokens": 4096,
+          "text_head": "We are given a triangle \\(ABC\\) with circumcenter \\(O\\), incenter \\(I\\), and the condition \\(IA \\perp OI\\).  \nWe know \\(R = 13\\) and \\(r = 6\\). We need \\(AB \\cdot AC\\).\n\n---\n\n**Step 1: Use known relation involving \\(OI\\)**  \nEuler\u2019s formula"
+        },
+        {
+          "index": 17,
+          "id": 77,
+          "gold": "601",
+          "pred": "604",
+          "correct": false,
+          "elapsed": 10.565348148345947,
+          "error": null,
+          "finish_reason": "stop",
+          "max_tokens": 4096,
+          "text_head": "We are given:\n\n\\[\na+b+c=300\n\\]\nand\n\\[\na^2b + a^2c + b^2a + b^2c + c^2a + c^2b = 6{,}000{,}000.\n\\]\n\n---\n\n**Step 1: Rewrite the second equation.**\n\nNotice:\n\\[\na^2b + a^2c + b^2a + b^2c + c^2a + c^2b\n= (a+b+c)(ab+bc+ca) - 3abc.\n\\]\nLet's verify"
+        },
+        {
+          "index": 18,
+          "id": 78,
+          "gold": "023",
+          "pred": "23",
+          "correct": true,
+          "elapsed": 10.2874915599823,
+          "error": null,
+          "finish_reason": "stop",
+          "max_tokens": 4096,
+          "text_head": "We have points  \n\\[\nO=(0,0),\\quad A=\\left(\\frac12,0\\right),\\quad B=\\left(0,\\frac{\\sqrt3}{2}\\right).\n\\]  \nThe segment \\(\\overline{AB}\\) has length  \n\\[\nAB=\\sqrt{\\left(\\frac12\\right)^2+\\left(\\frac{\\sqrt3}{2}\\right)^2}\n=\\sqrt{\\frac14+\\frac34}="
+        },
+        {
+          "index": 19,
+          "id": 79,
+          "gold": "321",
+          "pred": "321",
+          "correct": true,
+          "elapsed": 7.842764616012573,
+          "error": null,
+          "finish_reason": "stop",
+          "max_tokens": 4096,
+          "text_head": "We have  \n\\[\n\\prod_{k=0}^{12} (2 - 2\\omega^k + \\omega^{2k})\n\\]\nwhere \\(\\omega \\neq 1\\) is a 13th root of unity.\n\n---\n\n**Step 1: Factor the expression**\n\nNotice  \n\\[\n2 - 2\\omega^k + \\omega^{2k} = (\\omega^k - 1)^2 + 1.\n\\]\nIndeed,  \n\\[\n(\\omega"
+        },
+        {
+          "index": 20,
+          "id": 80,
+          "gold": "211",
+          "pred": "51",
+          "correct": false,
+          "elapsed": 24.017767429351807,
+          "error": null,
+          "finish_reason": "stop",
+          "max_tokens": 8192,
+          "text_head": "We have a number \\( n \\) with exactly two digits in base \\( b \\), so:\n\n\\[\nn = x b + y\n\\]\nwhere \\( 1 \\le x \\le b-1 \\) and \\( 0 \\le y \\le b-1 \\).\n\nThe condition says:\n\n\\[\nx + y = \\sqrt{n}.\n\\]\n\nSo:\n\n\\[\nn = (x+y)^2.\n\\]\n\nAlso \\( n = x b + y \\), "
+        },
+        {
+          "index": 21,
+          "id": 81,
+          "gold": "315",
+          "pred": "675",
+          "correct": false,
+          "elapsed": 5.271384000778198,
+          "error": null,
+          "finish_reason": "stop",
+          "max_tokens": 4096,
+          "text_head": "We have a regular dodecagon.  \nA rectangle inside it must have sides along lines that are either sides or diagonals of the dodecagon.  \n\n**Step 1 \u2013 Understanding the geometry**  \nA regular dodecagon has 12 vertices equally spaced on a circl"
+        },
+        {
+          "index": 22,
+          "id": 82,
+          "gold": "236",
+          "pred": "236",
+          "correct": true,
+          "elapsed": 12.035548210144043,
+          "error": null,
+          "finish_reason": "stop",
+          "max_tokens": 4096,
+          "text_head": "We are told:\n\n- Sum of items = 30  \n- Unique mode = 9  \n- Median is a positive integer that does not appear in the list.\n\nWe need to find the sum of squares of all items.\n\n---\n\n**Step 1: Understanding the mode condition**  \nThe unique mode "
+        },
+        {
+          "index": 23,
+          "id": 83,
+          "gold": "045",
+          "pred": "45",
+          "correct": true,
+          "elapsed": 6.763962984085083,
+          "error": null,
+          "finish_reason": "stop",
+          "max_tokens": 4096,
+          "text_head": "We have a \\(2 \\times 3\\) grid:\n\n\\[\n\\begin{array}{|c|c|c|}\n\\hline\na & b & c \\\\\n\\hline\nd & e & f \\\\\n\\hline\n\\end{array}\n\\]\n\nThe top row forms the number \\(100a + 10b + c\\).  \nThe bottom row forms \\(100d + 10e + f\\).\n\n**Condition 1:**  \nSum of "
+        },
+        {
+          "index": 24,
+          "id": 84,
+          "gold": "033",
+          "pred": "33",
+          "correct": true,
+          "elapsed": 6.816725254058838,
+          "error": null,
+          "finish_reason": "stop",
+          "max_tokens": 4096,
+          "text_head": "We have the system:\n\n\\[\n\\log_2\\left(\\frac{x}{yz}\\right) = \\frac12\n\\]\n\\[\n\\log_2\\left(\\frac{y}{xz}\\right) = \\frac13\n\\]\n\\[\n\\log_2\\left(\\frac{z}{xy}\\right) = \\frac14\n\\]\n\n---\n\n**Step 1: Convert to exponential form**\n\nFrom the first:\n\\[\n\\frac{x}{"
+        },
+        {
+          "index": 25,
+          "id": 85,
+          "gold": "080",
+          "pred": "80",
+          "correct": true,
+          "elapsed": 19.55783486366272,
+          "error": null,
+          "finish_reason": "stop",
+          "max_tokens": 4096,
+          "text_head": "We have a convex equilateral hexagon \\(ABCDEF\\) with opposite sides parallel.  \nThat means:\n\n\\[\nAB \\parallel DE,\\quad BC \\parallel EF,\\quad CD \\parallel FA.\n\\]\n\nAlso, all sides are equal; let the side length be \\(s\\).\n\nThe extensions of \\(A"
+        },
+        {
+          "index": 26,
+          "id": 86,
+          "gold": "055",
+          "pred": "55",
+          "correct": true,
+          "elapsed": 8.502314805984497,
+          "error": null,
+          "finish_reason": "stop",
+          "max_tokens": 4096,
+          "text_head": "We are told Alice chooses a set \\(A\\) of positive integers.  \nBob lists all finite nonempty sets \\(B\\) of positive integers such that the maximum element of \\(B\\) belongs to \\(A\\).  \nBob\u2019s list has 2024 sets. We need the sum of the elements"
+        },
+        {
+          "index": 27,
+          "id": 87,
+          "gold": "699",
+          "pred": "699",
+          "correct": true,
+          "elapsed": 16.79980444908142,
+          "error": null,
+          "finish_reason": "stop",
+          "max_tokens": 4096,
+          "text_head": "We need the greatest four-digit integer \\( N = \\overline{abcd} \\) (with \\( a \\neq 0 \\)) such that changing any one digit to 1 gives a number divisible by 7.\n\nLet\u2019s write \\( N = 1000a + 100b + 10c + d \\).\n\n---\n\n### Step 1: Conditions for eac"
+        },
+        {
+          "index": 28,
+          "id": 88,
+          "gold": "127",
+          "pred": "16",
+          "correct": false,
+          "elapsed": 15.055221319198608,
+          "error": null,
+          "finish_reason": "stop",
+          "max_tokens": 4096,
+          "text_head": "We have a torus formed by revolving a circle of radius \\(3\\) about an axis at distance \\(6\\) from its center.  \nThat means the torus has:\n\n- Major radius \\(R = 6\\)  \n- Minor radius \\(r = 3\\)\n\nA sphere of radius \\(11\\) is externally tangent "
+        },
+        {
+          "index": 29,
+          "id": 89,
+          "gold": "902",
+          "pred": "902",
+          "correct": true,
+          "elapsed": 12.438185691833496,
+          "error": null,
+          "finish_reason": "stop",
+          "max_tokens": 4096,
+          "text_head": "We have a \\(5\\times 5\\) grid, and we place some chips (white or black) such that:\n\n1. Each cell has at most one chip.\n2. In each row, all chips are the same color.\n3. In each column, all chips are the same color.\n4. The arrangement is maxim"
+        }
+      ],
+      "note": "This HF file is 30 problems (AIME I 2024), not both AIME I+II (60).",
+      "max_tokens": "4096, retry 8192 on length"
+    }
+  },
+  "memory_raw_vllm": null,
+  "client_errors": [],
+  "note": "",
+  "latency_p50_s": 10.23928427696228,
+  "finished_utc": "2026-08-13T05:43:15.388583+00:00"
+}

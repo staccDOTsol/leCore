@@ -87,9 +87,9 @@
 
 | module | what it is | lines |
 |---|---|---|
-| [`holographic_session.py`](#holographic-session) | SESSION STORE -- contexts that outlive the process. | 360 |
-| [`holographic_session.py`](#holographic-session) | holographic_session.py -- ONE render session that ties the disconnected rendering threads together. | 227 |
 | [`holographic_session.py`](#holographic-session) | SESSION -- never compute the same conversation prefix twice. | 253 |
+| [`holographic_session.py`](#holographic-session) | holographic_session.py -- ONE render session that ties the disconnected rendering threads together. | 227 |
+| [`holographic_session.py`](#holographic-session) | SESSION STORE -- contexts that outlive the process. | 360 |
 
 ### `splat*` family (7)
 
@@ -159,8 +159,8 @@
 | [`holographic_backwardwarp.py`](#holographic-backwardwarp) | Backward warping is hole-free by construction -- which is what the engine's unbind already is. | 73 |
 | [`holographic_bandwidth.py`](#holographic-bandwidth) | Spectral bandwidth + a fractal-dimension cross-check (holographic_bandwidth). | 150 |
 | [`holographic_billionctx.py`](#holographic-billionctx) | BILLIONCTX -- what actually binds context at 1e9 tokens, and what does not. | 195 |
-| [`holographic_bios.py`](#holographic-bios) | BIOS -- enumerate the machine before booting an operating system on it. | 217 |
 | [`holographic_bios.py`](#holographic-bios) | holographic_bios.py -- THE BIOS AND BOOT SEQUENCE for a mind on this substrate (cp34). | 209 |
+| [`holographic_bios.py`](#holographic-bios) | BIOS -- enumerate the machine before booting an operating system on it. | 217 |
 | [`holographic_blackbody.py`](#holographic-blackbody) | holographic_blackbody.py -- T3: a BLACKBODY RADIATOR. Temperature (kelvin) -> the colour it glows. | 136 |
 | [`holographic_blendbasis.py`](#holographic-blendbasis) | Procedural blendshape basis with DECLARED local support. | 146 |
 | [`holographic_blendhome.py`](#holographic-blendhome) | holographic_blendhome.py -- the BLEND home (consolidation backlog H4): one place for "combine these into one", | 139 |
@@ -495,8 +495,8 @@
 | [`holographic_mcp.py`](#holographic-mcp) | holographic_mcp.py -- leCore as an MCP server (Model Context Protocol, JSON-RPC 2.0 over | 2904 |
 | [`holographic_meaning.py`](#holographic-meaning) | holographic_meaning.py -- FIND AN ANSWER BY WHAT A QUESTION MEANS, LEARN NEW WORDINGS AS THEY ARRIVE, AND | 1466 |
 | [`holographic_meaning_predict.py`](#holographic-meaning-predict) | Generation with structure: predict a next-MEANING vector and settle it, rather | 198 |
-| [`holographic_measure.py`](#holographic-measure) | MEASURE -- perplexity with error bars, and decisions that respect them. | 195 |
 | [`holographic_measure.py`](#holographic-measure) | The variance harness: every headline number gets a mean, a spread, and a confidence | 187 |
+| [`holographic_measure.py`](#holographic-measure) | MEASURE -- perplexity with error bars, and decisions that respect them. | 195 |
 | [`holographic_memcurate.py`](#holographic-memcurate) | MEMCURATE -- curation, decay and reflection over the memory partition (NOOA section 6, item 5). | 585 |
 | [`holographic_memory.py`](#holographic-memory) | MEMORY -- the Galvatron's own store, built on leCore's holographic database. | 241 |
 | [`holographic_memoryhome.py`](#holographic-memoryhome) | holographic_memoryhome.py -- the MEMORY home (consolidation backlog H6): keep the hot working set where the CP | 165 |
@@ -632,8 +632,8 @@
 | [`holographic_reanchor.py`](#holographic-reanchor) | Re-anchoring is load-bearing for deep traversal -- the audit, and the contrast the other tests don't show. | 97 |
 | [`holographic_reasoning.py`](#holographic-reasoning) | holographic_reasoning.py | 397 |
 | [`holographic_recallguard.py`](#holographic-recallguard) | RECALL GUARD -- make any ranked candidate list PROVABLY COMPLETE for lexically-reachable answers. | 112 |
-| [`holographic_recipe.py`](#holographic-recipe) | RECIPE -- ship what leCore ADDED, not the model it was added to. | 334 |
 | [`holographic_recipe.py`](#holographic-recipe) | A generative recipe-store for constructed holostuff structures. | 206 |
+| [`holographic_recipe.py`](#holographic-recipe) | RECIPE -- ship what leCore ADDED, not the model it was added to. | 334 |
 | [`holographic_recipeops.py`](#holographic-recipeops) | StructureRecipe validator + edit operators (ARCH-1): the recipe equivalent of the mesh Euler operators. | 264 |
 | [`holographic_reclock.py`](#holographic-reclock) | holographic_reclock.py -- sample when an AXIS moves, not when time passes ("make the boring property the | 313 |
 | [`holographic_recurrent.py`](#holographic-recurrent) | A gradient-free RECURRENT layer for the holographic engine: reservoir computing. | 456 |
@@ -672,8 +672,8 @@
 | [`holographic_rolling.py`](#holographic-rolling) | holographic_rolling.py -- the CAUSAL rolling / streaming statistics kit: trailing mean, std, min, max, | 378 |
 | [`holographic_roomacoustic.py`](#holographic-roomacoustic) | holographic_roomacoustic.py -- A6: GEOMETRIC ROOM ACOUSTICS. How a room echoes -- reflections and reverb. | 161 |
 | [`holographic_route.py`](#holographic-route) | Representation routing (ARCH-7): route each operation to the representation that supports it -- the policy lay | 183 |
-| [`holographic_router.py`](#holographic-router) | ROUTER -- the model DECIDING, inside one forward pass. | 229 |
 | [`holographic_router.py`](#holographic-router) | Embedding router -- route a request to the right module by COSINE in nomic's space, not token overlap. | 177 |
+| [`holographic_router.py`](#holographic-router) | ROUTER -- the model DECIDING, inside one forward pass. | 229 |
 | [`holographic_routerlearn.py`](#holographic-routerlearn) | holographic_routerlearn.py -- the capability ROUTER learns on the shared contrastive rule (CLM backlog E4.1). | 372 |
 | [`holographic_runtimebench.py`](#holographic-runtimebench) | BENCH-3 -- RUNTIME-DISCOVERY abstention: does the loop abandon when a task fails AFTER it starts? | 158 |
 | [`holographic_runtimerung.py`](#holographic-runtimerung) | RUNTIME RUNG WITH AUTOMATIC ATTRIBUTION (cp71). | 124 |
@@ -725,8 +725,8 @@
 | [`holographic_skymodel.py`](#holographic-skymodel) | holographic_skymodel.py -- a PARAMETRIC sky: time of day, sun, moon, stars, and HIGH cloud layers, as | 454 |
 | [`holographic_slime.py`](#holographic-slime) | Slime-mold path-finding over a HOLOGRAPHIC associative graph. | 391 |
 | [`holographic_smokepresets.py`](#holographic-smokepresets) | holographic_smokepresets.py -- SMOKE PRESETS (fluids/matter backlog, content item 1). | 159 |
-| [`holographic_snap.py`](#holographic-snap) | holographic_snap.py -- SNAPPING = cleanup, applied to geometry (modeling-app feature layer). | 141 |
 | [`holographic_snap.py`](#holographic-snap) | holographic_snap.py (mesh_and_geometry) -- the MODELING-GIZMO snap adapter: it answers 'where does this dragge | 184 |
+| [`holographic_snap.py`](#holographic-snap) | holographic_snap.py -- SNAPPING = cleanup, applied to geometry (modeling-app feature layer). | 141 |
 | [`holographic_softbody.py`](#holographic-softbody) | Position-Based Dynamics -- softbody & hardbody simulation, exposed to VSA. | 680 |
 | [`holographic_soprunner.py`](#holographic-soprunner) | holographic_soprunner.py -- FOLLOW ORDERS: run an AUTHORED text SOP through the mind. | 484 |
 | [`holographic_sparsefield.py`](#holographic-sparsefield) | FS-2 -- the narrow-band sparse field (holographic_sparsefield), array-backed for parallelism. | 530 |
@@ -800,8 +800,8 @@
 | [`holographic_toolusage.py`](#holographic-toolusage) | holographic_toolusage.py -- the READ VIEW of the tool door's audit (what `mind.tool_usage` returns). | 87 |
 | [`holographic_topology.py`](#holographic-topology) | Principled topology by persistent homology (EXP-7). | 288 |
 | [`holographic_transfer.py`](#holographic-transfer) | holographic_transfer.py -- KERNEL SCATTER / GATHER: the ONE bundle/readout under every particle<->grid transfe | 224 |
-| [`holographic_transform.py`](#holographic-transform) | TRANSFORM -- rebuild a model where the MEASUREMENT says it needs rebuilding. | 189 |
 | [`holographic_transform.py`](#holographic-transform) | holographic_transform.py -- TRANSFORM UTILITIES for a modeling app (modeling-app backlog, item G). | 297 |
+| [`holographic_transform.py`](#holographic-transform) | TRANSFORM -- rebuild a model where the MEASUREMENT says it needs rebuilding. | 189 |
 | [`holographic_transform_space.py`](#holographic-transform-space) | holographic_transform_space.py -- the TRANSFORM + SPACE model behind a gizmo. A gizmo is a UI; the backend it | 176 |
 | [`holographic_transformbank.py`](#holographic-transformbank) | holographic_transformbank.py -- a prebuilt map of hypervector transforms, and what it can and cannot hold. | 358 |
 | [`holographic_transformhome.py`](#holographic-transformhome) | holographic_transformhome.py -- the TRANSFORM home (consolidation backlog H5): one facade over "move / rotate  | 223 |
@@ -2891,6 +2891,40 @@
 
 ### holographic_bios.py
 
+> holographic_bios.py -- THE BIOS AND BOOT SEQUENCE for a mind on this substrate (cp34).
+>
+> leOS gave the lineage its OS instincts (substrate_gather, activity_monitor, the tool
+> loop); Unicron gave it introspection (spectral reading of its own memory). This module
+> makes the boot explicit, the way firmware does:
+>
+>   POST      power-on self test: MEASURED checks -- levers present, ladder serving,
+>             container round-trip, calibration machinery, Unicron spectral health when
+>             learned state exists. Every check returns (name, ok, detail); a red POST is
+>             reported, never papered over.
+>   INVENTORY the machine table an operator reads: lever count, catalog size, faculty
+>             count, partitions found, doctrine state, journal format.
+>   BOOT      boot order: mount the named partition if given (learning_load), else stay
+>             virgin; opt-in doctrine (the seedpack); ensure services (the zoo tenant).
+>             Returns the full boot report.
+>   OS PROMPT the hand-off: a DETERMINISTIC text the attached LLM receives as its
+>             operating system -- identity, POST summary, the syscall table (core
+>             faculties with one-line contracts), the operating rules (distilled
+>             doctrine), memory status, and the escalation contract. This is the BIOS
+>             screen an LLM reads instead of a human.
+>
+> The prompt is generated FROM the live mind (catalog + doctrine + state), so it cannot
+> drift from the engine the way a hand-written primer would -- the same law that keeps
+> CAPABILITIES.md regenerated, applied to the model's own boot screen.
+
+**Public API:**
+
+- `def post(mind)` -- Power-on self test. Returns [(check, ok, detail)] -- measured, never assumed.
+- `def inventory(mind)` -- The machine table.
+- `def boot(mind, partition, doctrine, llm)` -- The boot order: POST -> mount -> doctrine -> services -> report.
+- `def os_prompt(mind, report)` -- The BIOS screen an LLM reads: deterministic, generated from the live mind.
+
+### holographic_bios.py
+
 > BIOS -- enumerate the machine before booting an operating system on it.
 >
 > Moose's observation, and it is the diagnosis for a whole session of bugs: there
@@ -2929,40 +2963,6 @@
 - `def enumerate_machine(weights, cfg, model_dir)` -- Probe the checkpoint. Nothing here is assumed; everything is read.
 - `def fits(profile, payload_bytes, bits)` -- Can this machine hold that payload? A profile exists to make a REFUSAL
 - `def report(weights, cfg, model_dir, probe_ids)` -- The whole BIOS screen: POST, enumeration, and what the OS may assume.
-
-### holographic_bios.py
-
-> holographic_bios.py -- THE BIOS AND BOOT SEQUENCE for a mind on this substrate (cp34).
->
-> leOS gave the lineage its OS instincts (substrate_gather, activity_monitor, the tool
-> loop); Unicron gave it introspection (spectral reading of its own memory). This module
-> makes the boot explicit, the way firmware does:
->
->   POST      power-on self test: MEASURED checks -- levers present, ladder serving,
->             container round-trip, calibration machinery, Unicron spectral health when
->             learned state exists. Every check returns (name, ok, detail); a red POST is
->             reported, never papered over.
->   INVENTORY the machine table an operator reads: lever count, catalog size, faculty
->             count, partitions found, doctrine state, journal format.
->   BOOT      boot order: mount the named partition if given (learning_load), else stay
->             virgin; opt-in doctrine (the seedpack); ensure services (the zoo tenant).
->             Returns the full boot report.
->   OS PROMPT the hand-off: a DETERMINISTIC text the attached LLM receives as its
->             operating system -- identity, POST summary, the syscall table (core
->             faculties with one-line contracts), the operating rules (distilled
->             doctrine), memory status, and the escalation contract. This is the BIOS
->             screen an LLM reads instead of a human.
->
-> The prompt is generated FROM the live mind (catalog + doctrine + state), so it cannot
-> drift from the engine the way a hand-written primer would -- the same law that keeps
-> CAPABILITIES.md regenerated, applied to the model's own boot screen.
-
-**Public API:**
-
-- `def post(mind)` -- Power-on self test. Returns [(check, ok, detail)] -- measured, never assumed.
-- `def inventory(mind)` -- The machine table.
-- `def boot(mind, partition, doctrine, llm)` -- The boot order: POST -> mount -> doctrine -> services -> report.
-- `def os_prompt(mind, report)` -- The BIOS screen an LLM reads: deterministic, generated from the live mind.
 
 ### holographic_blackbody.py
 
@@ -17393,39 +17393,6 @@
 
 ### holographic_measure.py
 
-> MEASURE -- perplexity with error bars, and decisions that respect them.
->
-> Moose asked what assimilation is actually doing. The answer, from his own run:
-> 265 tensors examined over 149 seconds, 18 CHANGED, of which repair reverted 12
-> as harmful, leaving SIX; original 76.83, assimilated 81.71 (6.4% WORSE),
-> repaired 75.06 -- reported as "beats the original: True".
->
-> Then I measured the measurement. On his real model, from the assessment
-> bundle's own per-token likelihoods:
->     bootstrap 95% CI over 161 positions:  16.90 .. 36.61, i.e. +/-38.5%
->     in 40-token chunks the spread is      +/-47.4%
-> THE 2.3% "WIN" SITS DEEP INSIDE THE NOISE. It is not a small effect, it is an
-> effect that was never measured. Every gate in this pipeline compared two point
-> estimates on a few dozen tokens and reported a verdict as if it were a fact.
->
-> This module makes that impossible. It returns a perplexity WITH a bootstrap
-> confidence interval, and `better_than` returns one of BETTER, WORSE or
-> INDISTINGUISHABLE -- because "indistinguishable" is the honest verdict for most
-> of what this pipeline has been deciding, and a comparison that cannot say so
-> will always find a winner.
->
-> THE PRACTICAL CONSEQUENCE, and it is uncomfortable: with a 42-token probe
-> nothing under about 40% is decidable. Either measure on far more tokens, or
-> stop claiming small wins. Both are fine; pretending is not.
-
-**Public API:**
-
-- `def measure(runtime, token_ids, resamples, alpha, seed)` -- Perplexity AND its uncertainty, from the per-token likelihoods.
-- `def better_than(a, b, alpha, seed, resamples)` -- Is model A better than model B, or is the difference undecidable?
-- `def tokens_needed(reference, effect_pct, alpha)` -- How many tokens would be needed to RESOLVE an effect of this size.
-
-### holographic_measure.py
-
 > The variance harness: every headline number gets a mean, a spread, and a confidence
 > interval across seeds -- so a lucky-seed point estimate can't pass as a real result.
 >
@@ -17456,6 +17423,39 @@
 - `def assert_robust(stats, floor)` -- Pass only if the LOWER CI bound clears the floor -- not just the mean. This is
 - `def is_fragile(stats, margin_floor)` -- A claim is FRAGILE if its spread is large relative to how far its mean sits above
 - `def report(name, stats, floor)` -- Format a stats dict as 'name: mean +/- std (95% CI [lo, hi], n)', with a
+
+### holographic_measure.py
+
+> MEASURE -- perplexity with error bars, and decisions that respect them.
+>
+> Moose asked what assimilation is actually doing. The answer, from his own run:
+> 265 tensors examined over 149 seconds, 18 CHANGED, of which repair reverted 12
+> as harmful, leaving SIX; original 76.83, assimilated 81.71 (6.4% WORSE),
+> repaired 75.06 -- reported as "beats the original: True".
+>
+> Then I measured the measurement. On his real model, from the assessment
+> bundle's own per-token likelihoods:
+>     bootstrap 95% CI over 161 positions:  16.90 .. 36.61, i.e. +/-38.5%
+>     in 40-token chunks the spread is      +/-47.4%
+> THE 2.3% "WIN" SITS DEEP INSIDE THE NOISE. It is not a small effect, it is an
+> effect that was never measured. Every gate in this pipeline compared two point
+> estimates on a few dozen tokens and reported a verdict as if it were a fact.
+>
+> This module makes that impossible. It returns a perplexity WITH a bootstrap
+> confidence interval, and `better_than` returns one of BETTER, WORSE or
+> INDISTINGUISHABLE -- because "indistinguishable" is the honest verdict for most
+> of what this pipeline has been deciding, and a comparison that cannot say so
+> will always find a winner.
+>
+> THE PRACTICAL CONSEQUENCE, and it is uncomfortable: with a 42-token probe
+> nothing under about 40% is decidable. Either measure on far more tokens, or
+> stop claiming small wins. Both are fine; pretending is not.
+
+**Public API:**
+
+- `def measure(runtime, token_ids, resamples, alpha, seed)` -- Perplexity AND its uncertainty, from the per-token likelihoods.
+- `def better_than(a, b, alpha, seed, resamples)` -- Is model A better than model B, or is the difference undecidable?
+- `def tokens_needed(reference, effect_pct, alpha)` -- How many tokens would be needed to RESOLVE an effect of this size.
 
 ### holographic_memcurate.py
 
@@ -24468,6 +24468,42 @@
 
 ### holographic_recipe.py
 
+> A generative recipe-store for constructed holostuff structures.
+>
+> WHY THIS EXISTS
+> ---------------
+> The panel's "proven structure has no noise" result: a structure BUILT by a deterministic proof (a
+> derivation over a seed) carries no noise, so it serialises to its *generator* losslessly -- you store the
+> recipe, not the expanded vectors, and replaying the recipe reproduces the structure BIT-FOR-BIT. This is
+> the easy, exact half of generative compression: when we are the builder we already hold the proof, so
+> there is nothing to search for and no residual to code.
+>
+> A `StructureRecipe` is a tiny replayable build-graph. Each op produces one result vector from a seed and
+> earlier results: `atom` (a derived atom -- regenerated from the seed, never stored), `bind`, `bundle`,
+> `permute`, `normalize`. You build your structure THROUGH the recipe, so you get both the vectors and the
+> recipe that regenerates them. Serialising stores only the op list (and the seed) -- a few hundred bytes
+> that regenerate megabytes of structure, exactly.
+>
+> THE ESCAPE HATCH AND THE KEPT NEGATIVE
+> The `raw` op stores a literal vector verbatim. It is the honest boundary: data that was NOT constructed
+> (a measured or random vector) has no short recipe, so it must be stored as-is and gets no compression.
+> The recipe's compression ratio is therefore exactly the *constructed fraction* of the structure -- all
+> recipe -> enormous ratio; all raw -> ~1x. That is the constructed-vs-measured partition made literal.
+>
+> THE CAPACITY-CLIFF POINT
+> Reading structure back out of a single bounded encoded vector degrades past the capacity cliff (crosstalk).
+> A recipe does not: it names its leaves explicitly and replays the construction, so a deeply nested
+> structure is recovered EXACTLY at any depth. The recipe is the right store for deep constructed structure;
+> the expanded superposition is bounded.
+>
+> Pure NumPy + holostuff kernel, deterministic, JSON serialisation (readable), no new dependencies.
+
+**Public API:**
+
+- `class StructureRecipe` -- A replayable build-graph: store the deterministic ops that built a structure, not the vectors.
+
+### holographic_recipe.py
+
 > RECIPE -- ship what leCore ADDED, not the model it was added to.
 >
 > Moose: the inflated model size needs looking at holographically -- we should be
@@ -24519,42 +24555,6 @@
 - `def compress_arrays(rules, arrays, base_weights, energy, bits, mode)` -- Hand the genuinely-new arrays to leCore's OWN delta store.
 - `def cost(rules, arrays, installed_weights)` -- What the recipe saves, in bytes. The number is the whole argument.
 - `def expand(rules, arrays, base_weights)` -- Rebuild the installed model from the recipe. Must be byte-exact.
-
-### holographic_recipe.py
-
-> A generative recipe-store for constructed holostuff structures.
->
-> WHY THIS EXISTS
-> ---------------
-> The panel's "proven structure has no noise" result: a structure BUILT by a deterministic proof (a
-> derivation over a seed) carries no noise, so it serialises to its *generator* losslessly -- you store the
-> recipe, not the expanded vectors, and replaying the recipe reproduces the structure BIT-FOR-BIT. This is
-> the easy, exact half of generative compression: when we are the builder we already hold the proof, so
-> there is nothing to search for and no residual to code.
->
-> A `StructureRecipe` is a tiny replayable build-graph. Each op produces one result vector from a seed and
-> earlier results: `atom` (a derived atom -- regenerated from the seed, never stored), `bind`, `bundle`,
-> `permute`, `normalize`. You build your structure THROUGH the recipe, so you get both the vectors and the
-> recipe that regenerates them. Serialising stores only the op list (and the seed) -- a few hundred bytes
-> that regenerate megabytes of structure, exactly.
->
-> THE ESCAPE HATCH AND THE KEPT NEGATIVE
-> The `raw` op stores a literal vector verbatim. It is the honest boundary: data that was NOT constructed
-> (a measured or random vector) has no short recipe, so it must be stored as-is and gets no compression.
-> The recipe's compression ratio is therefore exactly the *constructed fraction* of the structure -- all
-> recipe -> enormous ratio; all raw -> ~1x. That is the constructed-vs-measured partition made literal.
->
-> THE CAPACITY-CLIFF POINT
-> Reading structure back out of a single bounded encoded vector degrades past the capacity cliff (crosstalk).
-> A recipe does not: it names its leaves explicitly and replays the construction, so a deeply nested
-> structure is recovered EXACTLY at any depth. The recipe is the right store for deep constructed structure;
-> the expanded superposition is bounded.
->
-> Pure NumPy + holostuff kernel, deterministic, JSON serialisation (readable), no new dependencies.
-
-**Public API:**
-
-- `class StructureRecipe` -- A replayable build-graph: store the deterministic ops that built a structure, not the vectors.
 
 ### holographic_recipeops.py
 
@@ -26342,6 +26342,33 @@
 
 ### holographic_router.py
 
+> Embedding router -- route a request to the right module by COSINE in nomic's space, not token overlap.
+>
+> WHY THIS EXISTS (measured, backlog N9/N28):
+> The catalog's find_capability scores by shared content words. That is deterministic and needs no model,
+> but it has no notion of MEANING: "squish a big array down for storage" shares no token with
+> `holographic_coldstore`, and "airspeed velocity of an unladen swallow" confidently matched a physics
+> module on the single word "velocity". Measured on the 12-ask suite: token overlap ~2/12 top-1, median
+> rank 13 of 503; the nomic embedding router hit 7/12 top-1, median rank 1.
+>
+> WHAT SHIPS (and what does NOT):
+> A 96 KB index -- 503 module vectors at 64d q8, plus the ABTT correction (mu, pc) baked in -- extracted
+> from the build cache by tools/semantic/export_index.py. NO model ships. So this router can only score a
+> query it already has a VECTOR for:
+>   * queries embedded at build time and cached (the exam's asks, an app's fixed vocabulary)
+>   * a caller that supplies its own query vector (an app that ran the encoder itself)
+> A brand-new free-text query with no vector and no model present CANNOT be embedded here -- and this
+> router says so and returns None, so the caller falls back to the token router rather than guessing. That
+> honesty is the whole point: silence beats a confident wrong route.
+>
+> DETERMINISM: q8 dequant + fixed ABTT transform + argsort with a name tie-break. No RNG, no model.
+
+**Public API:**
+
+- `class EmbeddingRouter` -- Loads the shipped q8 index (any dim; 128d is the measured champion) and routes a query VECTOR (or a cached query text) to modules.
+
+### holographic_router.py
+
 > ROUTER -- the model DECIDING, inside one forward pass.
 >
 > Moose raised the architecture that dissolves the wall this project kept hitting:
@@ -26380,33 +26407,6 @@
 - `def fit_router(runtime, cfg, positive, negative, tokenize, layer, ridge, holdout, null_trials)` -- Learn 'does this prompt want the capability?' from an early layer.
 - `def route(runtime, router, text, tokenize)` -- Would this model choose to use the capability on this prompt?
 - `def install_routed(weights, cfg, operator, router, layer, gain, temperature)` -- Install a circuit whose GATE is the router, not a constant.
-
-### holographic_router.py
-
-> Embedding router -- route a request to the right module by COSINE in nomic's space, not token overlap.
->
-> WHY THIS EXISTS (measured, backlog N9/N28):
-> The catalog's find_capability scores by shared content words. That is deterministic and needs no model,
-> but it has no notion of MEANING: "squish a big array down for storage" shares no token with
-> `holographic_coldstore`, and "airspeed velocity of an unladen swallow" confidently matched a physics
-> module on the single word "velocity". Measured on the 12-ask suite: token overlap ~2/12 top-1, median
-> rank 13 of 503; the nomic embedding router hit 7/12 top-1, median rank 1.
->
-> WHAT SHIPS (and what does NOT):
-> A 96 KB index -- 503 module vectors at 64d q8, plus the ABTT correction (mu, pc) baked in -- extracted
-> from the build cache by tools/semantic/export_index.py. NO model ships. So this router can only score a
-> query it already has a VECTOR for:
->   * queries embedded at build time and cached (the exam's asks, an app's fixed vocabulary)
->   * a caller that supplies its own query vector (an app that ran the encoder itself)
-> A brand-new free-text query with no vector and no model present CANNOT be embedded here -- and this
-> router says so and returns None, so the caller falls back to the token router rather than guessing. That
-> honesty is the whole point: silence beats a confident wrong route.
->
-> DETERMINISM: q8 dequant + fixed ABTT transform + argsort with a name tie-break. No RNG, no model.
-
-**Public API:**
-
-- `class EmbeddingRouter` -- Loads the shipped q8 index (any dim; 128d is the measured champion) and routes a query VECTOR (or a cached query text) to modules.
 
 ### holographic_routerlearn.py
 
@@ -28219,37 +28219,36 @@
 
 ### holographic_session.py
 
-> SESSION STORE -- contexts that outlive the process.
+> SESSION -- never compute the same conversation prefix twice.
 >
-> A Galvatron's context is not a transcript, it is STATE: the GDN recurrent
-> matrices, the conv windows, the KV arrays, the position clock, and -- on
-> leCore's side -- the oracle memories, learned routes and evidence the residents
-> accumulated. All of that lived in RAM and died with the process, which meant a
-> conversation could not span a coffee break, let alone weeks.
+> Moose runs a 0.8B on a CPU laptop and it is slow. The single largest waste in a
+> conversation is not the model's arithmetic -- it is that every turn RE-PREFILLS
+> the entire history. MEASURED on a realistic six-turn exchange: 489 tokens
+> processed, of which only 137 were new. SEVENTY-TWO PERCENT OF THE WORK WAS
+> REPEATED, and the fraction grows with every turn.
 >
-> This makes it a FILE. A session is a named directory: save it, load it, list
-> them, fork one into two, delete one. Because the state is the model's actual
-> inference state rather than a prompt to be re-read, resuming costs NO re-prefill
-> -- a 10,000-token context comes back in the time it takes to read an npz, and
-> the model continues mid-thought.
+> leCore already had the pieces and never joined them: the runtime exposes
+> prefill/step over an InferenceState with copy(), galvacache memoises pure
+> functions at a measured 75% hit rate with bit-identical output, and sessions
+> exist. What was missing is the RADIX TREE -- the structure that answers "what is
+> the longest prefix of this prompt that I have already computed?"
 >
-> THE CONTRACT, asserted rather than hoped: generation continued from a RELOADED
-> session is TOKEN-IDENTICAL to generation that never stopped. A session store
-> that quietly changes the model's behaviour is worse than none, because the
-> difference shows up as a personality drift nobody can debug.
+> WHY A TREE AND NOT A DICTIONARY: turn 4 of a conversation shares its first three
+> turns with turn 3, and a dictionary keyed on the whole prompt misses that
+> completely. vLLM and SGLang call this RadixAttention; the idea is the same
+> whatever the model: index by prefix, resume from the deepest match, compute only
+> the tail.
 >
-> MULTIPLE CONTEXTS ARE THE POINT: sessions are independent by construction (fork
-> gives two futures from one past, and writing to one never touches the other), so
-> a harness can keep a session per user, per document, or per task, swap them in
-> and out by name, and expire them on its own schedule. Nothing here assumes a
-> single conversation.
+> THE GUARANTEE THIS KEEPS, because a cache that changes answers is worse than no
+> cache: resuming from a cached state reproduces a full recompute TO FLOAT
+> ROUNDING -- measured 7.1e-15, machine epsilon. Not bit-identical, and the
+> difference is real rather than pedantic: resuming STEPS the tail while a fresh
+> call PREFILLS it, and the two associate their sums differently. The selftest
+> asserts the measured bound against the live runtime rather than assuming it.
 
 **Public API:**
 
-- `def state_to_arrays(state)` -- Flatten an InferenceState into a plain dict of arrays (npz-friendly).
-- `def state_from_arrays(arrays)` -- Rebuild an InferenceState from the flattened form.
-- `class SessionStore` -- Named, persistent, independent contexts on disk.
-- `def runtime_fingerprint(runtime)` -- A cheap, deterministic id for the checkpoint behind a runtime, so a
+- `class PrefixCache` -- A radix tree over token sequences, holding inference states.
 
 ### holographic_session.py
 
@@ -28281,36 +28280,37 @@
 
 ### holographic_session.py
 
-> SESSION -- never compute the same conversation prefix twice.
+> SESSION STORE -- contexts that outlive the process.
 >
-> Moose runs a 0.8B on a CPU laptop and it is slow. The single largest waste in a
-> conversation is not the model's arithmetic -- it is that every turn RE-PREFILLS
-> the entire history. MEASURED on a realistic six-turn exchange: 489 tokens
-> processed, of which only 137 were new. SEVENTY-TWO PERCENT OF THE WORK WAS
-> REPEATED, and the fraction grows with every turn.
+> A Galvatron's context is not a transcript, it is STATE: the GDN recurrent
+> matrices, the conv windows, the KV arrays, the position clock, and -- on
+> leCore's side -- the oracle memories, learned routes and evidence the residents
+> accumulated. All of that lived in RAM and died with the process, which meant a
+> conversation could not span a coffee break, let alone weeks.
 >
-> leCore already had the pieces and never joined them: the runtime exposes
-> prefill/step over an InferenceState with copy(), galvacache memoises pure
-> functions at a measured 75% hit rate with bit-identical output, and sessions
-> exist. What was missing is the RADIX TREE -- the structure that answers "what is
-> the longest prefix of this prompt that I have already computed?"
+> This makes it a FILE. A session is a named directory: save it, load it, list
+> them, fork one into two, delete one. Because the state is the model's actual
+> inference state rather than a prompt to be re-read, resuming costs NO re-prefill
+> -- a 10,000-token context comes back in the time it takes to read an npz, and
+> the model continues mid-thought.
 >
-> WHY A TREE AND NOT A DICTIONARY: turn 4 of a conversation shares its first three
-> turns with turn 3, and a dictionary keyed on the whole prompt misses that
-> completely. vLLM and SGLang call this RadixAttention; the idea is the same
-> whatever the model: index by prefix, resume from the deepest match, compute only
-> the tail.
+> THE CONTRACT, asserted rather than hoped: generation continued from a RELOADED
+> session is TOKEN-IDENTICAL to generation that never stopped. A session store
+> that quietly changes the model's behaviour is worse than none, because the
+> difference shows up as a personality drift nobody can debug.
 >
-> THE GUARANTEE THIS KEEPS, because a cache that changes answers is worse than no
-> cache: resuming from a cached state reproduces a full recompute TO FLOAT
-> ROUNDING -- measured 7.1e-15, machine epsilon. Not bit-identical, and the
-> difference is real rather than pedantic: resuming STEPS the tail while a fresh
-> call PREFILLS it, and the two associate their sums differently. The selftest
-> asserts the measured bound against the live runtime rather than assuming it.
+> MULTIPLE CONTEXTS ARE THE POINT: sessions are independent by construction (fork
+> gives two futures from one past, and writing to one never touches the other), so
+> a harness can keep a session per user, per document, or per task, swap them in
+> and out by name, and expire them on its own schedule. Nothing here assumes a
+> single conversation.
 
 **Public API:**
 
-- `class PrefixCache` -- A radix tree over token sequences, holding inference states.
+- `def state_to_arrays(state)` -- Flatten an InferenceState into a plain dict of arrays (npz-friendly).
+- `def state_from_arrays(arrays)` -- Rebuild an InferenceState from the flattened form.
+- `class SessionStore` -- Named, persistent, independent contexts on disk.
+- `def runtime_fingerprint(runtime)` -- A cheap, deterministic id for the checkpoint behind a runtime, so a
 
 ### holographic_sfsprior.py
 
@@ -29245,28 +29245,6 @@
 
 ### holographic_snap.py
 
-> holographic_snap.py -- SNAPPING = cleanup, applied to geometry (modeling-app feature layer).
->
-> Thinking holographically: snapping IS cleanup. VSA cleanup projects a noisy vector onto the nearest CLEAN atom in
-> a codebook; snapping projects a dragged, continuous position onto the nearest ALLOWED place -- a grid node, an
-> existing vertex, a point on an edge, an angle increment. Same operation, geometric codebook. And just as cleanup
-> can REFUSE a weak match (return "no confident atom"), a snap has a TOLERANCE: if nothing allowed is close enough,
-> the point is left where it is. That confidence gate is what stops a cursor from teleporting across the screen.
->
-> These read raw coordinates (the honest way -- no lossy encoding for something this exact). NumPy + stdlib only;
-> deterministic.
-
-**Public API:**
-
-- `def snap_to_grid(p, spacing, origin)` -- Snap a point to the nearest grid node -- round each coordinate to the lattice. The simplest cleanup: the
-- `def snap_to_points(p, points, tol)` -- Snap to the NEAREST point in a set -- this is literally cleanup (nearest codebook entry). Returns
-- `def snap_to_segment(p, a, b)` -- The nearest point on the line SEGMENT a-b (clamped to the endpoints) -- snapping to an edge.
-- `def snap_value(x, increment, origin)` -- Snap a scalar to the nearest multiple of `increment` from `origin` -- e.g. a length to 0.25 m steps.
-- `def snap_angle(theta, increment)` -- Snap an angle (radians) to the nearest multiple of `increment` -- e.g. rotate in 15-degree steps.
-- `class Snapper` -- Snaps a point to the nearest snap target within a tolerance, combining a GRID and a VERTEX set. Whichever
-
-### holographic_snap.py
-
 > holographic_snap.py (mesh_and_geometry) -- the MODELING-GIZMO snap adapter: it answers 'where does this dragged
 > point / transform delta actually go?' in the shapes the interactive edit spine wants (dict hit records, a corrected
 > transform delta), DELEGATING all the actual snap math to the canonical snap primitives in
@@ -29291,6 +29269,28 @@
 - `def snap_to_intersections(point, polylines, max_dist, tol)` -- Snap a point to the nearest INTERSECTION of a set of 2-D polylines -- the 'intersection' object-snap. Computes
 - `def snap_to_edge(point, vertices, edges, max_dist)` -- Snap a point to the nearest point ON any edge, returned as {edge, position, distance, t}, or None if beyond
 - `def snap_transform_delta(delta, target, increment, moved_point, vertices, edges, origin, max_dist)` -- Snap a TRANSFORM DELTA so the moved point lands on a snap target, and return the corrected delta. This is the
+
+### holographic_snap.py
+
+> holographic_snap.py -- SNAPPING = cleanup, applied to geometry (modeling-app feature layer).
+>
+> Thinking holographically: snapping IS cleanup. VSA cleanup projects a noisy vector onto the nearest CLEAN atom in
+> a codebook; snapping projects a dragged, continuous position onto the nearest ALLOWED place -- a grid node, an
+> existing vertex, a point on an edge, an angle increment. Same operation, geometric codebook. And just as cleanup
+> can REFUSE a weak match (return "no confident atom"), a snap has a TOLERANCE: if nothing allowed is close enough,
+> the point is left where it is. That confidence gate is what stops a cursor from teleporting across the screen.
+>
+> These read raw coordinates (the honest way -- no lossy encoding for something this exact). NumPy + stdlib only;
+> deterministic.
+
+**Public API:**
+
+- `def snap_to_grid(p, spacing, origin)` -- Snap a point to the nearest grid node -- round each coordinate to the lattice. The simplest cleanup: the
+- `def snap_to_points(p, points, tol)` -- Snap to the NEAREST point in a set -- this is literally cleanup (nearest codebook entry). Returns
+- `def snap_to_segment(p, a, b)` -- The nearest point on the line SEGMENT a-b (clamped to the endpoints) -- snapping to an edge.
+- `def snap_value(x, increment, origin)` -- Snap a scalar to the nearest multiple of `increment` from `origin` -- e.g. a length to 0.25 m steps.
+- `def snap_angle(theta, increment)` -- Snap an angle (radians) to the nearest multiple of `increment` -- e.g. rotate in 15-degree steps.
+- `class Snapper` -- Snaps a point to the nearest snap target within a tolerance, combining a GRID and a VERTEX set. Whichever
 
 ### holographic_softbody.py
 
@@ -32799,6 +32799,48 @@
 
 ### holographic_transform.py
 
+> holographic_transform.py -- TRANSFORM UTILITIES for a modeling app (modeling-app backlog, item G).
+>
+> The engine has scattered transform bits (scenegraph.translation/rotation/compose_transforms; cosserat's
+> quaternion helpers; splatexport's rotation<->quaternion), but not the full kit a gizmo and a property panel need
+> in one place. This gathers the standard, well-known math:
+>
+>   * decompose(M) -> (translate, rotation-quaternion, scale)   -- what a gizmo reads off a matrix to show handles,
+>     and what a property panel shows as the T/R/S fields;
+>   * compose_trs(translate, quat, scale) -> 4x4                -- the inverse (build a matrix from panel values);
+>   * a quaternion kit -- from/to matrix, from/to axis-angle, from/to euler, multiply, SLERP, rotate a vector
+>     (quaternions are what rotation UI and animation want: no gimbal lock, and slerp gives smooth interpolation);
+>   * look_at(eye, target, up) -> 4x4 view matrix              -- for a camera or an object aimed at a point.
+>
+> Conventions, stated ONCE and held (the backlog's coordinate-convention note): matrices are 4x4 and act on COLUMN
+> vectors, p' = M @ [x, y, z, 1]; compose(A, B) = A @ B means "apply B, then A"; quaternions are (w, x, y, z), unit
+> length; euler angles are (rx, ry, rz) applied X then Y then Z, i.e. R = Rz @ Ry @ Rx; look_at returns an OpenGL
+> view matrix (the camera looks down -z, y is up) to match the engine's Camera. Nothing here is holographic -- it is
+> plain linear algebra a modeling app needs -- so it is kept as a small, readable utility, not dressed up as a bind.
+> Deterministic; NumPy + stdlib only.
+
+**Public API:**
+
+- `def translation(t)` -- A 4x4 translation matrix from a 3-vector.
+- `def scaling(s)` -- A 4x4 scale matrix. `s` is a scalar (uniform) or a 3-vector (per-axis).
+- `def rotation_axis_angle(axis, angle)` -- A 4x4 rotation of `angle` radians about `axis` (Rodrigues' formula).
+- `def compose(*mats)` -- Matrix product M0 @ M1 @ ... -- with the column-vector convention this applies the RIGHTMOST first.
+- `def decompose(M)` -- Split a 4x4 affine transform into (translate (3,), rotation quaternion (4,), scale (3,)). Assumes no shear
+- `def compose_trs(translate, quat, scale)` -- Build a 4x4 from translate (3,), a rotation quaternion (4,), and scale (3,) -- the inverse of decompose.
+- `def quat_normalize(q)`
+- `def quat_mul(a, b)` -- The Hamilton product a*b: the rotation "apply b, then a".
+- `def quat_from_axis_angle(axis, angle)` -- A quaternion for a rotation of `angle` radians about `axis`.
+- `def quat_to_axis_angle(q)` -- Recover (axis, angle) from a quaternion.
+- `def quat_to_matrix(q)` -- The 3x3 rotation matrix for a quaternion.
+- `def quat_from_matrix(R)` -- The quaternion for a 3x3 rotation matrix (Shepperd's method: branch on the largest diagonal term for
+- `def quat_from_euler(rx, ry, rz)` -- A quaternion from euler angles applied X then Y then Z (R = Rz @ Ry @ Rx).
+- `def quat_to_euler(q)` -- Recover euler angles (rx, ry, rz) from a quaternion, inverting R = Rz @ Ry @ Rx. Handles gimbal lock
+- `def quat_slerp(a, b, t)` -- Spherical linear interpolation between two rotations -- constant angular speed, the smooth in-between an
+- `def quat_rotate(q, v)` -- Rotate a 3-vector by a quaternion.
+- `def look_at(eye, target, up)` -- An OpenGL view matrix for a camera at `eye` looking at `target` (the engine's convention: the camera looks
+
+### holographic_transform.py
+
 > TRANSFORM -- rebuild a model where the MEASUREMENT says it needs rebuilding.
 >
 > Everything before this applied leCore's levers uniformly: grow a memory channel
@@ -32840,48 +32882,6 @@
 - `def analyse(weights, cfg)` -- Recover the block structure and per-layer memory from the weights.
 - `def plan(weights, cfg, target_tokens, kv_rank, grow_gain)` -- Decide what to do to each layer, from the analysis rather than by rule.
 - `def apply_plan(weights, cfg, the_plan, progress)` -- Carry out the growth actions. KV compression is a RUNTIME setting and is
-
-### holographic_transform.py
-
-> holographic_transform.py -- TRANSFORM UTILITIES for a modeling app (modeling-app backlog, item G).
->
-> The engine has scattered transform bits (scenegraph.translation/rotation/compose_transforms; cosserat's
-> quaternion helpers; splatexport's rotation<->quaternion), but not the full kit a gizmo and a property panel need
-> in one place. This gathers the standard, well-known math:
->
->   * decompose(M) -> (translate, rotation-quaternion, scale)   -- what a gizmo reads off a matrix to show handles,
->     and what a property panel shows as the T/R/S fields;
->   * compose_trs(translate, quat, scale) -> 4x4                -- the inverse (build a matrix from panel values);
->   * a quaternion kit -- from/to matrix, from/to axis-angle, from/to euler, multiply, SLERP, rotate a vector
->     (quaternions are what rotation UI and animation want: no gimbal lock, and slerp gives smooth interpolation);
->   * look_at(eye, target, up) -> 4x4 view matrix              -- for a camera or an object aimed at a point.
->
-> Conventions, stated ONCE and held (the backlog's coordinate-convention note): matrices are 4x4 and act on COLUMN
-> vectors, p' = M @ [x, y, z, 1]; compose(A, B) = A @ B means "apply B, then A"; quaternions are (w, x, y, z), unit
-> length; euler angles are (rx, ry, rz) applied X then Y then Z, i.e. R = Rz @ Ry @ Rx; look_at returns an OpenGL
-> view matrix (the camera looks down -z, y is up) to match the engine's Camera. Nothing here is holographic -- it is
-> plain linear algebra a modeling app needs -- so it is kept as a small, readable utility, not dressed up as a bind.
-> Deterministic; NumPy + stdlib only.
-
-**Public API:**
-
-- `def translation(t)` -- A 4x4 translation matrix from a 3-vector.
-- `def scaling(s)` -- A 4x4 scale matrix. `s` is a scalar (uniform) or a 3-vector (per-axis).
-- `def rotation_axis_angle(axis, angle)` -- A 4x4 rotation of `angle` radians about `axis` (Rodrigues' formula).
-- `def compose(*mats)` -- Matrix product M0 @ M1 @ ... -- with the column-vector convention this applies the RIGHTMOST first.
-- `def decompose(M)` -- Split a 4x4 affine transform into (translate (3,), rotation quaternion (4,), scale (3,)). Assumes no shear
-- `def compose_trs(translate, quat, scale)` -- Build a 4x4 from translate (3,), a rotation quaternion (4,), and scale (3,) -- the inverse of decompose.
-- `def quat_normalize(q)`
-- `def quat_mul(a, b)` -- The Hamilton product a*b: the rotation "apply b, then a".
-- `def quat_from_axis_angle(axis, angle)` -- A quaternion for a rotation of `angle` radians about `axis`.
-- `def quat_to_axis_angle(q)` -- Recover (axis, angle) from a quaternion.
-- `def quat_to_matrix(q)` -- The 3x3 rotation matrix for a quaternion.
-- `def quat_from_matrix(R)` -- The quaternion for a 3x3 rotation matrix (Shepperd's method: branch on the largest diagonal term for
-- `def quat_from_euler(rx, ry, rz)` -- A quaternion from euler angles applied X then Y then Z (R = Rz @ Ry @ Rx).
-- `def quat_to_euler(q)` -- Recover euler angles (rx, ry, rz) from a quaternion, inverting R = Rz @ Ry @ Rx. Handles gimbal lock
-- `def quat_slerp(a, b, t)` -- Spherical linear interpolation between two rotations -- constant angular speed, the smooth in-between an
-- `def quat_rotate(q, v)` -- Rotate a 3-vector by a quaternion.
-- `def look_at(eye, target, up)` -- An OpenGL view matrix for a camera at `eye` looking at `target` (the engine's convention: the camera looks
 
 ### holographic_transform_space.py
 
